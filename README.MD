@@ -1,6 +1,3 @@
-Here’s a well-structured `README.md` for your Docker NAS configuration repository:
-
-```markdown
 # Docker NAS Configuration
 
 This repository contains the Docker Compose configuration files to set up a fully-featured NAS (Network Attached Storage) solution. The setup includes tools for media management, download automation, and content streaming, all running in Docker containers.
@@ -108,6 +105,3 @@ This project is licensed under the [MIT License](LICENSE).
 - [Docker Documentation](https://docs.docker.com/)
 - [LinuxServer.io](https://www.linuxserver.io/)
 - [Jellyfin Documentation](https://jellyfin.org/docs/)
-```
-
-This `README.md` provides a professional yet accessible introduction to your project, detailing each service and offering clear instructions for setup. Let me know if you'd like to customize it further!
