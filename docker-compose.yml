@@ -9,8 +9,8 @@ services:
       - PUID=${PUID}
       - PGID=${PGID}
     volumes:
-      - ${SHARE_DIRECTORY}/movies:/movies
-      - ${SHARE_DIRECTORY}/downloads:/downloads
+      - ${SHARE_DIRECTORY}/Movies:/movies
+      - ${SHARE_DIRECTORY}/Downloads:/downloads
       - ${CONFIG_DIRECTORY}/radarr:/config
     ports:
       - 7878:7878/tcp
@@ -29,8 +29,8 @@ services:
       - PGID=${PGID}
     volumes:
       - ${CONFIG_DIRECTORY}/sonarr:/config
-      - ${SHARE_DIRECTORY}/tv:/tv
-      - ${SHARE_DIRECTORY}/downloads:/downloads
+      - ${SHARE_DIRECTORY}/Series:/tv
+      - ${SHARE_DIRECTORY}/Downloads:/downloads
     ports:
       - 8989:8989
     restart: unless-stopped
@@ -49,8 +49,8 @@ services:
       - UMASK=022
     volumes:
       - ${CONFIG_DIRECTORY}/bazarr:/config
-      - ${SHARE_DIRECTORY}/movies:/movies
-      - ${SHARE_DIRECTORY}/tv:/tv
+      - ${SHARE_DIRECTORY}/Movies:/movies
+      - ${SHARE_DIRECTORY}/Series:/tv
     ports:
       - 6767:6767
     restart: unless-stopped
@@ -133,24 +133,24 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  lazylibrarian:
-    image: lscr.io/linuxserver/lazylibrarian:latest
-    container_name: lazylibrarian
-    depends_on:
-      - "prowlarr"
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${CONFIG_DIRECTORY}/lazylibrarian:/config
-      - ${SHARE_DIRECTORY}/downloads:/downloads
-      - ${SHARE_DIRECTORY}/books:/books
-    ports:
-      - 5299:5299
-    restart: unless-stopped
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+  # lazylibrarian:
+  #   image: lscr.io/linuxserver/lazylibrarian:latest
+  #   container_name: lazylibrarian
+  #   depends_on:
+  #     - "prowlarr"
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #   volumes:
+  #     - ${CONFIG_DIRECTORY}/lazylibrarian:/config
+  #     - ${SHARE_DIRECTORY}/Downloads:/downloads
+  #     - ${SHARE_DIRECTORY}/books:/books
+  #   ports:
+  #     - 5299:5299
+  #   restart: unless-stopped
+  #   labels:
+  #     - "com.centurylinklabs.watchtower.enable=true"
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -162,7 +162,7 @@ services:
       - WEBUI_PORT=8080
     volumes:
       - ${CONFIG_DIRECTORY}/qbittorrent:/config
-      - ${SHARE_DIRECTORY}/downloads:/downloads
+      - ${SHARE_DIRECTORY}/Downloads:/downloads
     ports:
       - 8080:8080
       - 6881:6881
