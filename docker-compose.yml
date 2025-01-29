@@ -1,4 +1,14 @@
 services:
+  nuxt-services:
+    build:
+      context: /home/tom/projects/listie
+      dockerfile: Dockerfile
+    container_name: nuxt-services
+    environment:
+      - NODE_ENV=production
+      - NUXT_OMDBAPI_API_KEY=${NUXT_OMDBAPI_API_KEY}
+    ports:
+      - 3000:3000
   radarr:
     image: linuxserver/radarr
     container_name: radarr
