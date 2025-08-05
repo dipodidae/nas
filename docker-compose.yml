@@ -68,6 +68,33 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+    volumes:
+      - ${CONFIG_DIRECTORY}/plex:/config
+      - ${SHARE_DIRECTORY}/Movies:/movies
+      - ${SHARE_DIRECTORY}/Series:/tv
+    ports:
+      - 32400:32400
+      - 5353:5353/udp
+      - 8324:8324
+      - 32410:32410/udp
+      - 32412:32412/udp
+      - 32413:32413/udp
+      - 32414:32414/udp
+      - 32469:32469
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
   swag:
     image: lscr.io/linuxserver/swag
     container_name: swag
@@ -111,6 +138,28 @@ services:
     restart: unless-stopped
     depends_on:
       - qbittorrent
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  readarr:
+    image: lscr.io/linuxserver/readarr:develop
+    container_name: readarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - UMASK=022
+    volumes:
+      - ${CONFIG_DIRECTORY}/readarr:/config
+      - ${SHARE_DIRECTORY}/Books:/books
+      - ${SHARE_DIRECTORY}/Downloads:/downloads
+    ports:
+      - 8787:8787
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
     networks:
       - nas-network
     labels:
