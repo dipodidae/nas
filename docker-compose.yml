@@ -80,6 +80,7 @@ services:
       - ${CONFIG_DIRECTORY}/plex:/config
       - ${SHARE_DIRECTORY}/Movies:/movies
       - ${SHARE_DIRECTORY}/Series:/tv
+      - ${SHARE_DIRECTORY}/Music:/music
     ports:
       - 32400:32400
       - 5353:5353/udp
@@ -143,28 +144,6 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
-  readarr:
-    image: lscr.io/linuxserver/readarr:develop
-    container_name: readarr
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-      - UMASK=022
-    volumes:
-      - ${CONFIG_DIRECTORY}/readarr:/config
-      - ${SHARE_DIRECTORY}/Books:/books
-      - ${SHARE_DIRECTORY}/Downloads:/downloads
-    ports:
-      - 8787:8787
-    restart: unless-stopped
-    depends_on:
-      - prowlarr
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
@@ -209,6 +188,67 @@ services:
       options:
         max-size: 10m
         max-file: '3'
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    environment:
+      - UMASK=022
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - ${SHARE_DIRECTORY}/Movies:/movies
+      - ${SHARE_DIRECTORY}/Downloads:/downloads
+      - ${CONFIG_DIRECTORY}/radarr:/config
+    ports:
+      - 7878:7878/tcp
+    depends_on:
+      - "prowlarr"
+    networks:
+      - nas-network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  heimdall:
+    image: lscr.io/linuxserver/heimdall:latest
+    container_name: heimdall
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_DIRECTORY}/heimdall:/config
+    ports:
+      - 8082:80
+      - 8083:443
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  lazylibrarian:
+    image: lscr.io/linuxserver/lazylibrarian:latest
+    container_name: lazylibrarian
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_DIRECTORY}/lazylibrarian:/config
+      - ${SHARE_DIRECTORY}/Downloads:/downloads
+      - ${SHARE_DIRECTORY}/Books:/books
+    ports:
+      - 5299:5299
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
     networks:
       - nas-network
     labels:
