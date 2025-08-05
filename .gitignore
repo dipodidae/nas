@@ -1,2 +1,13 @@
-config/*
 .env
+
+# Logs
+logs/
+*.log
+pnpm-debug.log*
+
+# Backup files
+*.backup
+*.bak
+*.old
+
+node_modules/

@@ -1,34 +1,8 @@
-services:
-  nuxt-services:
-    build:
-      context: /home/tom/projects/listie
-      dockerfile: Dockerfile
-    container_name: nuxt-services
-    environment:
-      - NODE_ENV=production
-      - NUXT_OMDBAPI_API_KEY=${NUXT_OMDBAPI_API_KEY}
-    ports:
-      - 3000:3000
-  radarr:
-    image: linuxserver/radarr
-    container_name: radarr
-    restart: unless-stopped
-    environment:
-      - UMASK=022
-      - TZ=${TZ}
-      - PUID=${PUID}
-      - PGID=${PGID}
-    volumes:
-      - ${SHARE_DIRECTORY}/Movies:/movies
-      - ${SHARE_DIRECTORY}/Downloads:/downloads
-      - ${CONFIG_DIRECTORY}/radarr:/config
-    ports:
-      - 7878:7878/tcp
-    depends_on:
-      - "prowlarr"
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+networks:
+  nas-network:
+    driver: bridge
 
+services:
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
@@ -45,9 +19,11 @@ services:
       - 8989:8989
     restart: unless-stopped
     depends_on:
-      - "prowlarr"
+      - prowlarr
+    networks:
+      - nas-network
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
 
   bazarr:
     image: ghcr.io/linuxserver/bazarr
@@ -65,9 +41,11 @@ services:
       - 6767:6767
     restart: unless-stopped
     depends_on:
-      - "prowlarr"
+      - prowlarr
+    networks:
+      - nas-network
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
 
   jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
@@ -85,19 +63,24 @@ services:
       - 7359:7359/udp
       - 1900:1900/udp
     restart: unless-stopped
+    networks:
+      - nas-network
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
 
   swag:
     image: lscr.io/linuxserver/swag
     container_name: swag
     cap_add:
       - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
       - VALIDATION=duckdns
+      - DNSPLUGIN=duckdns
       - SUBDOMAINS=wildcard
       - ONLY_SUBDOMAINS=false
       - URL=${DUCKDNS_URL}
@@ -109,22 +92,10 @@ services:
       - 443:443
       - 80:80
     restart: unless-stopped
+    networks:
+      - nas-network
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-  watchtower:
-    container_name: watchtower
-    image: containrrr/watchtower
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /etc/timezone:/etc/timezone:ro
-    environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_INCLUDE_RESTARTING=true
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
@@ -139,28 +110,11 @@ services:
       - 9696:9696
     restart: unless-stopped
     depends_on:
-      - "qbittorrent"
+      - qbittorrent
+    networks:
+      - nas-network
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-  # lazylibrarian:
-  #   image: lscr.io/linuxserver/lazylibrarian:latest
-  #   container_name: lazylibrarian
-  #   depends_on:
-  #     - "prowlarr"
-  #   environment:
-  #     - PUID=${PUID}
-  #     - PGID=${PGID}
-  #     - TZ=${TZ}
-  #   volumes:
-  #     - ${CONFIG_DIRECTORY}/lazylibrarian:/config
-  #     - ${SHARE_DIRECTORY}/Downloads:/downloads
-  #     - ${SHARE_DIRECTORY}/books:/books
-  #   ports:
-  #     - 5299:5299
-  #   restart: unless-stopped
-  #   labels:
-  #     - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -170,6 +124,8 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
       - WEBUI_PORT=8080
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - ${CONFIG_DIRECTORY}/qbittorrent:/config
       - ${SHARE_DIRECTORY}/Downloads:/downloads
@@ -178,5 +134,33 @@ services:
       - 6881:6881
       - 6881:6881/udp
     restart: unless-stopped
+    networks:
+      - nas-network
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_TIMEOUT=300s
+      - WATCHTOWER_NOTIFICATIONS=email
+      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${DUCKDNS_EMAIL}
+      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${DUCKDNS_EMAIL}
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true

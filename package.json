@@ -1,0 +1,48 @@
+{
+  "name": "docker-nas-config",
+  "version": "1.0.0",
+  "packageManager": "pnpm@10.14.0",
+  "description": "Docker Compose configuration for a fully-featured NAS solution with media management, download automation, and content streaming",
+  "author": "dipodidae",
+  "license": "MIT",
+  "keywords": [
+    "docker",
+    "docker-compose",
+    "nas",
+    "media-server",
+    "jellyfin",
+    "sonarr",
+    "radarr",
+    "bazarr",
+    "prowlarr",
+    "qbittorrent",
+    "swag",
+    "watchtower",
+    "media-management",
+    "automation",
+    "home-server"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dipodidae/nas.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dipodidae/nas/issues"
+  },
+  "homepage": "https://github.com/dipodidae/nas#readme",
+  "scripts": {
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "up": "docker-compose up -d",
+    "down": "docker-compose down",
+    "restart": "docker-compose restart",
+    "logs": "docker-compose logs -f",
+    "pull": "docker-compose pull",
+    "update": "docker-compose pull && docker-compose up -d"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^5.1.0",
+    "eslint": "^9.32.0",
+    "eslint-plugin-format": "^1.0.1"
+  }
+}
