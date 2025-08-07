@@ -54,9 +54,11 @@ services:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
+      - JELLYFIN_PublishedServerUrl=https://jellyfin.kartoffelschen.duckdns.org
     volumes:
       - ${CONFIG_DIRECTORY}/jellyfin:/config
       - ${SHARE_DIRECTORY}:/data/movies
+      - /tmp/jellyfin-cache:/cache:rw
     ports:
       - 8096:8096
       - 8920:8920
@@ -67,6 +69,16 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '3.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    tmpfs:
+      - /tmp:size=1G,exec
 
   plex:
     image: lscr.io/linuxserver/plex:latest
@@ -124,6 +136,18 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
@@ -152,6 +176,8 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
       - WEBUI_PORT=8080
+      - QBITTORRENT_USER=${QBITTORRENT_USER}
+      - QBITTORRENT_PASS=${QBITTORRENT_PASS}
     security_opt:
       - no-new-privileges:true
     volumes:
@@ -209,25 +235,7 @@ services:
     ports:
       - 7878:7878/tcp
     depends_on:
-      - "prowlarr"
-    networks:
-      - nas-network
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-  heimdall:
-    image: lscr.io/linuxserver/heimdall:latest
-    container_name: heimdall
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${CONFIG_DIRECTORY}/heimdall:/config
-    ports:
-      - 8082:80
-      - 8083:443
-    restart: unless-stopped
+      - prowlarr
     networks:
       - nas-network
     labels:
@@ -240,6 +248,8 @@ services:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
+      - DOCKER_MODS=linuxserver/mods:universal-package-install|linuxserver/mods:universal-calibre
+      - INSTALL_PACKAGES=curl
     volumes:
       - ${CONFIG_DIRECTORY}/lazylibrarian:/config
       - ${SHARE_DIRECTORY}/Downloads:/downloads
@@ -249,6 +259,71 @@ services:
     restart: unless-stopped
     depends_on:
       - prowlarr
+      - qbittorrent
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_DIRECTORY}/overseerr:/config
+    ports:
+      - 5055:5055
+    restart: unless-stopped
+    depends_on:
+      - plex
+      - radarr
+      - sonarr
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  calibre:
+    image: lscr.io/linuxserver/calibre:latest
+    container_name: calibre
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_DIRECTORY}/calibre:/config
+      - ${SHARE_DIRECTORY}/Books:/books
+    ports:
+      - 8084:8080
+      - 8181:8181
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  calibre-web:
+    image: lscr.io/linuxserver/calibre-web:latest
+    container_name: calibre-web
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - DOCKER_MODS=linuxserver/mods:universal-calibre
+      - OAUTHLIB_RELAX_TOKEN_SCOPE=1
+    volumes:
+      - ${CONFIG_DIRECTORY}/calibre-web:/config
+      - ${SHARE_DIRECTORY}/Books:/books
+    ports:
+      - 8085:8083
+    restart: unless-stopped
+    depends_on:
+      - calibre
     networks:
       - nas-network
     labels:
