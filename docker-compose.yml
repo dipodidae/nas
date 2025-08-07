@@ -328,3 +328,35 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+
+  nextcloud:
+    image: lscr.io/linuxserver/nextcloud:latest
+    container_name: nextcloud
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_DIRECTORY}/nextcloud:/config
+      - ${SHARE_DIRECTORY}/NextcloudData:/data
+      - ${SHARE_DIRECTORY}:/external/drive:rw
+      - ${SHARE_DIRECTORY}/Movies:/external/movies:rw
+      - ${SHARE_DIRECTORY}/Series:/external/series:rw
+      - ${SHARE_DIRECTORY}/Music:/external/music:rw
+      - ${SHARE_DIRECTORY}/Books:/external/books:rw
+      - ${SHARE_DIRECTORY}/Downloads:/external/downloads:rw
+    ports:
+      - 8087:443
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
