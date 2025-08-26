@@ -3,6 +3,20 @@ networks:
     driver: bridge
 
 services:
+  dockerproxy:
+    image: lscr.io/linuxserver/socket-proxy:latest
+    container_name: dockerproxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - POST=0
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
@@ -24,6 +38,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   bazarr:
     image: ghcr.io/linuxserver/bazarr
@@ -46,6 +61,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
@@ -55,6 +71,8 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     volumes:
       - ${CONFIG_DIRECTORY}/jellyfin:/config
       - ${SHARE_DIRECTORY}:/data/movies
@@ -65,6 +83,8 @@ services:
       - 7359:7359/udp
       - 1900:1900/udp
     restart: unless-stopped
+    depends_on:
+      - swag
     networks:
       - nas-network
     labels:
@@ -72,13 +92,17 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: '3.0'
+          memory: 3G
+          cpus: '2.0'
         reservations:
-          memory: 1G
-          cpus: '1.0'
+          memory: 512M
+          cpus: '0.5'
     tmpfs:
-      - /tmp:size=1G,exec
+      - /tmp:size=2G,exec
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
   plex:
     image: lscr.io/linuxserver/plex:latest
@@ -103,10 +127,13 @@ services:
       - 32414:32414/udp
       - 32469:32469
     restart: unless-stopped
+    depends_on:
+      - swag
     networks:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   swag:
     image: lscr.io/linuxserver/swag
@@ -126,11 +153,14 @@ services:
       - URL=${DUCKDNS_URL}
       - DUCKDNSTOKEN=${DUCKDNS_TOKEN}
       - EMAIL=${DUCKDNS_EMAIL}
+      - DOCKER_MODS=linuxserver/mods:swag-dashboard|linuxserver/mods:universal-docker|linuxserver/mods:swag-auto-proxy
+      - DOCKER_HOST=dockerproxy
     volumes:
       - ${CONFIG_DIRECTORY}/swag:/config
     ports:
       - 443:443
       - 80:80
+      - 81:81
     restart: unless-stopped
     networks:
       - nas-network
@@ -167,6 +197,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -192,6 +223,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   watchtower:
     container_name: watchtower
@@ -240,6 +272,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   lazylibrarian:
     image: lscr.io/linuxserver/lazylibrarian:latest
@@ -259,11 +292,11 @@ services:
     restart: unless-stopped
     depends_on:
       - prowlarr
-      - qbittorrent
     networks:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   overseerr:
     image: lscr.io/linuxserver/overseerr:latest
@@ -285,6 +318,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   calibre:
     image: lscr.io/linuxserver/calibre:latest
@@ -306,6 +340,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   calibre-web:
     image: lscr.io/linuxserver/calibre-web:latest
@@ -328,6 +363,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
 
   nextcloud:
     image: lscr.io/linuxserver/nextcloud:latest
@@ -348,10 +384,13 @@ services:
     ports:
       - 8087:443
     restart: unless-stopped
+    depends_on:
+      - swag
     networks:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
     deploy:
       resources:
         limits:
@@ -360,3 +399,18 @@ services:
         reservations:
           memory: 512M
           cpus: '0.5'
+
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: duckdns
+    networks:
+      - nas-network
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - SUBDOMAINS=${DUCKDNS_SUBDOMAIN}
+      - TOKEN=${DUCKDNS_TOKEN}
+    volumes:
+      - ${CONFIG_DIRECTORY}/duckdns:/config
+    restart: unless-stopped

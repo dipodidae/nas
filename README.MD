@@ -14,11 +14,16 @@ The following services are included in the configuration:
 | **Sonarr**      | Manages TV shows and automates downloading and organizing them.            | `8989`       |
 | **Bazarr**      | Automates subtitle management for your movies and TV shows.                | `6767`       |
 | **Jellyfin**    | Media streaming server for movies, TV shows, and music.                   | `8096`, `8920` |
+| **Plex**        | Alternative media streaming server with advanced features.                 | `32400`      |
 | **SWAG**        | Secure Web Application Gateway for reverse proxy and SSL management.       | `443`, `80`  |
 | **Watchtower**  | Automatically updates Docker images of your containers.                    | N/A          |
 | **Prowlarr**    | Indexer manager for Radarr, Sonarr, and other applications.                | `9696`       |
 | **LazyLibrarian** | Automates book downloading and management.                               | `5299`       |
 | **qBittorrent** | Torrent client with WebUI for downloading and managing content.            | `8080`       |
+| **Overseerr**   | Request management and media discovery tool.                               | `5055`       |
+| **Calibre**     | E-book management and conversion tool.                                      | `8084`, `8181` |
+| **Calibre-Web** | Web interface for Calibre e-book library.                                 | `8085`       |
+| **Nextcloud**   | Personal cloud storage and file sharing platform.                          | `8087`       |
 
 ---
 
