@@ -89,6 +89,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
     deploy:
       resources:
         limits:
