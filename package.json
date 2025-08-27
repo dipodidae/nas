@@ -1,7 +1,7 @@
 {
   "name": "docker-nas-config",
   "version": "1.0.0",
-  "packageManager": "pnpm@10.14.0",
+  "packageManager": "pnpm@10.15.0",
   "description": "Docker Compose configuration for a fully-featured NAS solution with media management, download automation, and content streaming",
   "author": "dipodidae",
   "license": "MIT",

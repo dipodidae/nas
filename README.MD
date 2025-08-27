@@ -18,7 +18,6 @@ The following services are included in the configuration:
 | **Jellyfin**    | Media streaming server for movies, TV shows, and music.                   | `8096`, `8920` |
 | **Plex**        | Alternative media streaming server with advanced features.                 | `32400`      |
 | **SWAG**        | Secure Web Application Gateway for reverse proxy, SSL, dashboard, and auto-proxy. | `443`, `80`, `81` |
-
 | **dockerproxy** | Secure Docker socket proxy for SWAG auto-proxy mod.                        | N/A          |
 | **Watchtower**  | Automatically updates Docker images of your containers.                    | N/A          |
 | **Prowlarr**    | Indexer manager for Radarr, Sonarr, and other applications.                | `9696`       |
