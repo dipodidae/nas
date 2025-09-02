@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Potato shape -->
+  <ellipse cx="50" cy="55" rx="25" ry="35" fill="url(#gradient)" />
+  <ellipse cx="45" cy="50" rx="20" ry="25" fill="url(#gradient)" opacity="0.8" />
+  
+  <!-- Potato eyes -->
+  <circle cx="40" cy="45" r="2" fill="#333" />
+  <circle cx="55" cy="50" r="2" fill="#333" />
+  <circle cx="35" cy="60" r="1.5" fill="#333" />
+  
+  <!-- Crown/sprouts -->
+  <path d="M 35 25 Q 40 15 45 25 Q 50 15 55 25 Q 60 15 65 25" 
+        stroke="#4ade80" stroke-width="2" fill="none" />
+  <circle cx="40" cy="20" r="1" fill="#4ade80" />
+  <circle cx="50" cy="18" r="1" fill="#4ade80" />
+  <circle cx="60" cy="20" r="1" fill="#4ade80" />
+</svg>
