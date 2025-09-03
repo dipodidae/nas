@@ -89,7 +89,6 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
     deploy:
       resources:
         limits:
@@ -158,10 +157,9 @@ services:
       - DOCKER_HOST=dockerproxy
     volumes:
       - ${CONFIG_DIRECTORY}/swag:/config
-      # Mount Vite build output for root domain serving
-      - /home/tom/nas/rootpage/dist:/config/www/rootpage:ro
-      # Mount custom nginx config for root domain
-      - /home/tom/nas/rootpage/nginx-rootpage.conf:/config/nginx/site-confs/root.conf:ro
+      - ./rootpage/dist:/config/www/rootpage:ro
+      - ./rootpage/nginx-rootpage.conf:/config/nginx/site-confs/root.conf:ro
+      - ./jellyfin.subdomain.conf:/config/nginx/proxy-confs/jellyfin.subdomain.conf:ro
     ports:
       - 443:443
       - 80:80
