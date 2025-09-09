@@ -89,14 +89,6 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
-    deploy:
-      resources:
-        limits:
-          memory: 3G
-          cpus: '2.0'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
     tmpfs:
       - /tmp:size=2G,exec
     ulimits:
@@ -142,17 +134,19 @@ services:
       - NET_ADMIN
     security_opt:
       - no-new-privileges:true
+    depends_on:
+      - dockerproxy
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
-      - VALIDATION=duckdns
-      - DNSPLUGIN=duckdns
+      - VALIDATION=dns
+      - DNSPLUGIN=cloudflare
+      - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - URL=${DOMAIN}
       - SUBDOMAINS=wildcard
       - ONLY_SUBDOMAINS=false
-      - URL=${DUCKDNS_URL}
-      - DUCKDNSTOKEN=${DUCKDNS_TOKEN}
-      - EMAIL=${DUCKDNS_EMAIL}
+      - EMAIL=${ADMIN_EMAIL}
       - DOCKER_MODS=linuxserver/mods:swag-dashboard|linuxserver/mods:universal-docker|linuxserver/mods:swag-auto-proxy
       - DOCKER_HOST=dockerproxy
     volumes:
@@ -169,14 +163,6 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '2.0'
-        reservations:
-          memory: 512M
-          cpus: '1.0'
     ulimits:
       nofile:
         soft: 65536
@@ -242,8 +228,8 @@ services:
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE}
       - WATCHTOWER_TIMEOUT=300s
       - WATCHTOWER_NOTIFICATIONS=email
-      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${DUCKDNS_EMAIL}
-      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${DUCKDNS_EMAIL}
+      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${ADMIN_EMAIL}
+      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${ADMIN_EMAIL}
     logging:
       driver: json-file
       options:
@@ -395,17 +381,3 @@ services:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
 
-  duckdns:
-    image: lscr.io/linuxserver/duckdns:latest
-    container_name: duckdns
-    networks:
-      - nas-network
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-      - SUBDOMAINS=${DUCKDNS_SUBDOMAIN}
-      - TOKEN=${DUCKDNS_TOKEN}
-    volumes:
-      - ${CONFIG_DIRECTORY}/duckdns:/config
-    restart: unless-stopped
