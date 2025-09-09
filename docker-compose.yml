@@ -39,6 +39,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   bazarr:
     image: ghcr.io/linuxserver/bazarr
@@ -62,6 +70,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
@@ -95,6 +111,14 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   plex:
     image: lscr.io/linuxserver/plex:latest
@@ -126,6 +150,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   swag:
     image: lscr.io/linuxserver/swag
@@ -154,6 +186,7 @@ services:
       - ./rootpage/dist:/config/www/rootpage:ro
       - ./rootpage/nginx-rootpage.conf:/config/nginx/site-confs/root.conf:ro
       - ./jellyfin.subdomain.conf:/config/nginx/proxy-confs/jellyfin.subdomain.conf:ro
+      - ./nginx-cache:/var/cache/nginx:rw
     ports:
       - 443:443
       - 80:80
@@ -173,6 +206,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
@@ -193,6 +234,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -219,6 +268,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
   watchtower:
     container_name: watchtower
@@ -268,6 +325,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   lazylibrarian:
     image: lscr.io/linuxserver/lazylibrarian:latest
@@ -292,6 +357,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
   overseerr:
     image: lscr.io/linuxserver/overseerr:latest
@@ -314,51 +387,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
-
-  calibre:
-    image: lscr.io/linuxserver/calibre:latest
-    container_name: calibre
-    security_opt:
-      - seccomp:unconfined
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${CONFIG_DIRECTORY}/calibre:/config
-      - ${SHARE_DIRECTORY}/Books:/books
-    ports:
-      - 8084:8080
-      - 8181:8181
-    restart: unless-stopped
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
-
-  calibre-web:
-    image: lscr.io/linuxserver/calibre-web:latest
-    container_name: calibre-web
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-      - DOCKER_MODS=linuxserver/mods:universal-calibre
-      - OAUTHLIB_RELAX_TOKEN_SCOPE=1
-    volumes:
-      - ${CONFIG_DIRECTORY}/calibre-web:/config
-      - ${SHARE_DIRECTORY}/Books:/books
-    ports:
-      - 8085:8083
-    restart: unless-stopped
-    depends_on:
-      - calibre
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
   nextcloud:
     image: lscr.io/linuxserver/nextcloud:latest
@@ -386,6 +422,14 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
   cloudflare-ddns:
     image: favonia/cloudflare-ddns:latest

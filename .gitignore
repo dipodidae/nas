@@ -10,4 +10,7 @@ pnpm-debug.log*
 *.bak
 *.old
 
+# Nginx cache directory
+nginx-cache/
+
 node_modules/
