@@ -341,7 +341,7 @@ services:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
-      - DOCKER_MODS=linuxserver/mods:universal-package-install|linuxserver/mods:universal-calibre
+      - DOCKER_MODS=linuxserver/mods:universal-package-install
       - INSTALL_PACKAGES=curl
     volumes:
       - ${CONFIG_DIRECTORY}/lazylibrarian:/config

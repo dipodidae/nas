@@ -24,8 +24,6 @@ The following services are included in the configuration:
 | **LazyLibrarian** | Automates book downloading and management.                               | `5299`       |
 | **qBittorrent** | Torrent client with WebUI for downloading and managing content.            | `8080`       |
 | **Overseerr**   | Request management and media discovery tool.                               | `5055`       |
-| **Calibre**     | E-book management and conversion tool.                                      | `8084`, `8181` |
-| **Calibre-Web** | Web interface for Calibre e-book library.                                 | `8085`       |
 | **Nextcloud**   | Personal cloud storage and file sharing platform.                          | `8087`       |
 
 ---
@@ -70,10 +68,6 @@ The following services are included in the configuration:
    # qBittorrent
    QBITTORRENT_USER=admin
    QBITTORRENT_PASS=yourpassword
-
-   # Calibre
-   CALIBRE_USER=youruser
-   CALIBRE_PASS=yourpassword
 
    # API Keys (optional)
    API_KEY_RADARR=yourkey
@@ -129,8 +123,6 @@ docker-nas-config/
    ├── prowlarr/
    ├── lazylibrarian/
    ├── qbittorrent/
-   ├── calibre/
-   ├── calibre-web/
    ├── nextcloud/
    └── ...
 ```

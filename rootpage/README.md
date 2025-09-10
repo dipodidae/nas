@@ -39,7 +39,6 @@ The `npm run build` command creates a `dist/` folder with:
 The landing page showcases your available services:
 
 - Jellyfin (Media streaming)
-- Calibre (Book management)
 - qBittorrent (Download management)
 - Prowlarr (Indexer management)
 - Radarr (Movie management)
