@@ -5,153 +5,254 @@ This repository contains Docker Compose files for a full-featured NAS (Network A
 
 ---
 
+<div align="center">
 
-## 🛠️ Services Overview
+# NAS Stack
+Media automation, streaming, private cloud and secure reverse proxy – containerized.
 
-The following services are included in the configuration:
-
-| Service         | Description                                                                 | Default Port |
-|------------------|-----------------------------------------------------------------------------|--------------|
-| **Radarr**      | Manages movies and automates downloading and organizing them.              | `7878`       |
-| **Sonarr**      | Manages TV shows and automates downloading and organizing them.            | `8989`       |
-| **Bazarr**      | Automates subtitle management for your movies and TV shows.                | `6767`       |
-| **Jellyfin**    | Media streaming server for movies, TV shows, and music.                   | `8096`, `8920` |
-| **Plex**        | Alternative media streaming server with advanced features.                 | `32400`      |
-| **SWAG**        | Secure Web Application Gateway for reverse proxy, SSL, dashboard, and auto-proxy. | `443`, `80`, `81` |
-| **dockerproxy** | Secure Docker socket proxy for SWAG auto-proxy mod.                        | N/A          |
-| **Watchtower**  | Automatically updates Docker images of your containers.                    | N/A          |
-| **Prowlarr**    | Indexer manager for Radarr, Sonarr, and other applications.                | `9696`       |
-| **LazyLibrarian** | Automates book downloading and management.                               | `5299`       |
-| **qBittorrent** | Torrent client with WebUI for downloading and managing content.            | `8080`       |
-| **Overseerr**   | Request management and media discovery tool.                               | `5055`       |
-| **Nextcloud**   | Personal cloud storage and file sharing platform.                          | `8087`       |
+</div>
 
 ---
 
-## 🚀 Getting Started
+## 1. Overview
+This repository contains a Docker Compose stack providing:
+* Media acquisition & management (Radarr, Sonarr, Prowlarr, Bazarr, LazyLibrarian)
+* Streaming (Jellyfin)
+* Personal cloud (Nextcloud)
+* Download client (qBittorrent)
+* Reverse proxy + TLS (SWAG with auto-proxy)
+* Health & self-healing (healthchecks + Autoheal)
+* Automated updates (Watchtower)
+* Dynamic DNS (Cloudflare DDNS)
 
-### Prerequisites
-- Docker and Docker Compose installed on your system.
-- A `.env` file for environment variables (details below).
-
-
-### Installation
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/docker-nas-config.git
-   cd docker-nas-config
-   ```
-
-2. Create a `.env` file based on the following template:
-   ```env
-   # User/Permissions
-   PUID=1001
-   PGID=1001
-   TZ=Europe/Amsterdam
-
-   # Paths
-   SHARE_DIRECTORY=/mnt/drive
-   CONFIG_DIRECTORY=/mnt/drive/.docker-config
-
-   # DuckDNS
-   DUCKDNS_EMAIL=dpdd@squat.net
-   DUCKDNS_TOKEN=your-duckdns-token
-   DUCKDNS_URL=your-duckdns-url
-   DUCKDNS_SUBDOMAIN=your-duckdns-subdomain
-
-   # Service URLs
-   JELLYFIN_PUBLISHED_URL=https://jellyfin.yourdomain.duckdns.org
-
-   # Watchtower
-   WATCHTOWER_SCHEDULE=0 0 4 * * *
-
-   # qBittorrent
-   QBITTORRENT_USER=admin
-   QBITTORRENT_PASS=yourpassword
-
-   # API Keys (optional)
-   API_KEY_RADARR=yourkey
-   API_KEY_SONARR=yourkey
-   API_KEY_LAZYLIBRARIAN=yourkey
-   API_KEY_JELLYFIN=yourkey
-   PLEX_TOKEN=yourtoken
-   PLEX_IDENTIFIER=yourid
-   PLEX_SERVER_NAME=yourservername
-   ```
-
-3. Adjust file paths and secrets in `.env` to match your system.
-
-4. Start the services:
-   ```bash
-   docker compose up -d
-   ```
-
-5. Access services via their respective ports (see the [Services Overview](#services-overview)).
+Designed and tuned for a Raspberry Pi 5 (also works on other Linux hosts).
 
 ---
 
-
-## 🛡️ Security & Proxying
-- **SWAG** handles reverse proxy, SSL certificate management, and now includes:
-   - **Dashboard mod**: Internal dashboard at `http://<server-ip>:81` (or `dashboard.domain.com` if configured).
-   - **Auto-proxy mod**: Automatically detects and reverse proxies containers with the `swag=enable` label.
-- **dockerproxy**: Provides secure, read-only Docker API access for SWAG auto-proxy.
-- All containers are configured with `PUID` and `PGID` for correct file permissions.
+## 2. Stack Components
+| Service | Purpose | Key Ports (Host) | Notes |
+|---------|--------|------------------|-------|
+| dockerproxy | Restricted Docker API for SWAG auto-proxy | – | Read-only socket
+| SWAG | Reverse proxy, TLS, auto proxy labels | 443, 80, 81 | Auto-discovers `swag=enable`
+| Jellyfin | Media streaming (movies, shows, music) | 8096, 8920 | Hardware accel ready (enable when /dev/dri present)
+| Sonarr | TV automation | 8989 | Depends on Prowlarr
+| Radarr | Movie automation | 7878 | Depends on Prowlarr
+| Prowlarr | Indexer manager | 9696 | Feeds *arr apps
+| Bazarr | Subtitle automation | 6767 | Integrates with Radarr/Sonarr
+| LazyLibrarian | Books / audiobooks | 5299 | Optional
+| qBittorrent | Torrent client | 8080, 6881/tcp+udp | User/pass via env
+| Nextcloud | Personal cloud | 8087 (HTTPS inside container) | Exposed via SWAG externally
+| Cloudflare DDNS | Updates DNS A record | – | Uses API token
+| Watchtower | Auto image updates | – | Controlled by schedule
+| Autoheal | Restart unhealthy containers | – | Uses healthchecks
 
 ---
 
-
-## 🧹 Maintenance
-- **Watchtower** automates container updates.
-- Use `docker compose logs -f [service_name]` to monitor service logs.
+## 3. Prerequisites
+* Docker + Docker Compose v2
+* Domain managed in Cloudflare (API token with DNS edit for the zone)
+* Storage mounted for media & config
+* Non-root user (PUID/PGID) owning the data directories
 
 ---
 
+## 4. Directory Layout (example)
+```
+CONFIG_DIRECTORY (/opt/appdata/)
+   jellyfin/
+   sonarr/
+   radarr/
+   bazarr/
+   prowlarr/
+   lazylibrarian/
+   qbittorrent/
+   nextcloud/
+   swag/
 
-## 📂 Folder Structure
-
-```plaintext
-docker-nas-config/
-├── docker-compose.yml
-├── .env                  # Environment variables
-└── config/               # Configuration files for each service
-   ├── radarr/
-   ├── sonarr/
-   ├── bazarr/
-   ├── jellyfin/
-   ├── swag/
-   ├── prowlarr/
-   ├── lazylibrarian/
-   ├── qbittorrent/
-   ├── nextcloud/
-   └── ...
+SHARE_DIRECTORY (/mnt/media/)
+   Movies/
+   Series/
+   Books/
+   Music/
+   Downloads/
+   NextcloudData/
 ```
 
 ---
 
+## 5. Environment Variables (.env template)
+```
+PUID=1000
+PGID=1000
+TZ=Europe/Amsterdam
 
-## 🤝 Contributing
-Feel free to open issues or submit pull requests to improve this configuration.
+CONFIG_DIRECTORY=/opt/appdata
+SHARE_DIRECTORY=/mnt/media
+
+DOMAIN=example.com
+ADMIN_EMAIL=admin@example.com
+CLOUDFLARE_API_TOKEN=xxxx
+
+JELLYFIN_PUBLISHED_URL=https://jellyfin.example.com
+
+QBITTORRENT_USER=admin
+QBITTORRENT_PASS=changeme
+
+WATCHTOWER_SCHEDULE=0 4 * * *
+```
+
+Add or adjust additional application-specific values as needed.
 
 ---
 
+## 6. Usage
+Clone + start:
+```
+git clone <repo-url>
+cd nas
+cp .env.example .env   # if you maintain an example
+edit .env               # set required values
+docker compose up -d
+```
 
-## 📜 License
-This project is licensed under the [MIT License](LICENSE).
+List containers:
+```
+docker compose ps
+```
+
+Tail logs for one service:
+```
+docker compose logs -f jellyfin
+```
+
+Update (manual):
+```
+docker compose pull && docker compose up -d
+```
 
 ---
 
-
-## 🌐 Resources
-- [Docker Documentation](https://docs.docker.com/)
-- [LinuxServer.io](https://www.linuxserver.io/)
-- [Jellyfin Documentation](https://jellyfin.org/docs/)
-- [SWAG Mods Documentation](https://github.com/linuxserver/docker-mods)
+## 7. Reverse Proxy & External Access
+* SWAG issues certificates and proxies any container labeled `swag=enable`.
+* Add new subdomains in DNS (wildcard supported) and label the service.
+* Jellyfin external URL should match `JELLYFIN_PublishedServerUrl`.
 
 ---
 
-### 📝 Notes
-- To auto-proxy a service, add the label `swag=enable` to its service definition in `docker-compose.yml`.
-- The only custom proxy conf in this setup is for Jellyfin; all other services use auto-proxy.
-- The dashboard and auto-proxy mods are enabled via the `DOCKER_MODS` environment variable in SWAG.
-- The `dockerproxy` service is required for secure Docker API access by SWAG.
+## 8. Health & Self-Healing
+Each service has a `HEALTHCHECK`. Autoheal monitors them and restarts failing containers.
+Check health:
+```
+docker inspect --format='{{.Name}} => {{.State.Health.Status}}' $(docker ps -q)
+```
+
+---
+
+## 9. Performance (Raspberry Pi 5)
+* Jellyfin transcode temp on tmpfs (`/tmp` size 4G) to reduce I/O latency.
+* Remove CPU limits for Jellyfin to avoid throttling during peak transcode bursts.
+* Keep adequate cooling; verify no throttling: `vcgencmd get_throttled` returns `0x0`.
+* Put CONFIG_DIRECTORY and active Downloads on SSD if possible.
+* Use `noatime` mount option for media volumes to reduce metadata writes.
+
+### Hardware Acceleration (when /dev/dri exists)
+Uncomment the `devices` and `group_add` block under Jellyfin, ensure user in `video` & `render` groups, then restart.
+
+---
+
+## 10. Backups
+Config backup:
+```
+tar -czf nas-config-$(date +%Y%m%d).tar.gz -C "$CONFIG_DIRECTORY" .
+```
+Compose + env:
+```
+tar -czf nas-stack-$(date +%Y%m%d).tar.gz docker-compose.yml .env
+```
+
+Nextcloud data must be backed up at rest (filesystem snapshot + database if using an external DB; current setup uses internal sqlite).
+
+---
+
+## 11. Logs & Monitoring
+Show disk usage:
+```
+df -h
+docker system df
+```
+Prune unused images/volumes (careful):
+```
+docker system prune -f
+```
+
+---
+
+## 12. Security Notes
+* Reverse proxy terminates TLS; do not expose raw service ports externally.
+* Limit SSH access; use firewall to restrict inbound ports to 80/443 only.
+* Keep API tokens & passwords only in `.env` (not committed).
+* Watchtower updates images – review logs after updates.
+
+---
+
+## 13. Troubleshooting
+| Issue | Quick Check | Command |
+|-------|-------------|---------|
+| Service unhealthy | Inspect health | `docker inspect <name> | grep -i status` |
+| High I/O latency | Check iowait | `pidstat -d 1 5` |
+| Slow Jellyfin start | See logs | `docker compose logs jellyfin --tail=200` |
+| DNS not updating | Cloudflare DDNS logs | `docker compose logs cloudflare-ddns` |
+| Autoheal restarts often | Inspect failing healthcheck | `docker compose logs <svc>` |
+
+Restart a single service:
+```
+docker compose restart sonarr
+```
+
+---
+
+## 14. Extending
+1. Add service block to `docker-compose.yml`.
+2. Label with `swag=enable` if it needs reverse proxy exposure.
+3. Add a healthcheck.
+4. Restart stack.
+
+---
+
+## 15. License
+See `LICENSE`.
+
+---
+
+## 16. Minimal .env Example
+```
+PUID=1000
+PGID=1000
+TZ=UTC
+CONFIG_DIRECTORY=/opt/appdata
+SHARE_DIRECTORY=/mnt/media
+DOMAIN=example.com
+ADMIN_EMAIL=admin@example.com
+CLOUDFLARE_API_TOKEN=xxxx
+JELLYFIN_PUBLISHED_URL=https://jellyfin.example.com
+QBITTORRENT_USER=admin
+QBITTORRENT_PASS=changeme
+WATCHTOWER_SCHEDULE=0 4 * * *
+```
+
+---
+
+## 17. Quick Reference Commands
+```
+docker compose up -d
+docker compose down
+docker compose pull
+docker compose logs -f swag
+docker stats
+docker compose exec jellyfin bash
+```
+
+---
+
+All set. Adjust, extend, automate.
+
