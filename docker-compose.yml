@@ -16,6 +16,12 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -fsS, 'http://localhost/_ping']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -39,6 +45,12 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8989/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -70,6 +82,12 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:6767/']
+      interval: 45s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -87,8 +105,6 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     volumes:
       - ${CONFIG_DIRECTORY}/jellyfin:/config
       - ${SHARE_DIRECTORY}:/data/movies
@@ -107,58 +123,26 @@ services:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     tmpfs:
-      - /tmp:size=2G,exec
+      - /tmp:size=4G,exec
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
-        limits:
-          cpus: '3.0'
-          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 512M
-
-  plex:
-    image: lscr.io/linuxserver/plex:latest
-    container_name: plex
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-      - VERSION=docker
-    volumes:
-      - ${CONFIG_DIRECTORY}/plex:/config
-      - ${SHARE_DIRECTORY}/Movies:/movies
-      - ${SHARE_DIRECTORY}/Series:/tv
-      - ${SHARE_DIRECTORY}/Music:/music
-    ports:
-      - 32400:32400
-      - 5353:5353/udp
-      - 8324:8324
-      - 32410:32410/udp
-      - 32412:32412/udp
-      - 32413:32413/udp
-      - 32414:32414/udp
-      - 32469:32469
-    restart: unless-stopped
-    depends_on:
-      - swag
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
 
   swag:
     image: lscr.io/linuxserver/swag
@@ -234,6 +218,12 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:9696/']
+      interval: 45s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -268,6 +258,12 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8080/']
+      interval: 60s
+      timeout: 6s
+      retries: 3
+      start_period: 40s
     deploy:
       resources:
         limits:
@@ -302,6 +298,12 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, sh, -c, pgrep watchtower >/dev/null]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
@@ -325,6 +327,12 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:7878/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -357,41 +365,17 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:5299/']
+      interval: 60s
+      timeout: 6s
+      retries: 3
+      start_period: 40s
     deploy:
       resources:
         limits:
           cpus: '0.5'
           memory: 256M
-        reservations:
-          cpus: '0.1'
-          memory: 64M
-
-  overseerr:
-    image: lscr.io/linuxserver/overseerr:latest
-    container_name: overseerr
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${CONFIG_DIRECTORY}/overseerr:/config
-    ports:
-      - 5055:5055
-    restart: unless-stopped
-    depends_on:
-      - plex
-      - radarr
-      - sonarr
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
         reservations:
           cpus: '0.1'
           memory: 64M
@@ -422,6 +406,12 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'https://localhost:443/status.php', -k]
+      interval: 60s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -439,9 +429,9 @@ services:
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
       - DOMAINS=${DOMAIN}
-      - PROXIED=false # Set to true if you want Cloudflare proxy (orange cloud)
-      - TTL=300 # 5 minute TTL for faster updates
-      - IP6=false # Disable IPv6 if not needed
+      - PROXIED=false
+      - TTL=300
+      - IP6=false
       - UPDATE_CRON=@every 5m
       - DETECTION_TIMEOUT=10s
       - UPDATE_TIMEOUT=30s
@@ -452,3 +442,22 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+      - AUTOHEAL_INTERVAL=15
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    network_mode: none
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, sh, -c, pgrep -f autoheal >/dev/null]
+      interval: 60s
+      timeout: 5s
+      retries: 2
+      start_period: 15s
