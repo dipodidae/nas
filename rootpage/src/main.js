@@ -1,9 +1,4 @@
-// ULTIMATE MANIC PIXIE INTERACTIVE MAGIC! ✨💕🌈
-
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('🌈✨💕 BESTIES FOREVA ACTIVATED! 💕✨🌈')
-
-  // Get all the words
   const words = document.querySelectorAll('.word')
 
   // Click effects for each word

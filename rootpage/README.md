@@ -1,6 +1,6 @@
 # Kartoffelschen Root Page
 
-A simple Vite-based landing page for the kartoffelschen.duckdns.org root domain.
+A simple Vite-based landing page for the kartoffelschen root domain.
 
 ## Features
 
