@@ -105,6 +105,7 @@ services:
       - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
     tmpfs:
       - /tmp:size=2G,exec
     ulimits:
@@ -185,7 +186,6 @@ services:
       - ${CONFIG_DIRECTORY}/swag:/config
       - ./rootpage/dist:/config/www/rootpage:ro
       - ./rootpage/nginx-rootpage.conf:/config/nginx/site-confs/root.conf:ro
-      - ./jellyfin.subdomain.conf:/config/nginx/proxy-confs/jellyfin.subdomain.conf:ro
       - ./nginx-cache:/var/cache/nginx:rw
     ports:
       - 443:443
