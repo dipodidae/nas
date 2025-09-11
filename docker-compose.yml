@@ -114,14 +114,13 @@ services:
       - 8920:8920
       - 7359:7359/udp
       - 1900:1900/udp
+    networks:
+      - nas-network
     restart: unless-stopped
     depends_on:
       - swag
-    networks:
-      - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
     tmpfs:
       - /tmp:size=4G,exec
     ulimits:
@@ -178,6 +177,8 @@ services:
     restart: unless-stopped
     networks:
       - nas-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       - com.centurylinklabs.watchtower.enable=true
     ulimits:
