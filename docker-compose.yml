@@ -178,7 +178,7 @@ services:
     networks:
       - nas-network
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - 'host.docker.internal:host-gateway'
     labels:
       - com.centurylinklabs.watchtower.enable=true
     ulimits:
