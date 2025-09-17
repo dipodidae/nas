@@ -85,6 +85,12 @@ JELLYFIN_PUBLISHED_URL=https://jellyfin.yourdomain.com
 
 # Watchtower Schedule (cron format)
 WATCHTOWER_SCHEDULE=0 4 * * *
+
+# Optional: External utilities / scripts
+# Directory that contains the clean-subtitles project (mounted read-only into Bazarr)
+# Example (absolute path recommended):
+# CLEAN_SUBTITLES_DIRECTORY=/home/tom/projects.clean-subtitles
+# If unset, the Bazarr container will not have the extra /clean-subtitles mount.
 ```
 
 ### Directory Structure

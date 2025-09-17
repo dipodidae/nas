@@ -72,7 +72,7 @@ services:
       - ${CONFIG_DIRECTORY}/bazarr:/config
       - ${SHARE_DIRECTORY}/Movies:/movies
       - ${SHARE_DIRECTORY}/Series:/tv
-      - ../projects/clean-subtitles:/clean-subtitles:ro
+      - ${CLEAN_SUBTITLES_DIRECTORY}:/clean-subtitles:ro
     ports:
       - 6767:6767
     restart: unless-stopped
