@@ -277,6 +277,40 @@ docker stats
 
 Additional storage can be mounted and added to service volumes as needed.
 
+## 🧹 Optional Subtitle Cleaning (clean-subtitles)
+
+Integrate [clean-subtitles](https://github.com/dipodidae/clean-subtitles) to auto‑clean `.srt` files (removes spam frames, fixes spacing/punctuation, optional enhancements).
+
+Quick setup:
+1. Clone repo (host):
+  ```bash
+  git clone https://github.com/dipodidae/clean-subtitles.git /home/youruser/projects/clean-subtitles
+  ```
+2. Add to `.env`:
+  ```bash
+  CLEAN_SUBTITLES_DIRECTORY=/home/youruser/projects/clean-subtitles
+  ```
+3. Recreate Bazarr:
+  ```bash
+  docker compose up -d --force-recreate bazarr
+  ```
+  Mount appears at `/clean-subtitles` (read‑only).
+
+Bazarr post‑processing command (Settings → Subtitles → Post-Processing):
+```bash
+python3 /clean-subtitles/clean-subtitle.py -e --set=backup:false "{subtitles}"
+```
+Remove `-e` for baseline cleaning only.
+
+Batch (optional, host cron):
+```bash
+/home/youruser/projects/clean-subtitles/batch_clean.py -e -p /mnt/storage/Series /mnt/storage/Movies
+```
+
+Enhancements (truecasing / Moses): `pip install sacremoses` + configure `config.yml` in the repo (see upstream docs).
+
+More details & advanced usage: upstream README.
+
 ## 📄 License
 
 This configuration is provided as-is for educational and personal use. Please ensure compliance with local laws regarding media downloading and sharing.
