@@ -1,7 +1,7 @@
 # NAS Automation Scripts - Python Dependencies
 # Install with: pip install -r scripts/requirements.txt
 
-# Core HTTP client for API requests  
+# Core HTTP client for API requests
 requests>=2.31.0
 
 # Environment variable management

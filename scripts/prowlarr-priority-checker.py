@@ -2,7 +2,7 @@
 """
 Prowlarr Priority Checker
 
-This script analyzes indexer priorities in Prowlarr and identifies what needs 
+This script analyzes indexer priorities in Prowlarr and identifies what needs
 to be updated based on the configuration in prowlarr-config.yml.
 Shows manual update instructions as a workaround for API issues.
 
@@ -59,7 +59,7 @@ def main():
     print(f"   Host: {host}")
     print(f"   Port: {port}")
     print(f"   API Key: {api_key[:10]}...{api_key[-4:]}")
-    print(f"   Config File: {len(INDEXER_PRIORITIES)} indexers loaded")  
+    print(f"   Config File: {len(INDEXER_PRIORITIES)} indexers loaded")
     print(f"   Fuzzy Threshold: {FUZZY_MATCH_THRESHOLD}")
 
     # Get indexers

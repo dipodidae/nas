@@ -20,17 +20,17 @@ except ImportError:
 
 class ProwlarrConfig:
     """Loads and provides access to Prowlarr configuration."""
-    
+
     def __init__(self, config_path: Optional[str] = None):
         """Initialize with optional custom config path."""
         if config_path is None:
             # Default to prowlarr-config.yml in the same directory as this script
             script_dir = Path(__file__).parent
             config_path = script_dir / "prowlarr-config.yml"
-        
+
         self.config_path = Path(config_path)
         self._config_data = self._load_config()
-    
+
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         if not self.config_path.exists():
@@ -38,43 +38,43 @@ class ProwlarrConfig:
                 f"Configuration file not found: {self.config_path}\n"
                 f"Please ensure prowlarr-config.yml exists in the scripts directory."
             )
-        
+
         try:
             with open(self.config_path, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
-                
+
             if not config:
                 raise ValueError("Configuration file is empty")
-                
+
             if 'indexer_priorities' not in config:
                 raise ValueError("Configuration file missing 'indexer_priorities' section")
-                
+
             return config
-            
+
         except yaml.YAMLError as e:
             raise ValueError(f"Invalid YAML in configuration file: {e}")
         except Exception as e:
             raise ValueError(f"Error reading configuration file: {e}")
-    
+
     @property
     def indexer_priorities(self) -> Dict[str, int]:
         """Get the indexer priorities mapping."""
         return self._config_data.get('indexer_priorities', {})
-    
+
     @property
     def fuzzy_match_threshold(self) -> float:
         """Get the fuzzy match threshold setting."""
         return self._config_data.get('settings', {}).get('fuzzy_match_threshold', 0.8)
-    
+
     @property
     def strict_fuzzy_threshold(self) -> float:
         """Get the strict fuzzy match threshold setting."""
         return self._config_data.get('settings', {}).get('strict_fuzzy_threshold', 0.9)
-    
+
     def get_priority(self, indexer_name: str) -> Optional[int]:
         """Get priority for a specific indexer name."""
         return self.indexer_priorities.get(indexer_name)
-    
+
     def list_indexers_by_priority(self) -> Dict[int, list]:
         """Get indexers grouped by priority level."""
         priority_groups = {}
@@ -83,47 +83,47 @@ class ProwlarrConfig:
                 priority_groups[priority] = []
             priority_groups[priority].append(indexer)
         return priority_groups
-    
+
     def validate_config(self) -> None:
         """Validate the configuration file."""
         errors = []
-        
+
         # Check indexer_priorities
         priorities = self.indexer_priorities
         if not priorities:
             errors.append("No indexer priorities defined")
-        
+
         # Validate priority values
         for indexer, priority in priorities.items():
             if not isinstance(priority, int):
                 errors.append(f"Priority for '{indexer}' must be an integer, got {type(priority).__name__}")
             elif not (1 <= priority <= 50):
                 errors.append(f"Priority for '{indexer}' must be between 1-50, got {priority}")
-        
+
         # Check settings
         settings = self._config_data.get('settings', {})
         fuzzy_threshold = settings.get('fuzzy_match_threshold', 0.8)
         strict_threshold = settings.get('strict_fuzzy_threshold', 0.9)
-        
+
         if not isinstance(fuzzy_threshold, (int, float)) or not (0.0 <= fuzzy_threshold <= 1.0):
             errors.append(f"fuzzy_match_threshold must be between 0.0-1.0, got {fuzzy_threshold}")
-            
+
         if not isinstance(strict_threshold, (int, float)) or not (0.0 <= strict_threshold <= 1.0):
             errors.append(f"strict_fuzzy_threshold must be between 0.0-1.0, got {strict_threshold}")
-            
+
         if strict_threshold < fuzzy_threshold:
             errors.append("strict_fuzzy_threshold should be >= fuzzy_match_threshold")
-        
+
         if errors:
             raise ValueError("Configuration validation failed:\n" + "\n".join(f"  - {error}" for error in errors))
-    
+
     def display_summary(self) -> None:
         """Display a summary of the loaded configuration."""
         print(f"📄 Configuration loaded from: {self.config_path}")
         print(f"📊 Total indexers configured: {len(self.indexer_priorities)}")
         print(f"🎯 Fuzzy match threshold: {self.fuzzy_match_threshold}")
         print(f"🎯 Strict fuzzy threshold: {self.strict_fuzzy_threshold}")
-        
+
         # Show priority distribution
         priority_groups = self.list_indexers_by_priority()
         priority_ranges = {
@@ -132,7 +132,7 @@ class ProwlarrConfig:
             "Standard Priority (31-40)": [p for p in priority_groups.keys() if 31 <= p <= 40],
             "Low Priority (41-50)": [p for p in priority_groups.keys() if 41 <= p <= 50],
         }
-        
+
         print("\n📈 Priority Distribution:")
         for range_name, priorities in priority_ranges.items():
             if priorities:
