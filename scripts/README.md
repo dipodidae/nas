@@ -85,28 +85,34 @@ PROWLARR_PORT=9696
 3. Copy the API Key value
 4. Add to your `.env` file as `API_KEY_PROWLARR=your_key_here`
 
-### Priority Configuration
+### Priority Configuration (`prowlarr-config.yml`)
 
-Both scripts use the same priority mapping defined in `INDEXER_PRIORITIES`:
+Both scripts now load indexer priorities from a YAML configuration file for easier management:
 
-```python
-INDEXER_PRIORITIES = {
-    "YTS": 1,                    # Highest priority
-    "SubsPlease": 5,
-    "showRSS": 10,
-    "The Pirate Bay": 15,
-    "TorrentGalaxyClone": 21,
-    "Solid Torrents": 25,
-    "Torrent Downloads": 28,
-    "Torrent9": 30,
-    "TorrentDownload": 33,
-    "OxTorrent": 35,
-    # ... more indexers
-    "VSTorrent": 50,             # Lowest priority
-}
+```yaml
+indexer_priorities:
+  # Premium/High Quality Indexers (1-10)
+  "YTS": 1                      # High quality movie releases
+  "SubsPlease": 5               # Reliable anime releases
+  "showRSS": 10                 # TV show RSS feeds
+
+  # Mid-tier Indexers (11-30)
+  "The Pirate Bay": 15          # Popular public tracker
+  "TorrentGalaxyClone": 21      # General purpose tracker
+  "Solid Torrents": 25          # Decent general tracker
+  "Torrent9": 30                # French tracker
+  "TorrentDownload": 33         # Standard tracker
+
+  # ... more indexers (see prowlarr-config.yml for complete list)
+
+# Configuration settings
+settings:
+  fuzzy_match_threshold: 0.8    # Minimum confidence for fuzzy matching
+  strict_fuzzy_threshold: 0.9   # Higher threshold for setter script
 ```
 
 **Priority Scale**: 1-50 (1 = highest priority, 50 = lowest priority)
+**Configuration**: Edit `prowlarr-config.yml` to customize indexer priorities and matching settings
 
 ## 🔧 Setup Instructions
 
@@ -125,7 +131,7 @@ INDEXER_PRIORITIES = {
 
    ```bash
    pip install -r scripts/requirements.txt
-   # or manually: pip install requests python-dotenv
+   # or manually: pip install requests python-dotenv PyYAML
    ```
 
 3. **Environment Configuration**:

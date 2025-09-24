@@ -27,7 +27,7 @@ def test_environment():
     print("Testing Python environment...")
 
     # Test required packages
-    required_packages = ['requests', 'dotenv']
+    required_packages = ['requests', 'dotenv', 'yaml']
     missing_packages = []
 
     for package in required_packages:
@@ -57,7 +57,20 @@ def test_configuration():
     if not api_key:
         return False, "API_KEY_PROWLARR not found in .env"
 
-    return True, f"Configuration valid (API key: {api_key[:10]}...)"
+    # Check YAML configuration
+    if not os.path.exists('scripts/prowlarr-config.yml'):
+        return False, "prowlarr-config.yml not found"
+
+    try:
+        # Import the config loader (adjust path since we're in the scripts directory when testing)
+        scripts_path = os.path.join(os.getcwd(), 'scripts')
+        sys.path.insert(0, scripts_path)
+        from prowlarr_config import load_prowlarr_config
+        config = load_prowlarr_config()
+        indexer_count = len(config.indexer_priorities)
+        return True, f"Configuration valid (API key: {api_key[:10]}..., {indexer_count} indexers loaded)"
+    except Exception as e:
+        return False, f"YAML config error: {e}"
 
 def main():
     """Run all tests."""
@@ -83,6 +96,7 @@ def main():
 
     # Test script imports
     scripts = [
+        ('scripts/prowlarr_config.py', 'prowlarr-config-loader'),
         ('scripts/prowlarr-priority-checker.py', 'prowlarr-priority-checker'),
         ('scripts/prowlarr-priority-setter.py', 'prowlarr-priority-setter'),
     ]
