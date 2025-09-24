@@ -22,7 +22,7 @@ This directory contains utility scripts for automating various tasks in the medi
 - **Usage**:
 
   ```bash
-  cd /home/tom/nas
+  cd /home/<username>/nas
   python scripts/prowlarr-priority-setter.py --dry-run  # Preview changes
   python scripts/prowlarr-priority-setter.py           # Apply changes (⚠️ may hang)
   ```
@@ -46,7 +46,7 @@ This directory contains utility scripts for automating various tasks in the medi
 - **Usage**:
 
   ```bash
-  cd /home/tom/nas
+  cd /home/<username>/nas
   python scripts/prowlarr-priority-checker.py
   ```
 
@@ -121,7 +121,7 @@ settings:
 1. **Python Environment**:
 
    ```bash
-   cd /home/tom/nas
+   cd /home/<username>/nas
    python -m venv .venv
    source .venv/bin/activate  # Linux/Mac
    # or .venv\Scripts\activate  # Windows
@@ -239,18 +239,33 @@ These additional scripts help keep the stack healthy and tidy.
 
 ### `config_backup.py`
 
-Creates timestamped tar.gz archives of service configuration directories (from `CONFIG_DIRECTORY`). Supports pruning old archives and restoring.
+Creates timestamped `tar.gz` archives of service configuration directories (from `CONFIG_DIRECTORY`). Supports pruning old archives, exclusions, fast mode, and restoring.
+
+Key features:
+
+- Curated list of default services (override with `--services`)
+- Retention pruning (`--retain`, or `BACKUP_RETAIN` env)
+- Exclude patterns: `--exclude PATTERN`, `--exclude-from file`, `--default-excludes`
+- Fast mode (`--fast`): applies default excludes + adds log directory exclusion + size cap
+- Size-based skipping: `--max-file-size MB`
+- Optional checksum skipping: `--no-checksum`
+- Progress feedback (auto when interactive; force with `--progress` / disable with `--no-progress`)
+- Graceful interrupt handling (Ctrl+C cleans up unless `--keep-partial`)
 
 Usage examples:
 
 ```
-python scripts/config_backup.py              # create backup
-python scripts/config_backup.py --list       # list archives
+python scripts/config_backup.py                       # create backup
+python scripts/config_backup.py --list                # list archives
 python scripts/config_backup.py --restore configs-20250101-000000.tar.gz
-python scripts/config_backup.py --retain 14  # keep 14 most recent
+python scripts/config_backup.py --retain 14           # keep 14 most recent
+python scripts/config_backup.py --exclude jellyfin/cache/** --exclude-from excludes.txt
+python scripts/config_backup.py --fast --no-checksum  # quick lightweight backup
 ```
 
-Environment: `CONFIG_DIRECTORY` (required), `BACKUP_DIR` (default `backups`), `BACKUP_RETAIN`.
+Fast mode defaults: excludes heavy cache/transcode/data/temp paths and `**/logs/**`, applies a 25MB file size cap (can override with `--max-file-size`).
+
+Environment: `CONFIG_DIRECTORY` (required), `BACKUP_DIR` (override destination – default is `CONFIG_DIRECTORY/backups`), `BACKUP_RETAIN`.
 
 ### `permissions_auditor.py`
 
@@ -292,10 +307,10 @@ All new scripts are included in `test_scripts.py` for import validation. Add cro
 
 ```
 # Daily 01:00 backup & prune
-0 1 * * * /usr/bin/env bash -c 'cd /home/tom/nas && . .venv/bin/activate && python scripts/config_backup.py >> backups/backup.log 2>&1'
+0 1 * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/config_backup.py >> backups/backup.log 2>&1'
 
 # Hourly post-update verification (or triggered by Watchtower hook)
-0 * * * * /usr/bin/env bash -c 'cd /home/tom/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/verify.log 2>&1'
+0 * * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/verify.log 2>&1'
 ```
 
 ### Common Issues

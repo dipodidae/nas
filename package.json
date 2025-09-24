@@ -48,6 +48,7 @@
     "backup:config": "bash -c '. .venv/bin/activate && python scripts/config_backup.py'",
     "backup:config:list": "bash -c '. .venv/bin/activate && python scripts/config_backup.py --list'",
     "backup:config:retain14": "bash -c '. .venv/bin/activate && python scripts/config_backup.py --retain 14'",
+    "backup:config:fast": "bash -c '. .venv/bin/activate && python scripts/config_backup.py --fast --no-checksum'",
     "audit:perms": "bash -c '. .venv/bin/activate && python scripts/permissions_auditor.py'",
     "audit:perms:share": "bash -c '. .venv/bin/activate && python scripts/permissions_auditor.py --include-share'",
     "audit:perms:fix": "bash -c '. .venv/bin/activate && python scripts/permissions_auditor.py --fix'",
