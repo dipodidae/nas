@@ -1,0 +1,50 @@
+# Prowlarr Indexer Priority Configuration
+#
+# This file defines the priority settings for various indexers.
+# Priority scale: 1-50 (1 = highest priority, 50 = lowest priority)
+#
+# Categories:
+# - Premium/High Quality (1-10): Best indexers with highest reliability
+# - Mid-tier (11-30): Good quality indexers for general use
+# - Standard (31-40): Average quality indexers
+# - Backup/Low Priority (41-50): Fallback indexers or lower quality
+
+indexer_priorities:
+  # Premium/High Quality Indexers (1-10)
+  YTS: 1 # High quality movie releases
+  SubsPlease: 5 # Reliable anime releases
+  showRSS: 10 # TV show RSS feeds
+
+  # Mid-tier Indexers (11-30)
+  The Pirate Bay: 15 # Popular public tracker
+  TorrentGalaxyClone: 21 # General purpose tracker
+  Solid Torrents: 25 # Decent general tracker
+  Torrent Downloads: 28 # General downloads
+  Torrent9: 30 # French tracker
+
+  # Standard Quality Indexers (31-40)
+  TorrentDownload: 33 # Standard tracker
+  OxTorrent: 35 # French tracker
+  YourBittorrent: 36 # General tracker
+  TheRARBG: 38 # RARBG clone
+  Uindex: 40 # Search engine
+
+  # Backup/Lower Priority Indexers (41-50)
+  UzTracker: 42 # Regional tracker
+  Torrentz2nz: 44 # Torrentz clone
+  RuTor: 46 # Russian tracker
+  "Pirate's Paradise": 48 # General tracker
+
+  # Lowest Priority/Fallback (50)
+  Mac Torrents Download: 50 # Mac-specific content
+  MagnetDownload: 50 # Magnet links
+  PC-torrent: 50 # PC software
+  plugintorrent: 50 # Plugin/software
+  VST Torrentz: 50 # VST/audio software
+  VSTHouse: 50 # VST/audio software
+  VSTorrent: 50 # VST/audio software
+
+# Configuration settings
+settings:
+  fuzzy_match_threshold: 0.8 # Minimum confidence for fuzzy matching (0.0-1.0)
+  strict_fuzzy_threshold: 0.9 # Higher threshold for strict matching

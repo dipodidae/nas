@@ -1,0 +1,17 @@
+# NAS Automation Scripts - Python Dependencies
+# Install with: pip install -r scripts/requirements.txt
+
+# Core HTTP client for API requests  
+requests>=2.31.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# YAML configuration file parsing
+PyYAML>=6.0
+
+# Standard library dependencies (included with Python)
+# - difflib (fuzzy string matching)
+# - dataclasses (structured data)
+# - typing (type hints)
+# - collections (defaultdict, etc.)

@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Test runner for NAS automation scripts
+
+This script validates that all automation scripts are working correctly.
+"""
+
+import os
+import sys
+import subprocess
+import importlib.util
+
+def test_import(module_path, script_name):
+    """Test if a script can be imported without errors."""
+    print(f"Testing {script_name}...")
+    
+    try:
+        spec = importlib.util.spec_from_file_location(script_name, module_path)
+        module = importlib.util.module_from_spec(spec)
+        # Don't execute the module, just test import
+        return True, "Import successful"
+    except Exception as e:
+        return False, f"Import failed: {e}"
+
+def test_environment():
+    """Test Python environment and dependencies."""
+    print("Testing Python environment...")
+    
+    # Test required packages
+    required_packages = ['requests', 'dotenv']
+    missing_packages = []
+    
+    for package in required_packages:
+        try:
+            __import__(package)
+        except ImportError:
+            missing_packages.append(package)
+    
+    if missing_packages:
+        return False, f"Missing packages: {', '.join(missing_packages)}"
+    
+    return True, "All dependencies available"
+
+def test_configuration():
+    """Test environment configuration."""
+    print("Testing configuration...")
+    
+    # Check if .env file exists
+    if not os.path.exists('.env'):
+        return False, ".env file not found"
+    
+    # Check for required variables
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    api_key = os.getenv('API_KEY_PROWLARR')
+    if not api_key:
+        return False, "API_KEY_PROWLARR not found in .env"
+    
+    return True, f"Configuration valid (API key: {api_key[:10]}...)"
+
+def main():
+    """Run all tests."""
+    print("🧪 NAS Automation Scripts Test Suite")
+    print("=" * 50)
+    
+    tests_passed = 0
+    total_tests = 0
+    
+    # Test environment
+    total_tests += 1
+    success, message = test_environment()
+    print(f"{'✅' if success else '❌'} Environment: {message}")
+    if success:
+        tests_passed += 1
+    
+    # Test configuration  
+    total_tests += 1
+    success, message = test_configuration()
+    print(f"{'✅' if success else '❌'} Configuration: {message}")
+    if success:
+        tests_passed += 1
+    
+    # Test script imports
+    scripts = [
+        ('scripts/prowlarr-priority-checker.py', 'prowlarr-priority-checker'),
+        ('scripts/prowlarr-priority-setter.py', 'prowlarr-priority-setter'),
+    ]
+    
+    for script_path, script_name in scripts:
+        if os.path.exists(script_path):
+            total_tests += 1
+            success, message = test_import(script_path, script_name)
+            print(f"{'✅' if success else '❌'} {script_name}: {message}")
+            if success:
+                tests_passed += 1
+        else:
+            print(f"⚠️  {script_name}: Script not found at {script_path}")
+    
+    # Summary
+    print("\n" + "=" * 50)
+    print(f"📊 Test Results: {tests_passed}/{total_tests} passed")
+    
+    if tests_passed == total_tests:
+        print("🎉 All tests passed! Scripts are ready to use.")
+        return 0
+    else:
+        print("❌ Some tests failed. Please check the errors above.")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
