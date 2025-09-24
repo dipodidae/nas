@@ -1,0 +1,47 @@
+target-version = "py313"
+line-length = 100
+indent-width = 2
+
+exclude = [
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "rootpage",
+    "backups",
+    "nginx-cache",
+    "dist",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "A",   # flake8-builtins
+    "COM", # flake8-commas
+    "ISC", # flake8-implicit-str-concat
+    "PIE", # flake8-pie
+    "Q",   # flake8-quotes
+    "PERF",# perflint
+    "PLE", # pylint errors subset
+    "PLW", # pylint warnings subset
+]
+ignore = [
+    "E203",  # Whitespace before ':' (black compatibility)
+    "E501",  # Line length (managed manually if needed)
+    "COM812", # Trailing comma conflict with formatter (auto-disabled)
+]
+
+[lint.isort]
+known-first-party = ["scripts"]
+combine-as-imports = true
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"

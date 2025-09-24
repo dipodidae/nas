@@ -10,6 +10,9 @@ python-dotenv>=1.0.0
 # YAML configuration file parsing
 PyYAML>=6.0
 
+# Dev / linting
+ruff>=0.6.0
+
 # Standard library dependencies (included with Python)
 # - difflib (fuzzy string matching)
 # - dataclasses (structured data)

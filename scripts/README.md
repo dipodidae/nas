@@ -92,23 +92,23 @@ Both scripts now load indexer priorities from a YAML configuration file for easi
 ```yaml
 indexer_priorities:
   # Premium/High Quality Indexers (1-10)
-  "YTS": 1                      # High quality movie releases
-  "SubsPlease": 5               # Reliable anime releases
-  "showRSS": 10                 # TV show RSS feeds
+  YTS: 1 # High quality movie releases
+  SubsPlease: 5 # Reliable anime releases
+  showRSS: 10 # TV show RSS feeds
 
   # Mid-tier Indexers (11-30)
-  "The Pirate Bay": 15          # Popular public tracker
-  "TorrentGalaxyClone": 21      # General purpose tracker
-  "Solid Torrents": 25          # Decent general tracker
-  "Torrent9": 30                # French tracker
-  "TorrentDownload": 33         # Standard tracker
+  The Pirate Bay: 15 # Popular public tracker
+  TorrentGalaxyClone: 21 # General purpose tracker
+  Solid Torrents: 25 # Decent general tracker
+  Torrent9: 30 # French tracker
+  TorrentDownload: 33 # Standard tracker
 
   # ... more indexers (see prowlarr-config.yml for complete list)
 
 # Configuration settings
 settings:
-  fuzzy_match_threshold: 0.8    # Minimum confidence for fuzzy matching
-  strict_fuzzy_threshold: 0.9   # Higher threshold for setter script
+  fuzzy_match_threshold: 0.8 # Minimum confidence for fuzzy matching
+  strict_fuzzy_threshold: 0.9 # Higher threshold for setter script
 ```
 
 **Priority Scale**: 1-50 (1 = highest priority, 50 = lowest priority)
@@ -232,6 +232,71 @@ You can modify the priority values to match your preferences:
 - Minimal dependencies for maximum reliability
 
 ## 🐛 Troubleshooting
+
+## 🧰 Maintenance & Operations Scripts
+
+These additional scripts help keep the stack healthy and tidy.
+
+### `config_backup.py`
+
+Creates timestamped tar.gz archives of service configuration directories (from `CONFIG_DIRECTORY`). Supports pruning old archives and restoring.
+
+Usage examples:
+
+```
+python scripts/config_backup.py              # create backup
+python scripts/config_backup.py --list       # list archives
+python scripts/config_backup.py --restore configs-20250101-000000.tar.gz
+python scripts/config_backup.py --retain 14  # keep 14 most recent
+```
+
+Environment: `CONFIG_DIRECTORY` (required), `BACKUP_DIR` (default `backups`), `BACKUP_RETAIN`.
+
+### `permissions_auditor.py`
+
+Audits ownership (PUID/PGID) and basic permissions. Optionally fixes them.
+
+```
+python scripts/permissions_auditor.py                 # report
+python scripts/permissions_auditor.py --fix           # fix (may need sudo)
+python scripts/permissions_auditor.py --fix --dry-run # show planned changes
+```
+
+Environment: `PUID`, `PGID`, `CONFIG_DIRECTORY`, optional `SHARE_DIRECTORY` (use `--include-share`).
+
+### `post_update_verifier.py`
+
+Verifies that core services are healthy after updates (e.g. Watchtower run). Checks Docker container state & HTTP endpoints.
+
+```
+python scripts/post_update_verifier.py
+VERIFY_SERVICES="prowlarr,sonarr,radarr" python scripts/post_update_verifier.py
+```
+
+Exit codes: 0 all healthy, 1 degraded, 2 fatal. Environment keys: `API_KEY_PROWLARR`, `API_KEY_SONARR`, `API_KEY_RADARR` (optional), `DOCKER_BIN`.
+
+### `log_pruner.py`
+
+Compresses or truncates oversized, older log files inside `CONFIG_DIRECTORY` (or specified roots).
+
+```
+python scripts/log_pruner.py --max-mb 10 --min-age 0
+python scripts/log_pruner.py --roots /custom/logs --dry-run
+```
+
+Environment: `LOG_PRUNE_MAX_MB` (default 25), `LOG_PRUNE_MIN_AGE_DAYS` (1), `LOG_PRUNE_COMPRESS` (true/false).
+
+### Integration
+
+All new scripts are included in `test_scripts.py` for import validation. Add cron/systemd timers as needed, for example:
+
+```
+# Daily 01:00 backup & prune
+0 1 * * * /usr/bin/env bash -c 'cd /home/tom/nas && . .venv/bin/activate && python scripts/config_backup.py >> backups/backup.log 2>&1'
+
+# Hourly post-update verification (or triggered by Watchtower hook)
+0 * * * * /usr/bin/env bash -c 'cd /home/tom/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/verify.log 2>&1'
+```
 
 ### Common Issues
 
