@@ -33,6 +33,7 @@
   "scripts": {
     "lint": "eslint",
     "lint:fix": "eslint --fix",
+    "py:lint": "bash -c '. .venv/bin/activate && ruff check scripts'",
     "up": "docker compose up -d",
     "down": "docker compose down",
     "restart": "docker compose restart",

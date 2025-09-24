@@ -341,6 +341,52 @@ ModuleNotFoundError: No module named 'requests'
 - **Action**: No changes needed, system is optimized
 
 ### Debug Mode
+## 🧪 Testing & Linting
+
+Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.
+
+Run locally:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r scripts/requirements.txt
+python scripts/test_scripts.py      # legacy environment/import checks
+pytest -q scripts/tests             # unit tests (fast, isolated)
+```
+
+Ruff lint (static analysis & style):
+
+```bash
+ruff check scripts
+```
+
+## 📦 Dependency Management (Python)
+
+The project intentionally uses minimal production dependencies. Current policy:
+
+- `scripts/requirements.txt` lists minimum versions (`>=`) to allow security patch upgrades.
+- CI installs the latest compatible versions each run (early warning of breaking changes).
+- `pytest` and `ruff` are included as dev/test tools.
+
+Recommended monthly (or after CVE notifications):
+
+```bash
+source .venv/bin/activate
+pip install -U -r scripts/requirements.txt
+pip list --outdated         # review major version jumps
+python scripts/test_scripts.py && pytest -q scripts/tests
+```
+
+Optional: capture a point-in-time lock snapshot for rollback:
+
+```bash
+pip freeze > scripts/requirements.lock
+git add scripts/requirements.lock
+```
+
+When updating dependencies, ensure all tests & lint pass locally before committing.
+
 
 For additional debugging information, modify the scripts to include:
 

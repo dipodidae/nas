@@ -13,6 +13,14 @@ PyYAML>=6.0
 # Dev / linting
 ruff>=0.6.0
 
+# Testing (CI + local)
+pytest>=8.3.0
+
+# NOTE: Versions are specified with minimum bounds to allow security patches.
+# For fully reproducible builds you can generate a lock snapshot:
+#   pip freeze > scripts/requirements.lock
+# and review updates periodically (see README dependency section).
+
 # Standard library dependencies (included with Python)
 # - difflib (fuzzy string matching)
 # - dataclasses (structured data)

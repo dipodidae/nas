@@ -214,6 +214,30 @@ docker compose up -d
 docker compose images
 ```
 
+### Python Automation Script Dependencies
+
+Automation scripts under `scripts/` use a lightweight dependency set declared in `scripts/requirements.txt` with minimum version specifiers (`>=`). This keeps them current with security fixes.
+
+Routine update workflow (monthly or after security advisories):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U -r scripts/requirements.txt
+python scripts/test_scripts.py
+pytest -q scripts/tests || true  # if pytest installed (dev dependency)
+```
+
+Optional: create a lock snapshot for reproducibility / rollback:
+
+```bash
+pip freeze > scripts/requirements.lock
+git add scripts/requirements.lock
+git commit -m "chore: update python dependency lock"
+```
+
+CI automatically runs Ruff lint & tests across Python 3.11–3.13 to catch breakages early.
+
 ## 🐛 Troubleshooting
 
 ### Common Issues

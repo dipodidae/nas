@@ -1,0 +1,147 @@
+{
+  // VS Code Tasks for NAS project
+  // Provides quick access to common project workflows.
+  // Notes:
+  // - Python tasks auto-create .venv if missing.
+  // - Background tasks (docker compose up) can be terminated via the tasks panel.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Compose: Up",
+      "type": "shell",
+      "command": "docker compose up -d",
+      "problemMatcher": [],
+      "detail": "Start all services in detached mode",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Compose: Down",
+      "type": "shell",
+      "command": "docker compose down",
+      "problemMatcher": [],
+      "detail": "Stop and remove containers"
+    },
+    {
+      "label": "Compose: Restart",
+      "type": "shell",
+      "command": "docker compose restart",
+      "problemMatcher": [],
+      "detail": "Restart running containers"
+    },
+    {
+      "label": "JS: Lint",
+      "type": "shell",
+      "command": "pnpm lint .",
+      "problemMatcher": ["$eslint-stylish"],
+      "group": "build",
+      "detail": "Run ESLint across repository"
+    },
+    {
+      "label": "JS: Lint (Fix)",
+      "type": "shell",
+      "command": "pnpm lint:fix .",
+      "problemMatcher": ["$eslint-stylish"],
+      "detail": "Auto-fix ESLint issues where possible"
+    },
+    {
+      "label": "Python: Ensure Virtualenv",
+      "type": "shell",
+      "command": "[ -d .venv ] || python -m venv .venv && . .venv/bin/activate && pip install -r scripts/requirements.txt",
+      "problemMatcher": [],
+      "detail": "Create .venv and install dependencies if missing"
+    },
+    {
+      "label": "Python: Lint (ruff)",
+      "type": "shell",
+      "command": ". .venv/bin/activate && ruff check scripts",
+      "dependsOn": ["Python: Ensure Virtualenv"],
+      "problemMatcher": [
+        {
+          "owner": "ruff",
+          "fileLocation": ["relative", "${workspaceFolder}"],
+          "pattern": {
+            "regexp": "^(.*?):(\\d+):(\\d+): (\n?)([A-Z0-9]+) (.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "code": 5,
+            "message": 6
+          }
+        }
+      ],
+      "detail": "Run ruff static analysis on scripts"
+    },
+    {
+      "label": "Python: Legacy Script Tests",
+      "type": "shell",
+      "command": ". .venv/bin/activate && python scripts/test_scripts.py",
+      "dependsOn": ["Python: Ensure Virtualenv"],
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "detail": "Run legacy import/config test harness"
+    },
+    {
+      "label": "Python: Pytest Unit Tests",
+      "type": "shell",
+      "command": ". .venv/bin/activate && pytest -q scripts/tests",
+      "dependsOn": ["Python: Ensure Virtualenv"],
+      "problemMatcher": [
+        {
+          "owner": "pytest",
+          "fileLocation": ["relative", "${workspaceFolder}"],
+          "pattern": [
+            {
+              "regexp": "^([^:]+):(\\d+): (?:warning|error) (.*)$",
+              "file": 1,
+              "line": 2,
+              "message": 3
+            }
+          ]
+        }
+      ],
+      "detail": "Run pytest unit tests"
+    },
+    {
+      "label": "Python: All (Lint + Tests)",
+      "type": "shell",
+      "command": ":",
+      "dependsOn": [
+        "Python: Lint (ruff)",
+        "Python: Legacy Script Tests",
+        "Python: Pytest Unit Tests"
+      ],
+      "problemMatcher": [],
+      "detail": "Aggregate pseudo-task to run all Python checks"
+    },
+    {
+      "label": "Scripts: Prowlarr Priority Check",
+      "type": "shell",
+      "command": ". .venv/bin/activate && python scripts/prowlarr-priority-checker.py",
+      "dependsOn": ["Python: Ensure Virtualenv"],
+      "problemMatcher": [],
+      "detail": "Analyze Prowlarr indexer priorities"
+    },
+    {
+      "label": "Scripts: Config Backup (fast)",
+      "type": "shell",
+      "command": ". .venv/bin/activate && python scripts/config_backup.py --fast --no-checksum",
+      "dependsOn": ["Python: Ensure Virtualenv"],
+      "problemMatcher": [],
+      "detail": "Create a quick configuration backup"
+    },
+    {
+      "label": "Scripts: Permissions Audit",
+      "type": "shell",
+      "command": ". .venv/bin/activate && python scripts/permissions_auditor.py",
+      "dependsOn": ["Python: Ensure Virtualenv"],
+      "problemMatcher": [],
+      "detail": "Audit config & share directory permissions"
+    }
+  ]
+}
