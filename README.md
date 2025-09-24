@@ -1,391 +1,101 @@
-# NAS Media Server Cluster
+<div align="center">
 
-A comprehensive Docker-based media server and automation stack running on Raspberry Pi 5, featuring streaming, download automation, reverse proxy, and monitoring capabilities.
+# NAS Stack
+
+Self‑hosted media + automation + infrastructure stack for Raspberry Pi 5. One Docker Compose file. Batteries included: streaming, download automation, reverse proxy + TLS, health checks, smart maintenance scripts.
+
+</div>
+
+<p align="center">
+<b>Fast to deploy · Reasonably secure defaults · Scriptable maintenance · Pi‑optimized</b>
+</p>
+
+## Feature Highlights
+
+- Unified Docker Compose: Jellyfin, Sonarr, Radarr, Bazarr, Prowlarr, qBittorrent, Nextcloud, Lazylibrarian, SWAG
+- Automated: indexers, downloads, subtitles, updates (selective Watchtower), health recovery (Autoheal)
+- Reverse proxy + HTTPS: Cloudflare DNS + SWAG + Let's Encrypt with per‑service subdomains
+- Hardened access: Docker socket proxy, non‑root users, isolated network, minimal exposed ports
+- Pi 5 tuned: tmpfs transcoding, conservative memory + CPU limits, optional hardware acceleration
+- Observability: healthchecks on every critical service, structured logs, scriptable audits
+- Maintenance scripts: priority checker, config backups, permission audit, post‑update verifier, stalled torrent kickstart
+- Extensible: drop in new services, label for proxy + auto‑update, add a healthcheck and go
+
+---
+
+## 🚀 Getting Started
+
+```bash
+# In the cloned directory
+cp .env.example .env       # provide values (timezone, domain, API keys, credentials)
+docker compose up -d       # launch stack
+docker compose ps          # verify containers healthy
+```
+
+> Tip: run `docker compose logs -f swag` until certificates are issued.
 
 ## 🏗️ Architecture
 
-### Core Services
+| Layer           | Components                                                                                                      |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| Media Apps      | Jellyfin (stream), Sonarr (TV), Radarr (Movies), Bazarr (Subtitles), Prowlarr (Indexers), Lazylibrarian (Books) |
+| Download        | qBittorrent (client)                                                                                            |
+| Storage / Files | Nextcloud (sync & share)                                                                                        |
+| Edge            | SWAG (NGINX reverse proxy + ACME), Cloudflare DDNS                                                              |
+| Automation      | Watchtower (selective), Autoheal, Python scripts (`scripts/`)                                                   |
+| Security        | Docker socket proxy, least‑privilege users, network isolation                                                   |
 
-- **Jellyfin** - Media streaming server with hardware acceleration support
-- **SWAG** - Reverse proxy with SSL/TLS termination and automatic certificate management
-- **Nextcloud** - File sync and sharing platform with external storage integration
-
-### Media Automation (\*arr Stack)
-
-- **Sonarr** - TV series management and automation
-- **Radarr** - Movie management and automation
-- **Bazarr** - Subtitle management for movies and TV shows
-- **Prowlarr** - Indexer management for \*arr applications
-- **Lazylibrarian** - Book and audiobook management
-
-### Download & Storage
-
-- **qBittorrent** - BitTorrent client with web interface
-- **Nextcloud** - Additional file storage and sharing
-
-### Infrastructure & Monitoring
-
-- **Watchtower** - Automatic container updates
-- **Autoheal** - Container health monitoring and restart automation
-- **Cloudflare DDNS** - Dynamic DNS updates for external access
-- **Docker Socket Proxy** - Secure Docker API access
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Raspberry Pi 5 with sufficient cooling
-- Docker and Docker Compose installed
-- Domain name configured with Cloudflare
-- Environment variables configured (see Configuration section)
-
-### Deployment
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd nas
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env with your specific values
-
-# Start the stack
-docker compose up -d
-
-# Check service status
-docker compose ps
-```
+All services join a single custom network and use `${CONFIG_DIRECTORY}` for persistent config. Media libraries live under `${SHARE_DIRECTORY}`.
 
 ## ⚙️ Configuration
 
-### Required Environment Variables
+Minimal required `.env` keys (see full example):
 
-Create a `.env` file with the following variables:
-
-```bash
-# Timezone and User Configuration
+```ini
 TZ=Europe/London
 PUID=1000
 PGID=1000
-
-# Directory Paths
 CONFIG_DIRECTORY=/opt/appdata
 SHARE_DIRECTORY=/mnt/storage
-
-# Domain and SSL
 DOMAIN=yourdomain.com
 ADMIN_EMAIL=admin@yourdomain.com
-CLOUDFLARE_API_TOKEN=your_cloudflare_token
-
-# Application Credentials
+CLOUDFLARE_API_TOKEN=***
 QBITTORRENT_USER=admin
-QBITTORRENT_PASS=your_secure_password
-JELLYFIN_PUBLISHED_URL=https://jellyfin.yourdomain.com
-
-# Watchtower Schedule (cron format)
+QBITTORRENT_PASS=change_me
 WATCHTOWER_SCHEDULE=0 4 * * *
-
-# Optional: External utilities / scripts
-# Directory that contains the clean-subtitles project (mounted read-only into Bazarr)
-# Example (absolute path recommended):
-# CLEAN_SUBTITLES_DIRECTORY=/home/<username>/projects.clean-subtitles
-# If unset, the Bazarr container will not have the extra /clean-subtitles mount.
 ```
 
-### Directory Structure
+Optional integrations:
 
-Ensure the following directories exist and have proper permissions:
-
-```
-/opt/appdata/          # Application configurations
-├── jellyfin/
-├── sonarr/
-├── radarr/
-├── bazarr/
-├── prowlarr/
-├── lazylibrarian/
-├── qbittorrent/
-├── nextcloud/
-└── swag/
-
-/mnt/storage/          # Media and data storage
-├── Movies/
-├── Series/
-├── Books/
-├── Music/
-├── Downloads/
-└── NextcloudData/
+```ini
+CLEAN_SUBTITLES_DIRECTORY=/abs/path/to/clean-subtitles   # enables Bazarr mount
+JELLYFIN_PUBLISHED_URL=https://jellyfin.${DOMAIN}
 ```
 
-## 🌐 Service Access
+Directory layout (create + chown to PUID/PGID):
 
-| Service        | Internal Port | External Access                      | Purpose             |
-| -------------- | ------------- | ------------------------------------ | ------------------- |
-| Jellyfin       | 8096          | https://jellyfin.yourdomain.com      | Media streaming     |
-| Sonarr         | 8989          | https://sonarr.yourdomain.com        | TV management       |
-| Radarr         | 7878          | https://radarr.yourdomain.com        | Movie management    |
-| Bazarr         | 6767          | https://bazarr.yourdomain.com        | Subtitle management |
-| Prowlarr       | 9696          | https://prowlarr.yourdomain.com      | Indexer management  |
-| qBittorrent    | 8080          | https://qbittorrent.yourdomain.com   | Download client     |
-| Lazylibrarian  | 5299          | https://lazylibrarian.yourdomain.com | Book management     |
-| Nextcloud      | 8087          | https://nextcloud.yourdomain.com     | File sharing        |
-| SWAG Dashboard | 81            | https://yourdomain.com:81            | Proxy management    |
-
-## 🔧 Hardware Optimization
-
-### Raspberry Pi 5 Specific Features
-
-- **4GB tmpfs** for Jellyfin transcoding to reduce SD card wear
-- **Hardware acceleration ready** - `/dev/dri` mounting prepared for when available
-- **Resource limits** configured to prevent system overload
-- **Health checks** on all services for automatic recovery
-
-### Performance Tuning
-
-- CPU reservations ensure fair resource allocation
-- Memory limits prevent individual services from consuming all RAM
-- Log rotation configured to prevent disk space issues
-- Network isolation with custom bridge network
-
-## 📊 Monitoring & Health
-
-### Health Checks
-
-All services include health checks with automatic restart via Autoheal:
-
-- **Jellyfin**: System info endpoint monitoring
-- **Media services**: Web interface availability
-- **SWAG**: SSL certificate and proxy functionality
-- **Infrastructure services**: Process monitoring
-
-### Automated Updates
-
-- **Watchtower**: Runs daily at 4 AM to update containers
-- **Only labeled containers** are updated automatically
-- **Email notifications** for update events
-
-### Logging
-
-- **Centralized logging** with size limits and rotation
-- **JSON format** for structured log analysis
-- **Service-specific retention** policies
-
-## 🔐 Security Features
-
-- **No-new-privileges** security option where applicable
-- **Read-only Docker socket** access via proxy
-- **SSL/TLS termination** at reverse proxy
-- **Automatic certificate management** via Let's Encrypt
-- **Network isolation** with custom bridge network
-- **Non-root user execution** for all services
-
-## 🛠️ Maintenance
-
-### Backup Recommendations
-
-```bash
-# Backup configurations
-tar -czf appdata-backup-$(date +%Y%m%d).tar.gz /opt/appdata/
-
-# Backup docker-compose and environment
-tar -czf compose-backup-$(date +%Y%m%d).tar.gz docker-compose.yml .env
+```ini
+${CONFIG_DIRECTORY}/{jellyfin,sonarr,radarr,bazarr,prowlarr,lazylibrarian,qbittorrent,nextcloud,swag}
+${SHARE_DIRECTORY}/{Movies,Series,Books,Music,Downloads,NextcloudData}
 ```
 
-### Log Management
-
-```bash
-# View service logs
-docker compose logs jellyfin
-docker compose logs -f sonarr
-
-# Check container health
-docker compose ps
-```
-
-### Updates
-
-```bash
-# Manual update (if watchtower disabled)
-docker compose pull
-docker compose up -d
-
-# View current versions
-docker compose images
-```
-
-### Python Automation Script Dependencies
-
-Automation scripts under `scripts/` use a lightweight dependency set declared in `scripts/requirements.txt` with minimum version specifiers (`>=`). This keeps them current with security fixes.
-
-Routine update workflow (monthly or after security advisories):
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -U -r scripts/requirements.txt
-python scripts/test_scripts.py
-pytest -q scripts/tests || true  # if pytest installed (dev dependency)
-```
-
-Optional: create a lock snapshot for reproducibility / rollback:
-
-```bash
-pip freeze > scripts/requirements.lock
-git add scripts/requirements.lock
-git commit -m "chore: update python dependency lock"
-```
-
-CI automatically runs Ruff lint & tests across Python 3.11–3.13 to catch breakages early.
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-#### Jellyfin Hardware Acceleration
-
-If `/dev/dri` becomes available, uncomment the devices section in docker-compose.yml:
-
-```yaml
-devices:
-  - /dev/dri:/dev/dri
-group_add:
-  - video
-  - render
-```
-
-#### Permission Issues
-
-Ensure PUID/PGID match your user:
-
-```bash
-id $USER  # Note the uid and gid values
-```
-
-#### Storage Issues
-
-Monitor disk usage:
-
-```bash
-df -h
-docker system df
-docker system prune  # Clean unused resources
-```
-
-#### Network Connectivity
-
-Check service connectivity:
-
-```bash
-docker compose exec jellyfin curl -f http://sonarr:8989/
-```
-
-## 📈 Scaling & Extensions
-
-### Adding Services
-
-1. Add service definition to docker-compose.yml
-2. Include in nas-network
-3. Add health check and labels
-4. Configure SWAG subdomain if needed
-
-### Resource Adjustment
-
-Monitor resource usage and adjust limits:
-
-```bash
-docker stats
-```
-
-### External Storage
-
-Additional storage can be mounted and added to service volumes as needed.
-
-## � Automation Scripts
-
-The `/scripts` directory contains utility scripts for automating various media server tasks:
-
-### Prowlarr Priority Management
-
-**Quick Start:**
-
-```bash
-# Setup Python environment (first time only)
-python -m venv .venv
-source .venv/bin/activate
-pip install -r scripts/requirements.txt
-
-# Analyze indexer priorities
-python scripts/prowlarr-priority-checker.py
-```
-
-**Available Scripts:**
-
-- **`prowlarr-priority-checker.py`** ✅ - Analyzes indexer priorities and provides manual update instructions
-- **`prowlarr-priority-setter.py`** ⚠️ - Automatic priority updates (has API issues, use checker instead)
-
-**Features:**
-
-- Fuzzy name matching for indexer identification
-- Intelligent priority recommendations based on performance
-- Clean, professional reporting with actionable instructions
-- Environment variable configuration via `.env`
-
-See [`scripts/README.md`](scripts/README.md) for detailed documentation, setup instructions, and troubleshooting.
-
-## �🧹 Optional Subtitle Cleaning (clean-subtitles)
-
-Integrate [clean-subtitles](https://github.com/dipodidae/clean-subtitles) to auto‑clean `.srt` files (removes spam frames, fixes spacing/punctuation, optional enhancements).
-
-Quick setup:
-
-1. Clone repo (host):
-
-```bash
-git clone https://github.com/dipodidae/clean-subtitles.git /home/youruser/projects/clean-subtitles
-```
-
-2. Add to `.env`:
-
-```bash
-CLEAN_SUBTITLES_DIRECTORY=/home/youruser/projects/clean-subtitles
-```
-
-3. Recreate Bazarr:
-
-```bash
-docker compose up -d --force-recreate bazarr
-```
-
-Mount appears at `/clean-subtitles` (read‑only).
-
-Bazarr post‑processing command (Settings → Subtitles → Post-Processing):
-
-```bash
-python3 /clean-subtitles/clean-subtitle.py -e --set=backup:false "{subtitles}"
-```
-
-Remove `-e` for baseline cleaning only.
-
-Batch (optional, host cron):
-
-```bash
-/home/youruser/projects/clean-subtitles/batch_clean.py -e -p /mnt/storage/Series /mnt/storage/Movies
-```
-
-Enhancements (truecasing / Moses): `pip install sacremoses` + configure `config.yml` in the repo (see upstream docs).
-
-More details & advanced usage: upstream README.
-
-## 📄 License
-
-This configuration is provided as-is for educational and personal use. Please ensure compliance with local laws regarding media downloading and sharing.
-
-## 🤝 Contributing
-
-Feel free to submit issues and enhancement requests. When contributing:
-
-1. Test changes thoroughly
-2. Update documentation
-3. Follow existing patterns and conventions
-4. Consider resource impact on Raspberry Pi hardware
+## 🧩 Automation Scripts
+
+Located in `scripts/` (see `scripts/README.md` for full docs).
+
+| Script                           | Purpose                                                 |
+| -------------------------------- | ------------------------------------------------------- |
+| prowlarr-priority-checker.py     | Analyze & recommend indexer priorities (fuzzy matching) |
+| config_backup.py                 | Tar + prune config backups (fast/exclusion modes)       |
+| permissions_auditor.py           | Report / optionally fix ownership & mode drift          |
+| post_update_verifier.py          | Verify core service health after updates                |
+| qbittorrent_stalled_kickstart.py | Nudge stalled torrents back to life                     |
+
+## 🛡️ Security
+
+- Reverse proxy terminates TLS; only required ports exposed externally
+- Docker socket never mounted directly (proxy mediator only)
+- Non‑root users (PUID/PGID) for app processes
+- Healthchecks + Autoheal mitigate silent failures
+- Explicit environment variables (no secrets baked in images)
+- Add new services: join network, add `swag=enable` label only if public
