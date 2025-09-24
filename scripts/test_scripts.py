@@ -106,6 +106,7 @@ def main():
     ("scripts/prowlarr-priority-checker.py", "prowlarr-priority-checker"),
     ("scripts/prowlarr-priority-setter.py", "prowlarr-priority-setter"),
     ("scripts/config_backup.py", "config-backup"),
+    ("scripts/project_service_adder.py", "project-service-adder"),
     ("scripts/permissions_auditor.py", "permissions-auditor"),
     ("scripts/post_update_verifier.py", "post-update-verifier"),
     ("scripts/log_pruner.py", "log-pruner"),

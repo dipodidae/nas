@@ -467,3 +467,28 @@ services:
       timeout: 5s
       retries: 2
       start_period: 15s
+
+# --- added by project_service_adder 2025-09-24T21:45:49Z (nas-panel) ---
+  nas-panel:
+    build:
+      context: ${PROJECTS_DIRECTORY:-/home/tom/projects}/nas-panel
+      dockerfile: Dockerfile
+    container_name: nas-panel
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    ports:
+      - 3000:3000
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:3000/']
+      interval: 45s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
