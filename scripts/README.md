@@ -341,6 +341,7 @@ ModuleNotFoundError: No module named 'requests'
 - **Action**: No changes needed, system is optimized
 
 ### Debug Mode
+
 ### `qbittorrent_stalled_kickstart.py`
 
 Identifies stalled torrents (using qBittorrent Web API filters: `stalled`, `stalled_uploading`, `stalled_downloading`) and performs a gentle "kick" sequence: resume (if paused), reannounce, optional recheck.
@@ -361,6 +362,7 @@ python scripts/qbittorrent_stalled_kickstart.py --no-reannounce
 Exit codes: 0 success/no work; 1 partial failures; 2 fatal (auth/network/config).
 
 Flags:
+
 - `--recheck` optionally triggers hash recheck for stalled torrents (I/O heavy)
 - `--min-age` (minutes) avoids acting on freshly added torrents (default 10)
 - `--max` limit number of targeted torrents (safeguard)
@@ -414,7 +416,6 @@ git add scripts/requirements.lock
 ```
 
 When updating dependencies, ensure all tests & lint pass locally before committing.
-
 
 For additional debugging information, modify the scripts to include:
 

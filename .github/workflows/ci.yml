@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
@@ -18,6 +18,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Create minimal .env for compose validation
+        run: |
+          awk 'NF && $0 !~ /CLOUDFLARE_API_TOKEN/ {print}' .env.example > .env
+          # Provide safe dummy secrets / required vars
+          echo 'CLOUDFLARE_API_TOKEN=dummy_token' >> .env
+          echo 'QBITTORRENT_USER=dummy' >> .env
+          echo 'QBITTORRENT_PASS=dummy_pass' >> .env
+          echo 'WATCHTOWER_SCHEDULE=0 0 4 * * *' >> .env
+          # Intentionally leave CLEAN_SUBTITLES_DIRECTORY unset to exercise fallback path
       - name: Validate docker-compose.yml
         run: docker compose config > /dev/null
 
@@ -34,7 +43,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
+          cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile
       - name: Lint
@@ -53,7 +62,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: scripts/requirements.txt
       - name: Install dependencies
         run: |

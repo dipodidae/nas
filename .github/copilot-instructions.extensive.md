@@ -141,9 +141,11 @@ Add label `swag=enable` for SWAG auto-proxy. Do not expose random high ports pub
 - Keep YAML indentation at 2 spaces.
 
 ### Shell / Bash Style (Brief)
+
 Use Bash only for small orchestration wrappers; migrate to Python if a script exceeds ~100 lines or contains complex logic.
 
 Core rules:
+
 - Shebang: `#!/usr/bin/env bash` then immediately: `set -euo pipefail` and `IFS=$'\n\t'`.
 - 2-space indent; no tabs. Guard clauses > deeply nested blocks.
 - Quote expansions by default: `"${var}"`; forward args with `"$@"`.
@@ -164,6 +166,7 @@ Core rules:
 - Run ShellCheck on new scripts.
 
 Minimal skeleton:
+
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
@@ -178,12 +181,14 @@ main "$@"
 Keep this brief, pragmatic subset aligned with existing `scripts/` patterns:
 
 **Variables**
+
 - Meaningful, pronounceable, searchable; avoid cryptic abbreviations (`current_date`, not `ymdstr`).
 - Consistent vocabulary for same concept (use `indexer_*` everywhere, not `provider_*` sometimes).
 - Promote important magic numbers to UPPER_SNAKE constants (`SECONDS_IN_DAY`).
 - Avoid redundant context (`car.make` not `car.car_make`).
 
 **Functions**
+
 - Do one thing; if you feel compelled to add a boolean flag, split into two functions.
 - Prefer ≤2 required positional params; bundle related params into a dataclass / typed object if growing.
 - Names should state intent (`prune_archives`, not `do_prune`).
@@ -191,10 +196,12 @@ Keep this brief, pragmatic subset aligned with existing `scripts/` patterns:
 - Avoid side effects except at boundaries (I/O, environment) and centralize them in `main()`.
 
 **Arguments & Defaults**
+
 - Use default parameter values instead of `if arg is None: arg = ...` where appropriate.
 - Avoid mutable defaults; use `None` + create inside body if needed.
 
 **Classes / SOLID (Only When Needed)**
+
 - SRP: Each class encapsulates one reason to change (e.g. `ProwlarrApiClient`).
 - OCP: Prefer adding a new small class or overriding a focused method instead of modifying broad internals.
 - LSP: Subclasses must not narrow method signatures or alter expected return types.
@@ -202,33 +209,41 @@ Keep this brief, pragmatic subset aligned with existing `scripts/` patterns:
 - DIP: Depend on small abstractions (protocol / simple function contract) rather than concrete heavy objects.
 
 **DRY & Abstraction**
+
 - Factor duplicated logic early if semantics are identical; otherwise wait until patterns stabilize.
 - Prefer a well-named helper function over premature class hierarchies.
 
 **Naming Patterns**
+
 - Functions & variables: `snake_case`; Classes: `CamelCase`; Constants: `UPPER_SNAKE`.
 - Boolean predicates start with `is_`, `has_`, `needs_` where clarity improves call-sites.
 
 **Control Flow & Clarity**
+
 - Return early on invalid state (guard clauses) to avoid nested pyramids.
 - Replace complex branching with dictionary dispatch / strategy objects only when it simplifies reading.
 
 **Error Handling**
+
 - Catch the narrowest exception feasible; broad `except Exception` only at top-level orchestration.
 - Provide actionable error messages; prefer including context (`path`, `service`, `size_mb`).
 
 **Side Effects & Purity**
+
 - Pure functions accept inputs, return outputs, no global mutation—favored for core logic.
 - Side-effect functions (I/O, network, filesystem) should be thin wrappers around pure core.
 
 **Performance**
+
 - Optimize only after measurement; readability first. Use streaming (iterators, chunked reads) for large files.
 
 **Testing Hooks**
+
 - Design helpers to be importable without executing code (no work at import time other than constants & light checks).
 - Expose core logic via functions returning data (status code, structured result) for easy test assertions.
 
 **Anti-Patterns To Avoid**
+
 - Boolean parameter switches, sprawling 200+ line functions, deep nested try/except blocks, wide dataclasses acting as unstructured bags, overuse of inheritance where composition or a simple function suffices.
 
 Use this as a heuristic checklist—do not over-engineer tiny maintenance scripts.
@@ -236,15 +251,18 @@ Use this as a heuristic checklist—do not over-engineer tiny maintenance script
 ---
 
 #### Clean Code (clean-code-python) Derived Ultra-Brief Checklist
+
 Use this distilled list while editing Python in `scripts/`.
 
 Variables:
+
 - Meaningful & pronounceable; consistent domain vocabulary (same concept => same root name).
 - Searchable & explanatory: replace magic numbers/strings with upper-snake constants and named regex groups.
 - Avoid mental mapping (`location` not `item`), redundant context (`car.make` not `car.car_make`).
 - Prefer default parameters over `if x is None: x = ...` when semantically identical.
 
 Functions:
+
 - Single responsibility & single abstraction level; extract loops/parsing/IO.
 - ≤2-3 required params; otherwise bundle into a dataclass / TypedDict / simple object.
 - No boolean flags to branch behavior—split functions.
@@ -252,6 +270,7 @@ Functions:
 - Centralize side effects; keep core pure.
 
 Classes / SOLID:
+
 - SRP: one reason to change.
 - OCP: add behavior by extension (override narrow hook) not editing broad internals.
 - LSP: subclasses keep signatures & contracts compatible.
@@ -259,22 +278,28 @@ Classes / SOLID:
 - DIP: depend on slim protocols (duck-typed surface) not concrete heavy classes.
 
 Side Effects:
+
 - Isolate filesystem/network/env mutations; pass data in/out rather than mutating globals.
 
 DRY:
+
 - Extract identical logic early; defer abstraction if similarities are still evolving.
 
 Error Handling:
+
 - Catch narrow exceptions; actionable messages with context values.
 - Only broad catch at top orchestration layer returning clean exit codes.
 
 Performance:
+
 - Readability first; measure before optimizing. Stream large inputs (iterators, chunking) and avoid loading huge files fully when unnecessary.
 
 Testing & Import Hygiene:
+
 - Module import should not perform heavy work. Guard executable code under `if __name__ == "__main__": main()`.
 
 Anti-Patterns (rename / refactor on sight):
+
 - Flag params, duplicate 30+ line near-identical blocks, deep nesting >3, silent broad excepts, mega utility classes acting as unstructured bags, global mutable state.
 
 Rule of Thumb: If explaining a function requires “and then it also…”, it probably does too much.
@@ -327,6 +352,7 @@ Before suggesting merge:
 4. Confirm new healthcheck command returns 0 locally (simulate with `curl`).
 
 ---
+
 ## 14. Performance Notes
 
 - Jellyfin: leave CPU unconstrained for bursts (only reservations). Avoid adding strict limit unless user requests.
