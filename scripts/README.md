@@ -341,6 +341,34 @@ ModuleNotFoundError: No module named 'requests'
 - **Action**: No changes needed, system is optimized
 
 ### Debug Mode
+### `qbittorrent_stalled_kickstart.py`
+
+Identifies stalled torrents (using qBittorrent Web API filters: `stalled`, `stalled_uploading`, `stalled_downloading`) and performs a gentle "kick" sequence: resume (if paused), reannounce, optional recheck.
+
+Environment (from `.env`): `QBITTORRENT_USER`, `QBITTORRENT_PASS`, optional `QBITTORRENT_HOST` (default `http://localhost`), `QBITTORRENT_PORT` (default `8080`).
+
+Usage examples:
+
+```bash
+python scripts/qbittorrent_stalled_kickstart.py                # standard kick
+python scripts/qbittorrent_stalled_kickstart.py --dry-run      # inspect only
+python scripts/qbittorrent_stalled_kickstart.py --recheck --max 5
+python scripts/qbittorrent_stalled_kickstart.py --filters stalled stalled_downloading
+python scripts/qbittorrent_stalled_kickstart.py --min-age 30   # ignore very recent
+python scripts/qbittorrent_stalled_kickstart.py --no-reannounce
+```
+
+Exit codes: 0 success/no work; 1 partial failures; 2 fatal (auth/network/config).
+
+Flags:
+- `--recheck` optionally triggers hash recheck for stalled torrents (I/O heavy)
+- `--min-age` (minutes) avoids acting on freshly added torrents (default 10)
+- `--max` limit number of targeted torrents (safeguard)
+- `--dry-run` report planned actions without executing
+- `--no-reannounce` skip tracker reannounce
+
+Safe by design: no deletions, no forceful state resets. One reannounce per batch.
+
 ## 🧪 Testing & Linting
 
 Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.

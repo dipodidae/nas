@@ -109,6 +109,7 @@ def main():
     ("scripts/permissions_auditor.py", "permissions-auditor"),
     ("scripts/post_update_verifier.py", "post-update-verifier"),
     ("scripts/log_pruner.py", "log-pruner"),
+    ("scripts/qbittorrent_stalled_kickstart.py", "qbittorrent-stalled-kickstart"),
   ]
 
   for script_path, script_name in scripts:
