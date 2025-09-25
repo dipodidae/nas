@@ -475,7 +475,7 @@ services:
   # --- added by project_service_adder 2025-09-24T21:45:49Z (nas-panel) ---
   nas-panel:
     build:
-      context: ${PROJECTS_DIRECTORY:-/home/tom/projects}/nas-panel
+      context: ${PROJECTS_DIRECTORY:-/home/pi/projects}/nas-panel
       dockerfile: Dockerfile
     container_name: nas-panel
     environment:
