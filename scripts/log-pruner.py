@@ -12,8 +12,8 @@ Actions:
 Binary dependencies: gzip (for compression). Falls back to truncate only if missing.
 
 Usage:
-  python scripts/log_pruner.py                # prune using env defaults
-  python scripts/log_pruner.py --roots pathA pathB --max-mb 10 --min-age 0
+  python scripts/log-pruner.py                # prune using env defaults
+  python scripts/log-pruner.py --roots pathA pathB --max-mb 10 --min-age 0
 
 Exit codes:
   0 operation successful

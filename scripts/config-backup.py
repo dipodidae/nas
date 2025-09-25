@@ -18,12 +18,12 @@ Environment variables:
   BACKUP_RETAIN (optional)     How many most recent archives to keep (default: 7)
 
 Usage examples:
-  python scripts/config_backup.py                      # create backup
-  python scripts/config_backup.py --retain 14          # override retention
-  python scripts/config_backup.py --list               # list archives
-  python scripts/config_backup.py --restore <file>     # restore (extract) an archive
-  python scripts/config_backup.py --fast               # fast backup (excludes heavy dirs, big files, logs)
-  python scripts/config_backup.py --exclude-from patterns.txt --no-checksum
+  python scripts/config-backup.py                      # create backup
+  python scripts/config-backup.py --retain 14          # override retention
+  python scripts/config-backup.py --list               # list archives
+  python scripts/config-backup.py --restore <file>     # restore (extract) an archive
+  python scripts/config-backup.py --fast               # fast backup (excludes heavy dirs, big files, logs)
+  python scripts/config-backup.py --exclude-from patterns.txt --no-checksum
 
 Exit codes:
   0 success

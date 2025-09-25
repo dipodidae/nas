@@ -63,10 +63,12 @@ def test_configuration():
     return False, "prowlarr-config.yml not found"
 
   try:
-    # Import the config loader (adjust path since we're in the scripts directory when testing)
-    scripts_path = os.path.join(os.getcwd(), "scripts")
-    sys.path.insert(0, scripts_path)
-    from prowlarr_config import load_prowlarr_config
+    # Import the config loader from kebab-case module
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("prowlarr_config", "scripts/prowlarr-config.py")
+    prowlarr_config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prowlarr_config_module)
+    load_prowlarr_config = prowlarr_config_module.load_prowlarr_config
 
     config = load_prowlarr_config()
     indexer_count = len(config.indexer_priorities)
@@ -102,15 +104,15 @@ def main():
 
   # Test script imports
   scripts = [
-    ("scripts/prowlarr_config.py", "prowlarr-config-loader"),
+    ("scripts/prowlarr-config.py", "prowlarr-config-loader"),
     ("scripts/prowlarr-priority-checker.py", "prowlarr-priority-checker"),
     ("scripts/prowlarr-priority-setter.py", "prowlarr-priority-setter"),
-    ("scripts/config_backup.py", "config-backup"),
-    ("scripts/project_service_adder.py", "project-service-adder"),
-    ("scripts/permissions_auditor.py", "permissions-auditor"),
-    ("scripts/post_update_verifier.py", "post-update-verifier"),
-    ("scripts/log_pruner.py", "log-pruner"),
-    ("scripts/qbittorrent_stalled_kickstart.py", "qbittorrent-stalled-kickstart"),
+    ("scripts/config-backup.py", "config-backup"),
+    ("scripts/project-service-adder.py", "project-service-adder"),
+    ("scripts/permissions-auditor.py", "permissions-auditor"),
+    ("scripts/post-update-verifier.py", "post-update-verifier"),
+    ("scripts/log-pruner.py", "log-pruner"),
+    ("scripts/qbittorrent-stalled-kickstart.py", "qbittorrent-stalled-kickstart"),
   ]
 
   for script_path, script_name in scripts:

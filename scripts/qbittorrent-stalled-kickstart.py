@@ -17,10 +17,10 @@ Exit Codes:
   2 - fatal (auth failure / connectivity / configuration)
 
 Usage examples:
-  python scripts/qbittorrent_stalled_kickstart.py              # default actions
-  python scripts/qbittorrent_stalled_kickstart.py --dry-run    # show what would happen
-  python scripts/qbittorrent_stalled_kickstart.py --recheck --max 5
-  python scripts/qbittorrent_stalled_kickstart.py --min-age 30 # ignore recent (<30m) torrents
+  python scripts/qbittorrent-stalled-kickstart.py              # default actions
+  python scripts/qbittorrent-stalled-kickstart.py --dry-run    # show what would happen
+  python scripts/qbittorrent-stalled-kickstart.py --recheck --max 5
+  python scripts/qbittorrent-stalled-kickstart.py --min-age 30 # ignore recent (<30m) torrents
 
 Safety notes:
   * Rechecking can be I/O heavy — only performed when --recheck provided.

@@ -8,7 +8,7 @@ def _load_qb_module():
   scripts_dir = root / "scripts"
   if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
-  script_path = scripts_dir / "qbittorrent_stalled_kickstart.py"
+  script_path = scripts_dir / "qbittorrent-stalled-kickstart.py"
   spec = importlib.util.spec_from_file_location("qbittorrent_stalled_kickstart", script_path)
   module = importlib.util.module_from_spec(spec)
   assert spec.loader is not None

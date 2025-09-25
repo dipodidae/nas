@@ -10,9 +10,9 @@ Environment variables:
   SHARE_DIRECTORY       Will be scanned if provided AND --include-share specified
 
 Typical usage:
-  python scripts/permissions_auditor.py                # report only
-  python scripts/permissions_auditor.py --fix           # attempt to correct issues
-  python scripts/permissions_auditor.py --paths /data/custom /other --max 2000
+  python scripts/permissions-auditor.py                # report only
+  python scripts/permissions-auditor.py --fix           # attempt to correct issues
+  python scripts/permissions-auditor.py --paths /data/custom /other --max 2000
 
 Exit codes:
   0 no issues (or all fixed)
@@ -259,7 +259,7 @@ def main() -> int:
     print("❌ No valid paths to scan after deduction.")
     for n in notes:
       print(f" - {n}")
-    print("Provide explicit paths: permissions_auditor.py --paths /path/one /path/two")
+    print("Provide explicit paths: permissions-auditor.py --paths /path/one /path/two")
     return 2
 
   print("Scanning roots:")

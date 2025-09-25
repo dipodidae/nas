@@ -73,7 +73,7 @@ jobs:
       - name: Ruff Lint
         run: python -m ruff check scripts
       - name: Run legacy script test harness
-        run: python scripts/test_scripts.py
+        run: python scripts/test-scripts.py
       - name: Run unit tests (pytest)
         run: python -m pytest -q scripts/tests
 
