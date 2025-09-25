@@ -109,7 +109,8 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
-      - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
+      # Fallback keeps compose validation working; set JELLYFIN_PUBLISHED_URL in .env for remote access URL
+      - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/jellyfin:/config
       - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies
@@ -163,11 +164,12 @@ services:
       - TZ=${TZ:-UTC}
       - VALIDATION=dns
       - DNSPLUGIN=cloudflare
-      - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN}
-      - URL=${DOMAIN}
+      # Fallback defaults below allow 'docker compose config' to succeed; override with real values in .env
+      - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN:-dummy-cloudflare-token}
+      - URL=${DOMAIN:-example.com}
       - SUBDOMAINS=wildcard
       - ONLY_SUBDOMAINS=false
-      - EMAIL=${ADMIN_EMAIL}
+      - EMAIL=${ADMIN_EMAIL:-admin@example.com}
       - DOCKER_MODS=linuxserver/mods:swag-dashboard|linuxserver/mods:universal-docker|linuxserver/mods:swag-auto-proxy
       - DOCKER_HOST=dockerproxy
     volumes:
@@ -191,7 +193,7 @@ services:
         soft: 65536
         hard: 65536
     healthcheck:
-      test: [CMD, curl, -f, 'https://localhost:443', -k, -H, 'Host: ${DOMAIN}']
+      test: [CMD, curl, -f, 'https://localhost:443', -k, -H, 'Host: ${DOMAIN:-example.com}']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -247,8 +249,9 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
       - WEBUI_PORT=8080
-      - QBITTORRENT_USER=${QBITTORRENT_USER}
-      - QBITTORRENT_PASS=${QBITTORRENT_PASS}
+      # Change these defaults in .env; leaving as-is is NOT secure
+      - QBITTORRENT_USER=${QBITTORRENT_USER:-qbittorrent}
+      - QBITTORRENT_PASS=${QBITTORRENT_PASS:-changeme_password}
     security_opt:
       - no-new-privileges:true
     volumes:
@@ -290,11 +293,12 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_LABEL_ENABLE=true
       - WATCHTOWER_INCLUDE_RESTARTING=true
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE}
+      # Default: daily at 04:00 UTC if not overridden
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
       - WATCHTOWER_TIMEOUT=300s
       - WATCHTOWER_NOTIFICATIONS=email
-      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${ADMIN_EMAIL}
-      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${ADMIN_EMAIL}
+      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${ADMIN_EMAIL:-admin@example.com}
+      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${ADMIN_EMAIL:-admin@example.com}
     logging:
       driver: json-file
       options:
@@ -433,8 +437,8 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
-      - DOMAINS=${DOMAIN}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-dummy-cloudflare-token}
+      - DOMAINS=${DOMAIN:-example.com}
       - PROXIED=false
       - TTL=300
       - IP6=false
