@@ -21,10 +21,10 @@ Environment Variables:
   DOMAIN               Used to display expected https://<service>.<domain> URL (if set)
 
 Usage:
-  python scripts/project-service-adder.py              # interactive
-  python scripts/project-service-adder.py --list       # list detected candidate projects
-  python scripts/project-service-adder.py --project foo --yes  # non-interactive add
-  python scripts/project-service-adder.py --project foo --subdomain api --yes
+  python scripts/project_service_adder.py              # interactive
+  python scripts/project_service_adder.py --list       # list detected candidate projects
+  python scripts/project_service_adder.py --project foo --yes  # non-interactive add
+  python scripts/project_service_adder.py --project foo --subdomain api --yes
 
 Design Notes:
   Keeps logic pure & testable; side-effect functions isolated (file write, input).
@@ -38,10 +38,10 @@ import os
 import random
 import re
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import Iterable, List
+from datetime import datetime, UTC
 
 COMPOSE_FILE = Path("docker-compose.yml")
 DEFAULT_NETWORK = "nas-network"
@@ -81,22 +81,24 @@ def parse_expose_ports(dockerfile_text: str) -> list[str]:
     ports: list[str] = []
     for match in EXPOSE_RE.finditer(dockerfile_text):
         segment = match.group(1).strip()
-        for raw_token in segment.split():  # EXPOSE 8080 5432/udp
-            token = raw_token.strip()
-            if token and re.match(r"^\d+(/(tcp|udp))?$", token):
+        for token in segment.split():  # EXPOSE 8080 5432/udp
+            token = token.strip()
+            if token:
                 # Basic validation: starts with digits
-                ports.append(token)
+                if re.match(r"^\d+(/(tcp|udp))?$", token):
+                    ports.append(token)
     return ports
 
 
 def parse_existing_host_ports(compose_text: str) -> set[int]:
     host_ports: set[int] = set()
     # Match lines like '- 8080:8080' or ' - "8080:80"'
-    import contextlib
     port_line_re = re.compile(r"^[ \t-]+['\"]?(\d+):(\d+)" , re.MULTILINE)
     for m in port_line_re.finditer(compose_text):
-        with contextlib.suppress(ValueError):
+        try:
             host_ports.add(int(m.group(1)))
+        except ValueError:
+            pass
     return host_ports
 
 
@@ -125,9 +127,10 @@ def build_service_block(
     subdomain: str | None,
     add_basic_env: bool,
 ) -> str:
+    indent = "  "
     lines: list[str] = []
     lines.append(f"  {name}:")
-    lines.append("    build:")
+    lines.append(f"    build:")
     # Represent build context via PROJECTS_DIRECTORY env var if project lives under it
     proj_root = expand_projects_root()
     try:
@@ -137,7 +140,7 @@ def build_service_block(
         # Not under the root; fall back to absolute (user can adjust manually)
         context_expr = str(project_path)
     lines.append(f"      context: {context_expr}")
-    lines.append("      dockerfile: Dockerfile")
+    lines.append(f"      dockerfile: Dockerfile")
     lines.append(f"    container_name: {name}")
     if add_basic_env:
         lines.append("    environment:")
@@ -155,9 +158,9 @@ def build_service_block(
     lines.append("      - swag=enable")
     lines.append("      - com.centurylinklabs.watchtower.enable=true")
     # Healthcheck: use first TCP port if any
-    first_tcp = next((c for _, c in port_map if not c.endswith("/udp")), None)
+    first_tcp = next((c for _, c in port_map if not c.endswith('/udp')), None)
     if first_tcp:
-        port_only = first_tcp.split("/")[0]
+        port_only = first_tcp.split('/')[0]
         lines.append("    healthcheck:")
         lines.append(f"      test: [CMD, curl, -f, 'http://localhost:{port_only}/']")
         lines.append("      interval: 45s")
@@ -201,7 +204,7 @@ def ensure_compose_exists() -> str:
 
 def append_service_block(compose_text: str, service_block: str, name: str) -> None:
     # Use timezone-aware UTC datetime (avoid deprecated utcnow())
-    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
     marker = f"\n# --- added by project_service_adder {ts} ({name}) ---\n"
     if not compose_text.endswith("\n"):
         marker = "\n" + marker
@@ -257,9 +260,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     port_map: list[tuple[int, str]] = []
     for raw in selected.exposed:
         # raw like '8080' or '8080/udp'
-        parts = raw.split("/")
+        parts = raw.split('/')
         cport = int(parts[0])
-        proto_suffix = "" if len(parts) == 1 or parts[1] == "tcp" else "/udp"
+        proto_suffix = '' if len(parts) == 1 or parts[1] == 'tcp' else '/udp'
         host_port = propose_port(cport, used_ports)
         used_ports.add(host_port)
         port_map.append((host_port, f"{cport}{proto_suffix}"))
@@ -292,7 +295,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     append_service_block(compose_text, service_block, name)
     print(f"✅ Service '{name}' appended to docker-compose.yml")
-    print(f"Run 'docker compose up -d --build {name}' to build & start it.")
+    print("Run 'docker compose up -d --build" f" {name}' to build & start it.")
     return 0
 
 

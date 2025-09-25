@@ -31,14 +31,9 @@ except Exception:  # pragma: no cover
     return False
 
 
-import importlib.util
 from difflib import SequenceMatcher
 
-# Import from kebab-case module
-spec = importlib.util.spec_from_file_location("prowlarr_config", "scripts/prowlarr-config.py")
-prowlarr_config_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(prowlarr_config_module)
-load_prowlarr_config = prowlarr_config_module.load_prowlarr_config
+from prowlarr_config import load_prowlarr_config
 
 # Load environment variables (best-effort)
 load_dotenv()

@@ -142,7 +142,7 @@ settings:
 
 ```bash
 # Run comprehensive test suite
-python scripts/test-scripts.py
+python scripts/test_scripts.py
 
 # Test connectivity and view current status
 python scripts/prowlarr-priority-checker.py
@@ -237,7 +237,7 @@ You can modify the priority values to match your preferences:
 
 These additional scripts help keep the stack healthy and tidy.
 
-### `config-backup.py`
+### `config_backup.py`
 
 Creates timestamped `tar.gz` archives of service configuration directories (from `CONFIG_DIRECTORY`). Supports pruning old archives, exclusions, fast mode, and restoring.
 
@@ -255,62 +255,62 @@ Key features:
 Usage examples:
 
 ```
-python scripts/config-backup.py                       # create backup
-python scripts/config-backup.py --list                # list archives
-python scripts/config-backup.py --restore configs-20250101-000000.tar.gz
-python scripts/config-backup.py --retain 14           # keep 14 most recent
-python scripts/config-backup.py --exclude jellyfin/cache/** --exclude-from excludes.txt
-python scripts/config-backup.py --fast --no-checksum  # quick lightweight backup
+python scripts/config_backup.py                       # create backup
+python scripts/config_backup.py --list                # list archives
+python scripts/config_backup.py --restore configs-20250101-000000.tar.gz
+python scripts/config_backup.py --retain 14           # keep 14 most recent
+python scripts/config_backup.py --exclude jellyfin/cache/** --exclude-from excludes.txt
+python scripts/config_backup.py --fast --no-checksum  # quick lightweight backup
 ```
 
 Fast mode defaults: excludes heavy cache/transcode/data/temp paths and `**/logs/**`, applies a 25MB file size cap (can override with `--max-file-size`).
 
 Environment: `CONFIG_DIRECTORY` (required), `BACKUP_DIR` (override destination – default is `CONFIG_DIRECTORY/backups`), `BACKUP_RETAIN`.
 
-### `permissions-auditor.py`
+### `permissions_auditor.py`
 
 Audits ownership (PUID/PGID) and basic permissions. Optionally fixes them.
 
 ```
-python scripts/permissions-auditor.py                 # report
-python scripts/permissions-auditor.py --fix           # fix (may need sudo)
-python scripts/permissions-auditor.py --fix --dry-run # show planned changes
+python scripts/permissions_auditor.py                 # report
+python scripts/permissions_auditor.py --fix           # fix (may need sudo)
+python scripts/permissions_auditor.py --fix --dry-run # show planned changes
 ```
 
 Environment: `PUID`, `PGID`, `CONFIG_DIRECTORY`, optional `SHARE_DIRECTORY` (use `--include-share`).
 
-### `post-update-verifier.py`
+### `post_update_verifier.py`
 
 Verifies that core services are healthy after updates (e.g. Watchtower run). Checks Docker container state & HTTP endpoints.
 
 ```
-python scripts/post-update-verifier.py
-VERIFY_SERVICES="prowlarr,sonarr,radarr" python scripts/post-update-verifier.py
+python scripts/post_update_verifier.py
+VERIFY_SERVICES="prowlarr,sonarr,radarr" python scripts/post_update_verifier.py
 ```
 
 Exit codes: 0 all healthy, 1 degraded, 2 fatal. Environment keys: `API_KEY_PROWLARR`, `API_KEY_SONARR`, `API_KEY_RADARR` (optional), `DOCKER_BIN`.
 
-### `log-pruner.py`
+### `log_pruner.py`
 
 Compresses or truncates oversized, older log files inside `CONFIG_DIRECTORY` (or specified roots).
 
 ```
-python scripts/log-pruner.py --max-mb 10 --min-age 0
-python scripts/log-pruner.py --roots /custom/logs --dry-run
+python scripts/log_pruner.py --max-mb 10 --min-age 0
+python scripts/log_pruner.py --roots /custom/logs --dry-run
 ```
 
 Environment: `LOG_PRUNE_MAX_MB` (default 25), `LOG_PRUNE_MIN_AGE_DAYS` (1), `LOG_PRUNE_COMPRESS` (true/false).
 
 ### Integration
 
-All new scripts are included in `test-scripts.py` for import validation. Add cron/systemd timers as needed, for example:
+All new scripts are included in `test_scripts.py` for import validation. Add cron/systemd timers as needed, for example:
 
 ```
 # Daily 01:00 backup & prune
-0 1 * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/config-backup.py >> backups/backup.log 2>&1'
+0 1 * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/config_backup.py >> backups/backup.log 2>&1'
 
 # Hourly post-update verification (or triggered by Watchtower hook)
-0 * * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/post-update-verifier.py >> logs/verify.log 2>&1'
+0 * * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/verify.log 2>&1'
 ```
 
 ### Common Issues
@@ -342,7 +342,7 @@ ModuleNotFoundError: No module named 'requests'
 
 ### Debug Mode
 
-### `qbittorrent-stalled-kickstart.py`
+### `qbittorrent_stalled_kickstart.py`
 
 Identifies stalled torrents (using qBittorrent Web API filters: `stalled`, `stalled_uploading`, `stalled_downloading`) and performs a gentle "kick" sequence: resume (if paused), reannounce, optional recheck.
 
@@ -351,12 +351,12 @@ Environment (from `.env`): `QBITTORRENT_USER`, `QBITTORRENT_PASS`, optional `QBI
 Usage examples:
 
 ```bash
-python scripts/qbittorrent-stalled-kickstart.py                # standard kick
-python scripts/qbittorrent-stalled-kickstart.py --dry-run      # inspect only
-python scripts/qbittorrent-stalled-kickstart.py --recheck --max 5
-python scripts/qbittorrent-stalled-kickstart.py --filters stalled stalled_downloading
-python scripts/qbittorrent-stalled-kickstart.py --min-age 30   # ignore very recent
-python scripts/qbittorrent-stalled-kickstart.py --no-reannounce
+python scripts/qbittorrent_stalled_kickstart.py                # standard kick
+python scripts/qbittorrent_stalled_kickstart.py --dry-run      # inspect only
+python scripts/qbittorrent_stalled_kickstart.py --recheck --max 5
+python scripts/qbittorrent_stalled_kickstart.py --filters stalled stalled_downloading
+python scripts/qbittorrent_stalled_kickstart.py --min-age 30   # ignore very recent
+python scripts/qbittorrent_stalled_kickstart.py --no-reannounce
 ```
 
 Exit codes: 0 success/no work; 1 partial failures; 2 fatal (auth/network/config).
@@ -373,7 +373,7 @@ Safe by design: no deletions, no forceful state resets. One reannounce per batch
 
 ## 🧪 Testing & Linting
 
-Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test-scripts.py` smoke harness.
+Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.
 
 Run locally:
 
@@ -381,7 +381,7 @@ Run locally:
 python -m venv .venv
 source .venv/bin/activate
 pip install -r scripts/requirements.txt
-python scripts/test-scripts.py      # legacy environment/import checks
+python scripts/test_scripts.py      # legacy environment/import checks
 pytest -q scripts/tests             # unit tests (fast, isolated)
 ```
 
@@ -405,7 +405,7 @@ Recommended monthly (or after CVE notifications):
 source .venv/bin/activate
 pip install -U -r scripts/requirements.txt
 pip list --outdated         # review major version jumps
-python scripts/test-scripts.py && pytest -q scripts/tests
+python scripts/test_scripts.py && pytest -q scripts/tests
 ```
 
 Optional: capture a point-in-time lock snapshot for rollback:
