@@ -79,15 +79,12 @@ EXPOSE_RE = re.compile(r"^\s*EXPOSE\s+(.+)$", re.IGNORECASE | re.MULTILINE)
 
 
 def parse_expose_ports(dockerfile_text: str) -> list[str]:
-    ports: list[str] = []
-    for match in EXPOSE_RE.finditer(dockerfile_text):
-        segment = match.group(1).strip()
-        for token in segment.split():  # EXPOSE 8080 5432/udp
-            token = token.strip()
-            if token:
-                # Basic validation: starts with digits
-                if re.match(r"^\d+(/(tcp|udp))?$", token):
-                    ports.append(token)
+    ports: list[str] = [
+        token
+        for match in EXPOSE_RE.finditer(dockerfile_text)
+        for token in (t.strip() for t in match.group(1).strip().split())
+        if token and re.match(r"^\d+(/(tcp|udp))?$", token)
+    ]
     return ports
 
 
@@ -293,7 +290,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     append_service_block(compose_text, service_block, name)
     print(f"✅ Service '{name}' appended to docker-compose.yml")
-    print("Run 'docker compose up -d --build" f" {name}' to build & start it.")
+    print(f"Run 'docker compose up -d --build {name}' to build & start it.")
     return 0
 
 

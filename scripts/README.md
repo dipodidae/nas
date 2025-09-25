@@ -6,9 +6,9 @@ This directory contains utility scripts for automating various tasks in the medi
 
 ### 1. **Check Current Status**:
 
-   ```bash
-   python scripts/prowlarr_priority_checker.py
-   ```
+```bash
+python scripts/prowlarr_priority_checker.py
+```
 
 2. **Review Recommendations**:r Priority Management
 
