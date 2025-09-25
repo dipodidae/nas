@@ -85,7 +85,7 @@ Located in `scripts/` (see `scripts/README.md` for full docs).
 
 | Script                           | Purpose                                                 |
 | -------------------------------- | ------------------------------------------------------- |
-| prowlarr-priority-checker.py     | Analyze & recommend indexer priorities (fuzzy matching) |
+| prowlarr_priority_checker.py     | Analyze & recommend indexer priorities (fuzzy matching) |
 | config_backup.py                 | Tar + prune config backups (fast/exclusion modes)       |
 | permissions_auditor.py           | Report / optionally fix ownership & mode drift          |
 | post_update_verifier.py          | Verify core service health after updates                |

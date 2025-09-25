@@ -15,7 +15,7 @@ Requirements:
 - PyYAML library (pip install PyYAML)
 
 Usage:
-    python prowlarr-priority-setter.py
+    python prowlarr_priority_setter.py
 
 Author: GitHub Copilot
 """
@@ -634,13 +634,13 @@ class IndexerPriorityUpdater:
       print("\n💡 This was a dry run. To actually make changes, run without --dry-run or -n")
     else:
       print(
-        "\n💡 To preview changes before applying, use: python prowlarr-priority-setter.py --dry-run"
+        "\n💡 To preview changes before applying, use: python prowlarr_priority_setter.py --dry-run"
       )
 
     print("\n📚 Usage:")
-    print("  python prowlarr-priority-setter.py           # Apply changes")
-    print("  python prowlarr-priority-setter.py --dry-run # Preview changes only")
-    print("  python prowlarr-priority-setter.py -n        # Preview changes only (short form)")
+    print("  python prowlarr_priority_setter.py           # Apply changes")
+    print("  python prowlarr_priority_setter.py --dry-run # Preview changes only")
+    print("  python prowlarr_priority_setter.py -n        # Preview changes only (short form)")
     print("\n🔧 Configuration:")
     print("  Required in .env file: API_KEY_PROWLARR=your_api_key")
     print("  Optional in .env file: PROWLARR_HOST=http://localhost")

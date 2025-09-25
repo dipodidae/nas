@@ -4,9 +4,15 @@ This directory contains utility scripts for automating various tasks in the medi
 
 ## 📋 Available Scripts
 
-### Prowlarr Priority Management
+### 1. **Check Current Status**:
 
-#### `prowlarr-priority-setter.py`
+   ```bash
+   python scripts/prowlarr_priority_checker.py
+   ```
+
+2. **Review Recommendations**:r Priority Management
+
+#### `prowlarr_priority_setter.py`
 
 **Purpose**: Automatically updates indexer priorities in Prowlarr via API
 **Status**: ⚠️ _Has API issues - use checker instead_
@@ -23,15 +29,15 @@ This directory contains utility scripts for automating various tasks in the medi
 
   ```bash
   cd /home/<username>/nas
-  python scripts/prowlarr-priority-setter.py --dry-run  # Preview changes
-  python scripts/prowlarr-priority-setter.py           # Apply changes (⚠️ may hang)
+  python scripts/prowlarr_priority_setter.py --dry-run  # Preview changes
+  python scripts/prowlarr_priority_setter.py           # Apply changes (⚠️ may hang)
   ```
 
 - **Known Issues**:
   - PUT requests to Prowlarr API may hang indefinitely
   - Appears to be a Prowlarr API bug with complex object serialization
 
-#### `prowlarr-priority-checker.py` ✅ **Recommended**
+#### `prowlarr_priority_checker.py` ✅ **Recommended**
 
 **Purpose**: Analyzes indexer priorities and provides manual update instructions
 **Status**: ✅ _Fully functional - recommended approach_
@@ -47,7 +53,7 @@ This directory contains utility scripts for automating various tasks in the medi
 
   ```bash
   cd /home/<username>/nas
-  python scripts/prowlarr-priority-checker.py
+  python scripts/prowlarr_priority_checker.py
   ```
 
 - **Sample Output**:
@@ -145,7 +151,7 @@ settings:
 python scripts/test_scripts.py
 
 # Test connectivity and view current status
-python scripts/prowlarr-priority-checker.py
+python scripts/prowlarr_priority_checker.py
 ```
 
 ## 🚀 Recommended Workflow
@@ -153,7 +159,7 @@ python scripts/prowlarr-priority-checker.py
 1. **Analyze Current State**:
 
    ```bash
-   python scripts/prowlarr-priority-checker.py
+   python scripts/prowlarr_priority_checker.py
    ```
 
 2. **Review Recommendations**:
@@ -168,7 +174,7 @@ python scripts/prowlarr-priority-checker.py
 
 4. **Re-run Checker** (optional):
    ```bash
-   python scripts/prowlarr-priority-checker.py
+   python scripts/prowlarr_priority_checker.py
    ```
    Should show "All indexers already have correct priorities!"
 
@@ -202,7 +208,7 @@ You can modify the priority values to match your preferences:
 
 ## 📊 Architecture Overview
 
-### `prowlarr-priority-setter.py` (Advanced)
+### `prowlarr_priority_setter.py` (Advanced)
 
 **Clean Code Architecture**:
 
@@ -222,7 +228,7 @@ You can modify the priority values to match your preferences:
 - Comprehensive error handling
 - Structured logging
 
-### `prowlarr-priority-checker.py` (Simple & Reliable)
+### `prowlarr_priority_checker.py` (Simple & Reliable)
 
 **Streamlined Design**:
 

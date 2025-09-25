@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
 """
-Prowlarr Priority Checker
+Prowlarr Priority Checker - Analyze indexer priorities and provide recommendations.
 
-This script analyzes indexer priorities in Prowlarr and identifies what needs
-to be updated based on the configuration in prowlarr-config.yml.
-Shows manual update instructions as a workaround for API issues.
-
-Requirements:
-- Prowlarr running and accessible
-- .env file with API_KEY_PROWLARR set
-- prowlarr-config.yml file with indexer priorities
-- requests library (pip install requests)
-- python-dotenv library (pip install python-dotenv)
-- PyYAML library (pip install PyYAML)
-
-Usage:
-    python prowlarr-priority-checker.py
+Example usage:
+    python prowlarr_priority_checker.py
 """
 
 import os

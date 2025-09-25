@@ -2,7 +2,10 @@
 """
 Test runner for NAS automation scripts
 
-This script validates that all automation scripts are working correctly.
+This script validates that all autom  scripts = [
+    ("scripts/prowlarr-config.py", "prowlarr-config-loader"),
+    ("scripts/prowlarr_priority_checker.py", "prowlarr-priority-checker"),
+    ("scripts/prowlarr_priority_setter.py", "prowlarr-priority-setter"),n scripts are working correctly.
 """
 
 import importlib.util
@@ -103,8 +106,8 @@ def main():
   # Test script imports
   scripts = [
     ("scripts/prowlarr_config.py", "prowlarr-config-loader"),
-    ("scripts/prowlarr-priority-checker.py", "prowlarr-priority-checker"),
-    ("scripts/prowlarr-priority-setter.py", "prowlarr-priority-setter"),
+    ("scripts/prowlarr_priority_checker.py", "prowlarr-priority-checker"),
+    ("scripts/prowlarr_priority_setter.py", "prowlarr-priority-setter"),
     ("scripts/config_backup.py", "config-backup"),
     ("scripts/project_service_adder.py", "project-service-adder"),
     ("scripts/permissions_auditor.py", "permissions-auditor"),
