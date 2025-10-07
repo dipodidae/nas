@@ -1,153 +1,47 @@
 networks:
-  nas-network:
+  media-network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: 'true'
+      com.docker.network.bridge.enable_ip_masquerade: 'true'
+      com.docker.network.bridge.host_binding_ipv4: 0.0.0.0
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+          gateway: 172.30.0.1
+  proxy-network:
     driver: bridge
 
 services:
   dockerproxy:
     image: lscr.io/linuxserver/socket-proxy:latest
     container_name: dockerproxy
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
     environment:
       - CONTAINERS=1
+      - IMAGES=1
+      - TASKS=1
+      - SERVICES=1
       - POST=0
     networks:
-      - nas-network
+      - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
-      test: [CMD, curl, -fsS, 'http://localhost/_ping']
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:2375/version']
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-
-  sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
-    container_name: sonarr
-    environment:
-      - TZ=${TZ:-UTC}
-      - UMASK=022
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-    volumes:
-      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr:/config
-      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
-      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
-    ports:
-      - 8989:8989
-    restart: unless-stopped
-    depends_on:
-      - prowlarr
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
-    healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:8989/']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
           cpus: '0.1'
-          memory: 128M
-
-  bazarr:
-    image: ghcr.io/linuxserver/bazarr
-    container_name: bazarr
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
-      - UMASK=022
-    volumes:
-      - ${CONFIG_DIRECTORY:-/tmp/config}/bazarr:/config
-      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
-      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
-      # Optional clean-subtitles project directory. If CLEAN_SUBTITLES_DIRECTORY is not set
-      # we fall back to an innocuous tmp path so that `docker compose config` (CI) does not
-      # fail with an empty host path (":/clean-subtitles"). Set CLEAN_SUBTITLES_DIRECTORY in
-      # your .env to enable this mount, or leave it unset to effectively disable it.
-      - ${CLEAN_SUBTITLES_DIRECTORY:-/tmp/clean-subtitles-disabled}:/clean-subtitles:ro
-    ports:
-      - 6767:6767
-    restart: unless-stopped
-    depends_on:
-      - prowlarr
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
-    healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:6767/']
-      interval: 45s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
-
-  jellyfin:
-    image: lscr.io/linuxserver/jellyfin:latest
-    container_name: jellyfin
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
-      # Fallback keeps compose validation working; set JELLYFIN_PUBLISHED_URL in .env for remote access URL
-      - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
-    volumes:
-      - ${CONFIG_DIRECTORY:-/tmp/config}/jellyfin:/config
-      - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies
-      - /tmp/jellyfin-cache:/cache:rw
-    ports:
-      - 8096:8096
-      - 8920:8920
-      - 7359:7359/udp
-      - 1900:1900/udp
-    networks:
-      - nas-network
-    restart: unless-stopped
-    depends_on:
-      - swag
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    tmpfs:
-      - /tmp:size=4G,exec
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
-    healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        reservations:
-          cpus: '0.5'
+          memory: 64M
 
   swag:
     image: lscr.io/linuxserver/swag
@@ -164,7 +58,6 @@ services:
       - TZ=${TZ:-UTC}
       - VALIDATION=dns
       - DNSPLUGIN=cloudflare
-      # Fallback defaults below allow 'docker compose config' to succeed; override with real values in .env
       - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN:-dummy-cloudflare-token}
       - URL=${DOMAIN:-example.com}
       - SUBDOMAINS=wildcard
@@ -183,7 +76,8 @@ services:
       - 81:81
     restart: unless-stopped
     networks:
-      - nas-network
+      - proxy-network
+      - media-network
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     labels:
@@ -198,6 +92,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
         limits:
@@ -207,6 +106,142 @@ services:
           cpus: '0.25'
           memory: 128M
 
+  # Media & automation stack (single media-network only)
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - UMASK=022
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+    ports:
+      - 8989:8989
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+      - qbittorrent
+    networks:
+      - media-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8989/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - UMASK=022
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+    ports:
+      - 7878:7878
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+      - qbittorrent
+    networks:
+      - media-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:7878/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - UMASK=022
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/bazarr:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
+      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
+      - ${CLEAN_SUBTITLES_DIRECTORY:-/tmp/clean-subtitles-disabled}:/clean-subtitles:ro
+    ports:
+      - 6767:6767
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    networks:
+      - media-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:6767/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
@@ -214,6 +249,8 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/prowlarr:/config
     ports:
@@ -222,16 +259,21 @@ services:
     depends_on:
       - qbittorrent
     networks:
-      - nas-network
+      - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:9696/']
-      interval: 45s
+      interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
         limits:
@@ -249,7 +291,6 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
       - WEBUI_PORT=8080
-      # Change these defaults in .env; leaving as-is is NOT secure
       - QBITTORRENT_USER=${QBITTORRENT_USER:-qbittorrent}
       - QBITTORRENT_PASS=${QBITTORRENT_PASS:-changeme_password}
     security_opt:
@@ -259,20 +300,25 @@ services:
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
     ports:
       - 8080:8080
-      - 6881:6881
+      - 6881:6881/tcp
       - 6881:6881/udp
     restart: unless-stopped
     networks:
-      - nas-network
+      - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8080/']
-      interval: 60s
-      timeout: 6s
+      interval: 30s
+      timeout: 5s
       retries: 3
       start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
         limits:
@@ -282,67 +328,92 @@ services:
           cpus: '0.25'
           memory: 128M
 
-  watchtower:
-    container_name: watchtower
-    image: containrrr/watchtower
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /etc/timezone:/etc/timezone:ro
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    security_opt:
+      - no-new-privileges:true
     environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_INCLUDE_RESTARTING=true
-      # Default: daily at 04:00 UTC if not overridden
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
-      - WATCHTOWER_TIMEOUT=300s
-      - WATCHTOWER_NOTIFICATIONS=email
-      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${ADMIN_EMAIL:-admin@example.com}
-      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${ADMIN_EMAIL:-admin@example.com}
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: '3'
-    networks:
-      - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    healthcheck:
-      test: [CMD, sh, -c, pgrep watchtower >/dev/null]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-
-  radarr:
-    image: lscr.io/linuxserver/radarr:latest
-    container_name: radarr
-    restart: unless-stopped
-    environment:
-      - UMASK=022
-      - TZ=${TZ:-UTC}
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
     volumes:
-      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
-      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
-      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr:/config
+      - ${CONFIG_DIRECTORY:-/tmp/config}/jellyfin:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies
+      - ${JELLYFIN_CACHE_DIRECTORY:-/tmp/jellyfin-cache}:/cache:rw
     ports:
-      - 7878:7878/tcp
-    depends_on:
-      - prowlarr
+      - 8096:8096
+      - 8920:8920
+      - 7359:7359/udp
+      - 1900:1900/udp
     networks:
-      - nas-network
+      - media-network
+    restart: unless-stopped
+    depends_on:
+      - swag
     labels:
       - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
+    tmpfs:
+      - /tmp:size=4G,exec
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:7878/']
+      test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - OVERSEERR_URL=${OVERSEERR_PUBLISHED_URL}
+      - LOG_LEVEL=info
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/overseerr:/config
+    ports:
+      - 5055:5055
+    restart: unless-stopped
+    depends_on:
+      - plex
+      - sonarr
+      - radarr
+    networks:
+      - media-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:5055/api/v1/status']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
         limits:
@@ -352,47 +423,58 @@ services:
           cpus: '0.1'
           memory: 128M
 
-  lazylibrarian:
-    image: lscr.io/linuxserver/lazylibrarian:latest
-    container_name: lazylibrarian
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
-      - DOCKER_MODS=linuxserver/mods:universal-package-install
-      - INSTALL_PACKAGES=curl
+      - VERSION=docker
+      - PLEX_CLAIM=${PLEX_CLAIM:-}
+    security_opt:
+      - no-new-privileges:true
     volumes:
-      - ${CONFIG_DIRECTORY:-/tmp/config}/lazylibrarian:/config
-      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
-      - ${SHARE_DIRECTORY:-/tmp/share}/Books:/books
+      - ${CONFIG_DIRECTORY:-/tmp/config}/plex:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
+      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
+      - ${SHARE_DIRECTORY:-/tmp/share}/Music:/music
+      - ${PLEX_TRANSCODE_DIRECTORY:-/tmp/plex-transcode}:/transcode
     ports:
-      - 5299:5299
+      - 32400:32400
+      - 8324:8324
+      - 32469:32469
     restart: unless-stopped
-    depends_on:
-      - prowlarr
     networks:
-      - nas-network
+      - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:5299/']
-      interval: 60s
-      timeout: 6s
+      test: [CMD, curl, -f, 'http://localhost:32400/identity']
+      interval: 30s
+      timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 256M
+          cpus: '4.0'
+          memory: 4G
         reservations:
-          cpus: '0.1'
-          memory: 64M
+          cpus: '0.5'
+          memory: 512M
 
   nextcloud:
     image: lscr.io/linuxserver/nextcloud:latest
     container_name: nextcloud
+    security_opt:
+      - no-new-privileges:true
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -412,16 +494,21 @@ services:
     depends_on:
       - swag
     networks:
-      - nas-network
+      - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
       test: [CMD, curl, -f, 'https://localhost:443/status.php', -k]
-      interval: 60s
-      timeout: 8s
+      interval: 30s
+      timeout: 5s
       retries: 3
       start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
     deploy:
       resources:
         limits:
@@ -431,68 +518,113 @@ services:
           cpus: '0.25'
           memory: 128M
 
-  cloudflare-ddns:
-    image: favonia/cloudflare-ddns:latest
-    container_name: cloudflare-ddns
-    restart: unless-stopped
-    network_mode: host
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    security_opt:
+      - no-new-privileges:true
     environment:
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-dummy-cloudflare-token}
-      - DOMAINS=${DOMAIN:-example.com}
-      - PROXIED=false
-      - TTL=300
-      - IP6=false
-      - UPDATE_CRON=@every 5m
-      - DETECTION_TIMEOUT=10s
-      - UPDATE_TIMEOUT=30s
+      - DOCKER_HOST=tcp://dockerproxy:2375
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+      - WATCHTOWER_TIMEOUT=300s
+      - WATCHTOWER_NOTIFICATIONS=${WATCHTOWER_NOTIFICATIONS:-email}
+      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${ADMIN_EMAIL:-admin@example.com}
+      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${ADMIN_EMAIL:-admin@example.com}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER=${SMTP_SERVER:-}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PORT=${SMTP_PORT:-587}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_USER=${SMTP_USER:-}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD=${SMTP_PASSWORD:-}
+    depends_on:
+      - dockerproxy
+    networks:
+      - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
-      test: [CMD, sh, -c, 'pgrep ddns || exit 1']
+      test: [CMD, /watchtower, --health-check]
       interval: 60s
-      timeout: 10s
+      timeout: 5s
       retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+
+  lazylibrarian:
+    image: lscr.io/linuxserver/lazylibrarian:latest
+    container_name: lazylibrarian
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - DOCKER_MODS=linuxserver/mods:universal-package-install
+      - INSTALL_PACKAGES=curl
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/lazylibrarian:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+      - ${SHARE_DIRECTORY:-/tmp/share}/Books:/books
+    ports:
+      - 5299:5299
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+      - qbittorrent
+    networks:
+      - media-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:5299/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: autoheal
     restart: always
+    security_opt:
+      - no-new-privileges:true
     environment:
+      - DOCKER_SOCK=tcp://dockerproxy:2375
       - AUTOHEAL_CONTAINER_LABEL=all
       - AUTOHEAL_INTERVAL=15
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    network_mode: none
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    healthcheck:
-      test: [CMD, sh, -c, pgrep -f autoheal >/dev/null]
-      interval: 60s
-      timeout: 5s
-      retries: 2
-      start_period: 15s
-
-  # --- added by project_service_adder 2025-09-24T21:45:49Z (nas-panel) ---
-  nas-panel:
-    build:
-      context: ${PROJECTS_DIRECTORY:-/home/pi/projects}/nas-panel
-      dockerfile: Dockerfile
-    container_name: nas-panel
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
-    ports:
-      - 3000:3000
-    restart: unless-stopped
+    depends_on:
+      - dockerproxy
     networks:
-      - nas-network
+      - media-network
     labels:
-      - swag=enable
       - com.centurylinklabs.watchtower.enable=true
-    healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:3000/']
-      interval: 45s
-      timeout: 6s
-      retries: 3
-      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
