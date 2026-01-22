@@ -1,5 +1,6 @@
 networks:
   media-network:
+    name: nas-media-network
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_icc: 'true'
@@ -10,7 +11,11 @@ networks:
         - subnet: 172.30.0.0/16
           gateway: 172.30.0.1
   proxy-network:
+    name: nas-proxy-network
     driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: 'true'
+      com.docker.network.bridge.enable_ip_masquerade: 'true'
 
 services:
   dockerproxy:
@@ -27,6 +32,9 @@ services:
       - TASKS=1
       - SERVICES=1
       - POST=0
+      - INFO=1
+      - NETWORKS=1
+      - API_VERSION=1.45
     networks:
       - media-network
     labels:
@@ -37,6 +45,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
     deploy:
       resources:
         limits:
@@ -106,7 +119,6 @@ services:
           cpus: '0.25'
           memory: 128M
 
-  # Media & automation stack (single media-network only)
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
@@ -121,6 +133,8 @@ services:
       - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr:/config
       - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr/custom-services.d:/custom-services.d
+      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr/custom-cont-init.d:/custom-cont-init.d
     ports:
       - 8989:8989
     restart: unless-stopped
@@ -166,6 +180,8 @@ services:
       - ${CONFIG_DIRECTORY:-/tmp/config}/radarr:/config
       - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr/custom-services.d:/custom-services.d
+      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr/custom-cont-init.d:/custom-cont-init.d
     ports:
       - 7878:7878
     restart: unless-stopped
@@ -293,8 +309,17 @@ services:
       - WEBUI_PORT=8080
       - QBITTORRENT_USER=${QBITTORRENT_USER:-qbittorrent}
       - QBITTORRENT_PASS=${QBITTORRENT_PASS:-changeme_password}
+      - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      - net.ipv4.tcp_window_scaling=1
+      - net.ipv4.tcp_timestamps=1
+      - net.ipv4.tcp_sack=1
+      - net.ipv4.tcp_tw_reuse=1
+      - net.ipv4.tcp_fin_timeout=15
+      - net.ipv4.tcp_moderate_rcvbuf=1
+      - net.ipv4.tcp_no_metrics_save=1
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/qbittorrent:/config
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
@@ -308,6 +333,13 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
+      nproc:
+        soft: 16384
+        hard: 16384
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8080/']
       interval: 30s
@@ -319,14 +351,6 @@ services:
       options:
         max-size: 25m
         max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 128M
 
   jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
@@ -338,6 +362,7 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
+      - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/jellyfin:/config
       - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies
@@ -348,12 +373,14 @@ services:
       - 7359:7359/udp
       - 1900:1900/udp
     networks:
+      - proxy-network
       - media-network
     restart: unless-stopped
     depends_on:
       - swag
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
     tmpfs:
       - /tmp:size=4G,exec
     ulimits:
@@ -395,7 +422,7 @@ services:
       - 5055:5055
     restart: unless-stopped
     depends_on:
-      - plex
+      - jellyfin
       - sonarr
       - radarr
     networks:
@@ -423,39 +450,39 @@ services:
           cpus: '0.1'
           memory: 128M
 
-  plex:
-    image: lscr.io/linuxserver/plex:latest
-    container_name: plex
+  jellyseerr:
+    image: ghcr.io/fallenbagel/jellyseerr:latest
+    init: true
+    container_name: jellyseerr
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
-      - VERSION=docker
-      - PLEX_CLAIM=${PLEX_CLAIM:-}
+      - LOG_LEVEL=debug
+      - PORT=5056
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ${CONFIG_DIRECTORY:-/tmp/config}/plex:/config
-      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
-      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
-      - ${SHARE_DIRECTORY:-/tmp/share}/Music:/music
-      - ${PLEX_TRANSCODE_DIRECTORY:-/tmp/plex-transcode}:/transcode
+      - ${CONFIG_DIRECTORY:-/tmp/config}/jellyseerr:/app/config
     ports:
-      - 32400:32400
-      - 8324:8324
-      - 32469:32469
+      - 5056:5056
     restart: unless-stopped
+    depends_on:
+      - jellyfin
+      - sonarr
+      - radarr
     networks:
       - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+      - swag_port=5056
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:32400/identity']
-      interval: 30s
-      timeout: 5s
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5056/api/v1/status']
+      interval: 15s
+      timeout: 3s
       retries: 3
-      start_period: 60s
+      start_period: 20s
     logging:
       driver: json-file
       options:
@@ -464,11 +491,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4.0'
-          memory: 4G
-        reservations:
           cpus: '0.5'
           memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   nextcloud:
     image: lscr.io/linuxserver/nextcloud:latest
@@ -488,6 +515,7 @@ services:
       - ${SHARE_DIRECTORY:-/tmp/share}/Music:/external/music:rw
       - ${SHARE_DIRECTORY:-/tmp/share}/Books:/external/books:rw
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/external/downloads:rw
+      - /mnt/sdcard:/external/sdcard:rw
     ports:
       - 8087:443
     restart: unless-stopped
@@ -519,7 +547,7 @@ services:
           memory: 128M
 
   watchtower:
-    image: containrrr/watchtower
+    image: nickfedor/watchtower  # Community fork with Docker API 1.44+ support
     container_name: watchtower
     restart: always
     security_opt:
@@ -529,15 +557,13 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_LABEL_ENABLE=true
       - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_REVIVE_STOPPED=false
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
       - WATCHTOWER_TIMEOUT=300s
-      - WATCHTOWER_NOTIFICATIONS=${WATCHTOWER_NOTIFICATIONS:-email}
-      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${ADMIN_EMAIL:-admin@example.com}
-      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${ADMIN_EMAIL:-admin@example.com}
-      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER=${SMTP_SERVER:-}
-      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PORT=${SMTP_PORT:-587}
-      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_USER=${SMTP_USER:-}
-      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD=${SMTP_PASSWORD:-}
+      - WATCHTOWER_ROLLING_RESTART=false
+      - WATCHTOWER_LOG_LEVEL=info
+      - TZ=${TZ:-UTC}
     depends_on:
       - dockerproxy
     networks:
@@ -606,7 +632,6 @@ services:
         reservations:
           cpus: '0.1'
           memory: 64M
-
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: autoheal
@@ -617,12 +642,25 @@ services:
       - DOCKER_SOCK=tcp://dockerproxy:2375
       - AUTOHEAL_CONTAINER_LABEL=all
       - AUTOHEAL_INTERVAL=15
+      - AUTOHEAL_START_PERIOD=0
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
     depends_on:
       - dockerproxy
     networks:
       - media-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD-SHELL, 'pgrep -f autoheal || exit 1']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
     deploy:
       resources:
         limits:

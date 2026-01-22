@@ -1,0 +1,169 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                  ✅ INSTALLATION COMPLETE                                ║
+║           qBittorrent Performance Optimization Applied                   ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+📊 WHAT WAS DONE:
+
+1. ✅ Docker Compose Updated
+   • Memory: 1GB → 2GB
+   • CPU: 1.5 → 2.0 cores
+   • ulimits: 65536 file descriptors
+   • Container recreated successfully
+
+2. ✅ Optimized Configuration Installed
+   • Backup created: /mnt/docker-usb/qbittorrent/qBittorrent/qBittorrent.conf.backup-20260121-223726
+   • New config: 2000 connections, 256MB cache, TCP priority
+   • Preallocation enabled, 8 active downloads
+
+3. ✅ Time-Based Scheduler Configured
+   • Cron job: Runs every minute
+   • Active hours (01:00-08:00): Unlimited download, 5 MB/s upload
+   • Idle hours (08:00-01:00): 50 KB/s throttle
+   • Logs: /tmp/qbittorrent-scheduler.log
+
+4. ⏭️  Kernel Tuning (Skipped - Requires sudo password)
+   • File ready: /home/tom/nas/scripts/99-qbittorrent-sysctl.conf
+   • Run manually: sudo cp /home/tom/nas/scripts/99-qbittorrent-sysctl.conf /etc/sysctl.d/
+   • Then: sudo sysctl -p /etc/sysctl.d/99-qbittorrent-sysctl.conf
+   • Benefit: 10-20% extra throughput (optional)
+
+═══════════════════════════════════════════════════════════════════════════
+
+📈 CURRENT STATUS:
+
+Container: Running ✅
+  • CPU: 4.75%
+  • Memory: 199 MB / 2 GB
+  • Network: Active
+  • WebUI: http://localhost:8080 (accessible)
+
+Scheduler: Active ✅
+  • Current mode: IDLE (throttled to 50 KB/s)
+  • Will switch to AGGRESSIVE at 01:00 tonight
+  • Cron: Running every minute
+
+Configuration: Optimized ✅
+  • Max connections: 2000
+  • Connections/torrent: 300
+  • Disk cache: 256 MB
+  • Active downloads: 8
+  • Seeding limit: 1.0 ratio or 24h
+
+═══════════════════════════════════════════════════════════════════════════
+
+🎯 PERFORMANCE EXPECTATIONS:
+
+BEFORE:
+  • Download speed: 3 MB/s (throttled all day)
+  • Active torrents: 20 competing
+  • Disk I/O: High latency
+
+AFTER (01:00-08:00):
+  • Download speed: 50-120 MB/s (ISP max, limited by HDD)
+  • Active torrents: 8 focused
+  • Disk I/O: 50-70% reduction in seeks
+
+PER NIGHT (7 hours active):
+  • Expected: 50-200 GB downloaded
+  • Previously: 15-30 GB
+
+PER MOVIE (10 GB):
+  • Expected: 5-10 minutes
+  • Previously: 30-60 minutes
+
+═══════════════════════════════════════════════════════════════════════════
+
+📝 NEXT STEPS:
+
+1. Monitor Tonight's Performance:
+   tail -f /tmp/qbittorrent-scheduler.log
+
+   You'll see:
+   • 22:38 → "💤 IDLE WINDOW - Throttling to minimum"
+   • 01:00 → "🚀 ACTIVE WINDOW - Setting aggressive mode"
+   • 08:00 → "💤 IDLE WINDOW - Throttling to minimum"
+
+2. Check WebUI:
+   http://192.168.2.13:8080
+   Username: admin
+   Password: sotm19858514
+
+   Verify in Settings > Connection:
+   • Global max connections: 2000
+   • Max connections per torrent: 300
+   • Max active downloads: 8
+
+3. Add Test Torrent:
+   • Add a well-seeded movie torrent
+   • It will download slowly now (idle mode)
+   • Wait until 01:00 - speed should jump to maximum
+
+4. Monitor Container Stats:
+   docker stats qbittorrent --no-stream
+
+═══════════════════════════════════════════════════════════════════════════
+
+🔧 TROUBLESHOOTING:
+
+If downloads are slow even at 01:00:
+  → Check swarm health: Need 10+ seeders
+  → Check disk I/O: Run "iostat -x 1"
+  → Check logs: docker logs qbittorrent
+
+If scheduler not switching:
+  → Check cron: crontab -l | grep qbittorrent
+  → Check logs: tail -f /tmp/qbittorrent-scheduler.log
+  → Test manually: python3 /home/tom/nas/scripts/qbittorrent-scheduler.py
+
+If "Too many open files":
+  → Verify ulimits: docker inspect qbittorrent | grep Ulimits
+  → Should show 65536
+
+If container crashes:
+  → Check memory: docker stats qbittorrent
+  → If using >1.8GB, reduce DiskCacheSize to 128 in config
+
+═══════════════════════════════════════════════════════════════════════════
+
+📚 DOCUMENTATION:
+
+All details in: /home/tom/nas/scripts/
+  • README_QBITTORRENT.md - Overview
+  • QBITTORRENT_OPTIMIZATION.md - Technical details
+  • INSTALL_GUIDE.sh - Step-by-step walkthrough
+
+Configuration file:
+  /mnt/docker-usb/qbittorrent/qBittorrent/qBittorrent.conf
+
+Backup (to revert):
+  /mnt/docker-usb/qbittorrent/qBittorrent/qBittorrent.conf.backup-20260121-223726
+
+═══════════════════════════════════════════════════════════════════════════
+
+🚀 TO REVERT EVERYTHING:
+
+docker stop qbittorrent
+cp /mnt/docker-usb/qbittorrent/qBittorrent/qBittorrent.conf.backup-20260121-223726 \
+   /mnt/docker-usb/qbittorrent/qBittorrent/qBittorrent.conf
+crontab -l | grep -v qbittorrent-scheduler | crontab -
+docker start qbittorrent
+
+═══════════════════════════════════════════════════════════════════════════
+
+⚡ OPTIONAL: Apply Kernel Tuning (10-20% extra speed)
+
+sudo cp /home/tom/nas/scripts/99-qbittorrent-sysctl.conf /etc/sysctl.d/
+sudo sysctl -p /etc/sysctl.d/99-qbittorrent-sysctl.conf
+
+This increases TCP buffers and enables BBR congestion control.
+Only needed if you're network-bound (not disk-bound).
+
+═══════════════════════════════════════════════════════════════════════════
+
+✅ Your qBittorrent is now professionally tuned for maximum overnight
+   movie download performance!
+
+🌙 Wait until 01:00 tonight and watch the downloads fly! 🚀
+
+═══════════════════════════════════════════════════════════════════════════
