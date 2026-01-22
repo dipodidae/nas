@@ -1,25 +1,28 @@
 # qBittorrent Optimization Summary
 
-**Date:** 2026-01-22  
+**Date:** 2026-01-22
 **Status:** ✅ COMPLETE - Uncapped 24/7 Performance Enabled
 
 ## What Was Changed
 
 ### 1. Removed All Time-Based Throttling
+
 - ✅ Removed cron job that ran `qbittorrent-scheduler.py` every minute
 - ✅ Removed time window enforcement (was: fast 01:00-08:00, throttled 08:00-01:00)
 - ✅ Disabled bandwidth scheduling in qBittorrent config
 
 ### 2. Speed Limits - Now Uncapped 24/7
-| Setting | Before | After |
-|---------|--------|-------|
-| Download limit | 0 (unlimited) during window<br>50 KB/s outside window | **0 (unlimited) 24/7** |
-| Upload limit | 5 MB/s during window<br>50 KB/s outside window | **10 MB/s 24/7** |
-| Alternate limits | Enabled by scheduler | **Disabled permanently** |
+
+| Setting          | Before                                                | After                    |
+| ---------------- | ----------------------------------------------------- | ------------------------ |
+| Download limit   | 0 (unlimited) during window<br>50 KB/s outside window | **0 (unlimited) 24/7**   |
+| Upload limit     | 5 MB/s during window<br>50 KB/s outside window        | **10 MB/s 24/7**         |
+| Alternate limits | Enabled by scheduler                                  | **Disabled permanently** |
 
 ### 3. Performance Optimizations Applied
 
 #### qBittorrent Configuration
+
 - **Connections:** 2000 → **3000** global, 300 → **400** per torrent
 - **Active downloads:** 8 → **10** simultaneous
 - **Disk cache:** 256 MB → **512 MB**
@@ -29,12 +32,14 @@
 - **Send buffer:** 3 MB → **5 MB**
 
 #### Docker Container
+
 - **Resource limits:** REMOVED (was: 2 CPUs, 2 GB RAM)
 - **File descriptors:** 65k → **131k**
 - **Process limit:** 8k → **16k**
 - **Network sysctls:** Added 7 TCP optimizations
 
 #### Host System (Optional)
+
 - Applied network tuning via `/etc/sysctl.d/99-qbittorrent-sysctl.conf`
 - TCP buffer sizes increased to 128 MB
 - BBR congestion control (if available)
@@ -100,6 +105,7 @@ docker inspect qbittorrent | jq '.[0].HostConfig.NanoCpus'
 Full documentation: **`QBITTORRENT_OPTIMIZATION_UNCAPPED.md`**
 
 Includes:
+
 - Complete changelog of all optimizations
 - Explanation of each setting and why it improves performance
 - Rollback procedure

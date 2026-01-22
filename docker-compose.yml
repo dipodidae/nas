@@ -547,7 +547,7 @@ services:
           memory: 128M
 
   watchtower:
-    image: nickfedor/watchtower  # Community fork with Docker API 1.44+ support
+    image: nickfedor/watchtower # Community fork with Docker API 1.44+ support
     container_name: watchtower
     restart: always
     security_opt:
