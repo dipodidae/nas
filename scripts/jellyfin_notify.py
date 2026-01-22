@@ -6,9 +6,8 @@ Triggers immediate library scan when media is imported.
 
 import os
 import sys
-import urllib.request
 import urllib.error
-import json
+import urllib.request
 
 
 def notify_jellyfin():
@@ -17,27 +16,27 @@ def notify_jellyfin():
     host = os.getenv("JELLYFIN_HOST", "jellyfin")
     port = int(os.getenv("JELLYFIN_PORT", "8096"))
     api_key = os.getenv("JELLYFIN_API_KEY", "")
-    
+
     if not api_key:
         print("ERROR: JELLYFIN_API_KEY not set", file=sys.stderr)
         return False
-    
+
     # Construct API URL for library refresh
     url = f"http://{host}:{port}/Library/Refresh?api_key={api_key}"
-    
+
     try:
         # Send POST request to trigger library scan
         req = urllib.request.Request(url, method="POST")
         req.add_header("Content-Type", "application/json")
-        
+
         with urllib.request.urlopen(req, timeout=10) as response:
             if response.status == 204 or response.status == 200:
-                print(f"Successfully triggered Jellyfin library scan")
+                print("Successfully triggered Jellyfin library scan")
                 return True
             else:
                 print(f"Unexpected response: {response.status}", file=sys.stderr)
                 return False
-                
+
     except urllib.error.URLError as e:
         print(f"Failed to connect to Jellyfin: {e}", file=sys.stderr)
         return False
@@ -50,9 +49,9 @@ def main():
     """Main entry point when called from Radarr/Sonarr."""
     # Radarr sets these environment variables on import
     event_type = os.getenv("radarr_eventtype", os.getenv("sonarr_eventtype", "Unknown"))
-    
+
     print(f"Event type: {event_type}")
-    
+
     # Only trigger on Download/Import events
     if event_type in ["Download", "Upgrade", "Rename"]:
         success = notify_jellyfin()

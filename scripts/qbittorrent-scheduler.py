@@ -4,12 +4,12 @@ qBittorrent Time-Based Scheduler
 Switches between aggressive downloading (01:00-08:00) and idle mode (08:00-01:00).
 Runs every minute via cron or systemd timer.
 """
-import sys
 import json
-from datetime import datetime
-from pathlib import Path
-import requests
 import logging
+import sys
+from datetime import datetime
+
+import requests
 
 # Configuration
 QB_HOST = "http://localhost:8080"
@@ -38,9 +38,9 @@ IDLE_CONFIG = {
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('/tmp/qbittorrent-scheduler.log'),
+        logging.FileHandler("/tmp/qbittorrent-scheduler.log"),
         logging.StreamHandler()
     ]
 )
@@ -52,7 +52,7 @@ class QBittorrentAPI:
         self.password = password
         self.session = requests.Session()
         self.session.headers.update({"Referer": host})
-        
+
     def login(self):
         """Authenticate with qBittorrent"""
         try:
@@ -69,7 +69,7 @@ class QBittorrentAPI:
         except requests.RequestException as e:
             logging.error(f"✗ Connection failed: {e}")
             return False
-    
+
     def set_preferences(self, prefs):
         """Update qBittorrent preferences"""
         try:
@@ -85,7 +85,7 @@ class QBittorrentAPI:
         except requests.RequestException as e:
             logging.error(f"✗ Request failed: {e}")
             return False
-    
+
     def pause_all(self):
         """Pause all active torrents"""
         try:
@@ -98,7 +98,7 @@ class QBittorrentAPI:
         except requests.RequestException as e:
             logging.error(f"✗ Failed to pause: {e}")
             return False
-    
+
     def resume_all(self):
         """Resume all paused torrents"""
         try:
@@ -123,14 +123,14 @@ def is_download_window():
 
 def main():
     api = QBittorrentAPI(QB_HOST, QB_USER, QB_PASS)
-    
+
     if not api.login():
         logging.error("Cannot proceed without authentication")
         sys.exit(1)
-    
+
     is_active = is_download_window()
     current_time = datetime.now().strftime("%H:%M")
-    
+
     if is_active:
         logging.info(f"🚀 [{current_time}] ACTIVE WINDOW - Setting aggressive mode")
         if api.set_preferences(AGGRESSIVE_CONFIG):

@@ -33,6 +33,7 @@ ignore = [
   "E203", # Whitespace before ':' (black compatibility)
   "E501", # Line length (managed manually if needed)
   "COM812", # Trailing comma conflict with formatter (auto-disabled)
+  "SIM112", # Environment variable casing (Radarr/Sonarr use lowercase)
 ]
 
 [lint.isort]
