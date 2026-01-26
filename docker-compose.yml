@@ -405,51 +405,6 @@ services:
         reservations:
           cpus: '0.5'
 
-  overseerr:
-    image: lscr.io/linuxserver/overseerr:latest
-    container_name: overseerr
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
-      - OVERSEERR_URL=${OVERSEERR_PUBLISHED_URL}
-      - LOG_LEVEL=info
-    security_opt:
-      - no-new-privileges:true
-    volumes:
-      - ${CONFIG_DIRECTORY:-/tmp/config}/overseerr:/config
-    ports:
-      - 5055:5055
-    restart: unless-stopped
-    depends_on:
-      - jellyfin
-      - sonarr
-      - radarr
-    networks:
-      - media-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-      - swag=enable
-    healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:5055/api/v1/status']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
-    logging:
-      driver: json-file
-      options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
-
   jellyseerr:
     image: ghcr.io/fallenbagel/jellyseerr:latest
     init: true
