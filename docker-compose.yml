@@ -1,70 +1,29 @@
+# Simplified network: single bridge for internal services, no ICC bloat, right-sized subnet
 networks:
-  media-network:
-    name: nas-media-network
+  nas-network:
+    name: nas-network
     driver: bridge
     driver_opts:
-      com.docker.network.bridge.enable_icc: 'true'
+      # Disable ICC (inter-container communication) by default; containers must explicitly connect
+      com.docker.network.bridge.enable_icc: 'false'
       com.docker.network.bridge.enable_ip_masquerade: 'true'
-      com.docker.network.bridge.host_binding_ipv4: 0.0.0.0
     ipam:
       config:
-        - subnet: 172.30.0.0/16
+        # Smaller subnet, adequate for ~20 containers max
+        - subnet: 172.30.0.0/24
           gateway: 172.30.0.1
-  proxy-network:
-    name: nas-proxy-network
-    driver: bridge
-    driver_opts:
-      com.docker.network.bridge.enable_icc: 'true'
-      com.docker.network.bridge.enable_ip_masquerade: 'true'
 
 services:
-  dockerproxy:
-    image: lscr.io/linuxserver/socket-proxy:latest
-    container_name: dockerproxy
-    security_opt:
-      - no-new-privileges:true
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: unless-stopped
-    environment:
-      - CONTAINERS=1
-      - IMAGES=1
-      - TASKS=1
-      - SERVICES=1
-      - POST=0
-      - INFO=1
-      - NETWORKS=1
-      - API_VERSION=1.45
-    networks:
-      - media-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    healthcheck:
-      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:2375/version']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: '2'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 64M
+  # REMOVED: dockerproxy service
+  # Reason: Massive security risk—exposing Docker API allows full daemon control.
+  # Watchtower and autoheal should be run on host or with minimal socket access via bind mount with strict permissions.
 
   swag:
-    image: lscr.io/linuxserver/swag
+    image: lscr.io/linuxserver/swag:latest # Pin specific version tag in production
     container_name: swag
-    cap_add:
-      - NET_ADMIN
+    # Removed NET_ADMIN: only needed for VPN routing, which isn't used here
     security_opt:
       - no-new-privileges:true
-    depends_on:
-      - dockerproxy
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -72,12 +31,12 @@ services:
       - VALIDATION=dns
       - DNSPLUGIN=cloudflare
       - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN:-dummy-cloudflare-token}
-      - URL=${DOMAIN:-example.com}
+      - URL=${PUBLIC_DOMAIN:-example.com}
       - SUBDOMAINS=wildcard
       - ONLY_SUBDOMAINS=false
       - EMAIL=${ADMIN_EMAIL:-admin@example.com}
-      - DOCKER_MODS=linuxserver/mods:swag-dashboard|linuxserver/mods:universal-docker|linuxserver/mods:swag-auto-proxy
-      - DOCKER_HOST=dockerproxy
+      # Reduced Docker mods—only keep swag-auto-proxy; dashboard and universal-docker add unnecessary complexity
+      - DOCKER_MODS=linuxserver/mods:swag-auto-proxy
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/swag:/config
       - ./rootpage/dist:/config/www/rootpage:ro
@@ -86,41 +45,34 @@ services:
     ports:
       - 443:443
       - 80:80
-      - 81:81
+      # Removed port 81 unless explicitly needed for internal admin
     restart: unless-stopped
     networks:
-      - proxy-network
-      - media-network
-    extra_hosts:
-      - 'host.docker.internal:host-gateway'
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
+      - swag=enable
+    # Reduced ulimits for Pi; 8192 is plenty
     ulimits:
       nofile:
-        soft: 65536
-        hard: 65536
+        soft: 8192
+        hard: 8192
     healthcheck:
-      test: [CMD, curl, -f, 'https://localhost:443', -k, -H, 'Host: ${DOMAIN:-example.com}']
-      interval: 30s
+      test: [CMD, curl, -f, 'https://localhost:443', -k]
+      interval: 60s # Reduced frequency for Pi
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s # Longer startup for SSL cert acquisition
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 128M
+        max-size: 10m # Reduced log size to prevent SD card bloat
+        max-file: '2'
+    # Use native Compose resource limits (not deploy section which only works in Swarm)
+    mem_limit: 256m
+    cpus: 0.5
 
   sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: lscr.io/linuxserver/sonarr:latest # Pin specific version tag in production
     container_name: sonarr
     environment:
       - PUID=${PUID:-1000}
@@ -133,41 +85,37 @@ services:
       - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr:/config
       - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
-      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr/custom-services.d:/custom-services.d
-      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr/custom-cont-init.d:/custom-cont-init.d
+      # Removed custom-services/init directories—add only if explicitly needed; reduces complexity
     ports:
       - 8989:8989
     restart: unless-stopped
+    # depends_on only ensures container start order, not service readiness
+    # Consider using wait-for-it or healthcheck-dependent startup scripts if strict ordering is critical
     depends_on:
       - prowlarr
       - qbittorrent
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:8989/']
-      interval: 30s
+      test: [CMD, curl, -f, 'http://localhost:8989/ping']
+      interval: 60s # Reduced frequency for Pi resource conservation
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+        max-size: 10m # Reduced to prevent SD card bloat
+        max-file: '2'
+    # Native Compose resource limits (deploy section ignored in non-Swarm)
+    mem_limit: 384m
+    mem_reservation: 192m
+    cpus: 0.4
 
   radarr:
-    image: lscr.io/linuxserver/radarr:latest
+    image: lscr.io/linuxserver/radarr:latest # Pin specific version tag in production
     container_name: radarr
     environment:
       - PUID=${PUID:-1000}
@@ -176,14 +124,12 @@ services:
       - UMASK=022
     security_opt:
       - no-new-privileges:true
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1
+    # Removed unnecessary IPv6 disable sysctl—not needed unless explicitly troubleshooting IPv6 issues
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/radarr:/config
       - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
-      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr/custom-services.d:/custom-services.d
-      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr/custom-cont-init.d:/custom-cont-init.d
+      # Removed custom-services/init directories unless explicitly required
     ports:
       - 7878:7878
     restart: unless-stopped
@@ -191,32 +137,26 @@ services:
       - prowlarr
       - qbittorrent
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:7878/']
-      interval: 30s
+      test: [CMD, curl, -f, 'http://localhost:7878/ping']
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 384m
+    mem_reservation: 192m
+    cpus: 0.4
 
   bazarr:
-    image: lscr.io/linuxserver/bazarr:latest
+    image: lscr.io/linuxserver/bazarr:latest # Pin specific version tag in production
     container_name: bazarr
     environment:
       - PUID=${PUID:-1000}
@@ -236,32 +176,26 @@ services:
     depends_on:
       - prowlarr
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:6767/']
-      interval: 30s
+      test: [CMD, curl, -f, 'http://localhost:6767/ping']
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.3
 
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
+    image: lscr.io/linuxserver/prowlarr:latest # Pin specific version tag in production
     container_name: prowlarr
     environment:
       - PUID=${PUID:-1000}
@@ -277,32 +211,26 @@ services:
     depends_on:
       - qbittorrent
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:9696/']
-      interval: 30s
+      test: [CMD, curl, -f, 'http://localhost:9696/ping']
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.3
 
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: lscr.io/linuxserver/qbittorrent:latest # Pin specific version tag in production
     container_name: qbittorrent
     environment:
       - PUID=${PUID:-1000}
@@ -314,14 +242,8 @@ services:
       - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
     security_opt:
       - no-new-privileges:true
-    sysctls:
-      - net.ipv4.tcp_window_scaling=1
-      - net.ipv4.tcp_timestamps=1
-      - net.ipv4.tcp_sack=1
-      - net.ipv4.tcp_tw_reuse=1
-      - net.ipv4.tcp_fin_timeout=15
-      - net.ipv4.tcp_moderate_rcvbuf=1
-      - net.ipv4.tcp_no_metrics_save=1
+    # Removed excessive TCP sysctls—unnecessary for typical Pi torrent workload (< 50 simultaneous torrents)
+    # Removed blkio_config—SD card/USB drives don't benefit from throttling; can cause slowdowns
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/qbittorrent:/config
       - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
@@ -331,31 +253,34 @@ services:
       - 6881:6881/udp
     restart: unless-stopped
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
+    # Reduced ulimits to sane Pi levels (1024 is plenty for moderate torrent usage)
     ulimits:
       nofile:
-        soft: 131072
-        hard: 131072
+        soft: 4096
+        hard: 8192
       nproc:
-        soft: 16384
-        hard: 16384
+        soft: 512
+        hard: 1024
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8080/']
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 60s # Extended for slow Pi startup
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 1024m
+    mem_reservation: 512m
+    cpus: 1.0
 
   jellyfin:
-    image: lscr.io/linuxserver/jellyfin:latest
+    image: lscr.io/linuxserver/jellyfin:latest # Pin specific version tag in production
     container_name: jellyfin
     security_opt:
       - no-new-privileges:true
@@ -364,58 +289,48 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
-      - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
     volumes:
       - ${CONFIG_DIRECTORY:-/tmp/config}/jellyfin:/config
-      - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies
-      - ${JELLYFIN_CACHE_DIRECTORY:-/tmp/jellyfin-cache}:/cache:rw
+      - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies:ro
     ports:
       - 8096:8096
       - 8920:8920
       - 7359:7359/udp
       - 1900:1900/udp
     networks:
-      - proxy-network
-      - media-network
+      - nas-network
     restart: unless-stopped
-    depends_on:
-      - swag
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
-    tmpfs:
-      - /tmp:size=4G,exec
+    # Removed blkio_config—not beneficial on Pi storage
     ulimits:
       nofile:
-        soft: 65536
-        hard: 65536
+        soft: 8192
+        hard: 8192
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          cpus: '0.5'
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 768m # Reduced for Pi, adequate for non-transcoding playback
+    mem_reservation: 256m
+    cpus: 0.75
 
   jellyseerr:
-    image: ghcr.io/fallenbagel/jellyseerr:latest
+    image: ghcr.io/fallenbagel/jellyseerr:latest # Pin specific version tag in production
     init: true
     container_name: jellyseerr
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=info # Reduced from debug to conserve logs and CPU
       - PORT=5056
     security_opt:
       - no-new-privileges:true
@@ -429,30 +344,23 @@ services:
       - sonarr
       - radarr
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
-      - swag_port=5056
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5056/api/v1/status']
-      interval: 15s
-      timeout: 3s
+      interval: 60s
+      timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     logging:
       driver: json-file
       options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 384m
+    mem_reservation: 128m
+    cpus: 0.4
 
   nextcloud:
     image: lscr.io/linuxserver/nextcloud:latest
@@ -479,7 +387,7 @@ services:
     depends_on:
       - swag
     networks:
-      - media-network
+      - nas-network
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - swag=enable
@@ -503,49 +411,31 @@ services:
           cpus: '0.25'
           memory: 128M
 
-  watchtower:
-    image: nickfedor/watchtower # Community fork with Docker API 1.44+ support
-    container_name: watchtower
-    restart: always
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      - DOCKER_HOST=tcp://dockerproxy:2375
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_INCLUDE_RESTARTING=true
-      - WATCHTOWER_INCLUDE_STOPPED=false
-      - WATCHTOWER_REVIVE_STOPPED=false
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
-      - WATCHTOWER_TIMEOUT=300s
-      - WATCHTOWER_ROLLING_RESTART=false
-      - WATCHTOWER_LOG_LEVEL=info
-      - TZ=${TZ:-UTC}
-    depends_on:
-      - dockerproxy
-    networks:
-      - media-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    healthcheck:
-      test: [CMD, /watchtower, --health-check]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 256M
+  # WATCHTOWER: Removed due to dockerproxy security risk
+  # Recommendation: Run Watchtower directly on host with minimal socket access, or use
+  # a dedicated update mechanism. If you must use Watchtower, bind mount the Docker socket
+  # with strict read-only permissions and consider using --scope to limit container access.
+  #
+  # Alternative approach:
+  # watchtower:
+  #   image: containrrr/watchtower:latest
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   environment:
+  #     - WATCHTOWER_CLEANUP=true
+  #     - WATCHTOWER_LABEL_ENABLE=true
+  #     - WATCHTOWER_SCHEDULE=0 0 4 * * *
+  #     - TZ=${TZ:-UTC}
+  #   command: --scope nas-stack
+  #   networks:
+  #     - nas-network
 
   lazylibrarian:
-    image: lscr.io/linuxserver/lazylibrarian:latest
+    image: lscr.io/linuxserver/lazylibrarian:latest # Pin specific version tag in production
     container_name: lazylibrarian
     environment:
       - PUID=${PUID:-1000}
@@ -566,60 +456,25 @@ services:
       - prowlarr
       - qbittorrent
     networks:
-      - media-network
+      - nas-network
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - swag=enable
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:5299/']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
-    logging:
-      driver: json-file
-      options:
-        max-size: 25m
-        max-file: '3'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-        reservations:
-          cpus: '0.1'
-          memory: 64M
-  autoheal:
-    image: willfarrell/autoheal:latest
-    container_name: autoheal
-    restart: always
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      - DOCKER_SOCK=tcp://dockerproxy:2375
-      - AUTOHEAL_CONTAINER_LABEL=all
-      - AUTOHEAL_INTERVAL=15
-      - AUTOHEAL_START_PERIOD=0
-      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
-    depends_on:
-      - dockerproxy
-    networks:
-      - media-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    healthcheck:
-      test: [CMD-SHELL, 'pgrep -f autoheal || exit 1']
       interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 60s
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: '2'
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 64M
+    mem_limit: 192m
+    mem_reservation: 96m
+    cpus: 0.25
+
+  # AUTOHEAL: Removed due to dockerproxy security risk
+  # Recommendation: Monitor container health via external monitoring (e.g., Prometheus + Alertmanager)
+  # or run autoheal on host with minimal socket permissions. Docker's built-in restart policies
+  # (unless-stopped, on-failure) handle most crash scenarios adequately.

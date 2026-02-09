@@ -18,7 +18,7 @@ Safety:
 
 Environment Variables:
   PROJECTS_DIRECTORY   Override project scan root (default: ~/projects)
-  DOMAIN               Used to display expected https://<service>.<domain> URL (if set)
+  PUBLIC_DOMAIN               Used to display expected https://<service>.<domain> URL (if set)
 
 Usage:
   python scripts/project_service_adder.py              # interactive
@@ -163,7 +163,7 @@ def build_service_block(
         lines.append("      retries: 3")
         lines.append("      start_period: 30s")
     # Comment for proxy URL
-    domain = os.getenv("DOMAIN")
+    domain = os.getenv("PUBLIC_DOMAIN")
     if domain:
         sd = subdomain or name
         lines.append(f"    # Expected URL: https://{sd}.{domain}")
@@ -278,9 +278,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     print("\nProposed service block:\n")
     print(service_block)
     print()
-    if os.getenv("DOMAIN"):
+    if os.getenv("PUBLIC_DOMAIN"):
         final_sd = subdomain or name
-        print(f"Reverse proxy target will become: https://{final_sd}.{os.getenv('DOMAIN')} (label swag=enable)")
+        print(f"Reverse proxy target will become: https://{final_sd}.{os.getenv('PUBLIC_DOMAIN')} (label swag=enable)")
 
     if not args.yes:
         confirm = input("Add this service to docker-compose.yml? [y/N]: ").strip().lower()

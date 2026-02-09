@@ -106,7 +106,7 @@ Edit `.env` and set at least:
 
 - `SHARE_DIRECTORY` (your media/share root, e.g. `/mnt/drive`)
 - `CONFIG_DIRECTORY` (where container configs should persist, e.g. `/mnt/drive/.docker-config`)
-- `DOMAIN`, `ADMIN_EMAIL`, `CLOUDFLARE_API_TOKEN` (required for SWAG DNS validation)
+- `PUBLIC_DOMAIN`, `ADMIN_EMAIL`, `CLOUDFLARE_API_TOKEN` (required for SWAG DNS validation)
 - `PUID`, `PGID`, `TZ`
 
 ### 3) Ensure host directories exist and permissions make sense
@@ -145,7 +145,7 @@ The compose file uses the following variables (see `.env.example`):
 - `TZ`: timezone.
 - `SHARE_DIRECTORY`: host path containing media/downloads.
 - `CONFIG_DIRECTORY`: host path where service configs are persisted (`${CONFIG_DIRECTORY}/<service>`).
-- `DOMAIN`, `ADMIN_EMAIL`: used by `swag`.
+- `PUBLIC_DOMAIN`, `ADMIN_EMAIL`: used by `swag`.
 - `CLOUDFLARE_API_TOKEN`: used by `swag` for DNS validation.
 - `JELLYFIN_PUBLISHED_URL`: passed to Jellyfin as `JELLYFIN_PublishedServerUrl`.
 - `QBITTORRENT_USER`, `QBITTORRENT_PASS`: passed into the qBittorrent container.
@@ -235,7 +235,7 @@ A backup helper exists at [scripts/config_backup.py](scripts/config_backup.py) (
 
 ## Common issues / notes
 
-- SWAG certificate issuance will fail if `CLOUDFLARE_API_TOKEN`, `DOMAIN`, and `ADMIN_EMAIL` are not set correctly. The compose file provides a dummy default token, which is not suitable for real use.
+- SWAG certificate issuance will fail if `CLOUDFLARE_API_TOKEN`, `PUBLIC_DOMAIN`, and `ADMIN_EMAIL` are not set correctly. The compose file provides a dummy default token, which is not suitable for real use.
 - `nextcloud` mounts `/mnt/sdcard:/external/sdcard:rw`. If your host does not have `/mnt/sdcard`, remove or change that bind mount.
 - qBittorrent credentials default to `qbittorrent` / `changeme_password` unless overridden; set `QBITTORRENT_USER` and `QBITTORRENT_PASS` before exposing the Web UI.
 - `swag` bind-mounts `./rootpage/dist`. If you have not built the rootpage, the landing page content may be missing.
