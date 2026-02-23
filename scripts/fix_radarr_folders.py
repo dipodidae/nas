@@ -11,6 +11,8 @@ def fix_folder_name(name: str) -> str:
     """Remove literal pattern text from folder names."""
     # Replace literal {Movie Collection: - } with proper separator " - "
     fixed = re.sub(r'\{Movie Collection: - \}', ' - ', name)
+    # Remove leading " - " for movies without collections
+    fixed = re.sub(r'^- ', '', fixed)
     # Clean up any leading/trailing spaces or dashes
     fixed = fixed.strip()
     return fixed
@@ -22,7 +24,7 @@ def main() -> int:
         return 1
     
     movies_path = Path(MOVIES_DIR)
-    broken_folders = [f for f in movies_path.iterdir() if f.is_dir() and '{' in f.name]
+    broken_folders = [f for f in movies_path.iterdir() if f.is_dir() and ('{' in f.name or f.name.startswith('- '))]
     
     if not broken_folders:
         print("No broken folders found")

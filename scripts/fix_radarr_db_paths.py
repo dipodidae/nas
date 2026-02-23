@@ -14,6 +14,8 @@ def fix_path(path: str) -> str:
     fixed = re.sub(r'\{Movie Collection: - \}', ' - ', path)
     # Remove standalone pattern at start
     fixed = re.sub(r'^/movies/\{Movie Collection: - \}', '/movies/', fixed)
+    # Remove leading " - " for movies without collections
+    fixed = re.sub(r'/movies/ - ', '/movies/', fixed)
     return fixed
 
 def main() -> int:
@@ -32,7 +34,7 @@ def main() -> int:
     
     try:
         # Get all movies with broken paths
-        cursor.execute("SELECT Id, Path FROM Movies WHERE Path LIKE '%{Movie Collection: - }%'")
+        cursor.execute("SELECT Id, Path FROM Movies WHERE Path LIKE '%{Movie Collection: - }%' OR Path LIKE '%/ - %'")
         movies = cursor.fetchall()
         
         print(f"Found {len(movies)} movies with broken paths")
@@ -46,7 +48,7 @@ def main() -> int:
                 print(f"    New: {new_path}")
         
         # Also fix MovieFiles table
-        cursor.execute("SELECT Id, RelativePath FROM MovieFiles WHERE RelativePath LIKE '%{Movie Collection: - }%'")
+        cursor.execute("SELECT Id, RelativePath FROM MovieFiles WHERE RelativePath LIKE '%{Movie Collection: - }%' OR RelativePath LIKE '%/ - %'")
         files = cursor.fetchall()
         
         for file_id, old_rel_path in files:

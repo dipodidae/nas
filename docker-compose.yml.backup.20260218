@@ -1,0 +1,476 @@
+# Simplified network: single bridge for internal services
+networks:
+  nas-network:
+    name: nas-network
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: 'true'
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+
+services:
+  # REMOVED: dockerproxy service
+  # Reason: Massive security risk—exposing Docker API allows full daemon control.
+  # Watchtower and autoheal should be run on host or with minimal socket access via bind mount with strict permissions.
+
+  swag:
+    image: lscr.io/linuxserver/swag:latest # Pin specific version tag in production
+    container_name: swag
+    # Removed NET_ADMIN: only needed for VPN routing, which isn't used here
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - VALIDATION=dns
+      - DNSPLUGIN=cloudflare
+      - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN:-dummy-cloudflare-token}
+      - URL=${PUBLIC_DOMAIN:-example.com}
+      - SUBDOMAINS=wildcard
+      - ONLY_SUBDOMAINS=false
+      - EMAIL=${ADMIN_EMAIL:-admin@example.com}
+      # Auto-proxy disabled (requires Docker socket access); using manual proxy configs instead
+      # - DOCKER_MODS=linuxserver/mods:swag-auto-proxy
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/swag:/config
+      - ./rootpage/dist:/config/www/rootpage:ro
+      - ./rootpage/nginx-rootpage.conf:/config/nginx/site-confs/root.conf:ro
+      - ./nginx-cache:/var/cache/nginx:rw
+    ports:
+      - 443:443
+      - 80:80
+      # Removed port 81 unless explicitly needed for internal admin
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    # ulimits reduced to match container capabilities
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+    healthcheck:
+      test: [CMD, curl, -f, 'https://localhost:443', -k]
+      interval: 60s # Reduced frequency for Pi
+      timeout: 10s
+      retries: 3
+      start_period: 90s # Longer startup for SSL cert acquisition
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m # Reduced log size to prevent SD card bloat
+        max-file: '2'
+    # Use native Compose resource limits (not deploy section which only works in Swarm)
+    mem_limit: 256m
+    cpus: 0.5
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest # Pin specific version tag in production
+    container_name: sonarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - UMASK=022
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/sonarr:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+      # Removed custom-services/init directories—add only if explicitly needed; reduces complexity
+    ports:
+      - 8989:8989
+    restart: unless-stopped
+    # depends_on only ensures container start order, not service readiness
+    # Consider using wait-for-it or healthcheck-dependent startup scripts if strict ordering is critical
+    depends_on:
+      - prowlarr
+      - qbittorrent
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8989/ping']
+      interval: 60s # Reduced frequency for Pi resource conservation
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m # Reduced to prevent SD card bloat
+        max-file: '2'
+    # Native Compose resource limits (deploy section ignored in non-Swarm)
+    mem_limit: 384m
+    mem_reservation: 192m
+    cpus: 0.4
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest # Pin specific version tag in production
+    container_name: radarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - UMASK=022
+    security_opt:
+      - no-new-privileges:true
+    # Removed unnecessary IPv6 disable sysctl—not needed unless explicitly troubleshooting IPv6 issues
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/radarr:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+      # Removed custom-services/init directories unless explicitly required
+    ports:
+      - 7878:7878
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+      - qbittorrent
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:7878/ping']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 384m
+    mem_reservation: 192m
+    cpus: 0.4
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest # Pin specific version tag in production
+    container_name: bazarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - UMASK=022
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/bazarr:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/movies
+      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/tv
+      - ${CLEAN_SUBTITLES_DIRECTORY:-/tmp/clean-subtitles-disabled}:/clean-subtitles:ro
+    ports:
+      - 6767:6767
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:6767/ping']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 384m
+    mem_reservation: 128m
+    cpus: 0.3
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest # Pin specific version tag in production
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/prowlarr:/config
+    ports:
+      - 9696:9696
+    restart: unless-stopped
+    depends_on:
+      - qbittorrent
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:9696/ping']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.3
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest # Pin specific version tag in production
+    container_name: qbittorrent
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - WEBUI_PORT=8080
+      - QBITTORRENT_USER=${QBITTORRENT_USER:-qbittorrent}
+      - QBITTORRENT_PASS=${QBITTORRENT_PASS:-changeme_password}
+      - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
+    security_opt:
+      - no-new-privileges:true
+    # Removed excessive TCP sysctls—unnecessary for typical Pi torrent workload (< 50 simultaneous torrents)
+    # Removed blkio_config—SD card/USB drives don't benefit from throttling; can cause slowdowns
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/qbittorrent:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+    ports:
+      - 8080:8080
+      - 6881:6881/tcp
+      - 6881:6881/udp
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    # Reduced ulimits to sane Pi levels (1024 is plenty for moderate torrent usage)
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+      nproc:
+        soft: 512
+        hard: 1024
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8080/']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s # Extended for slow Pi startup
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 1024m
+    mem_reservation: 512m
+    cpus: 1.0
+
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest # Pin specific version tag in production
+    container_name: jellyfin
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/jellyfin:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}:/data/movies:ro
+    ports:
+      - 8096:8096
+      - 8920:8920
+      - 7359:7359/udp
+      - 1900:1900/udp
+    networks:
+      - nas-network
+    restart: unless-stopped
+    labels:
+      - swag=enable
+    # Removed blkio_config—not beneficial on Pi storage
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 768m # Reduced for Pi, adequate for non-transcoding playback
+    mem_reservation: 256m
+    cpus: 0.75
+
+  jellyseerr:
+    image: ghcr.io/fallenbagel/jellyseerr:latest # Pin specific version tag in production
+    init: true
+    container_name: jellyseerr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - LOG_LEVEL=info # Reduced from debug to conserve logs and CPU
+      - PORT=5056
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/jellyseerr:/app/config
+    ports:
+      - 5056:5056
+    restart: unless-stopped
+    depends_on:
+      - jellyfin
+      - sonarr
+      - radarr
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5056/api/v1/status']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 384m
+    mem_reservation: 128m
+    cpus: 0.4
+
+  nextcloud:
+    image: lscr.io/linuxserver/nextcloud:latest
+    container_name: nextcloud
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/nextcloud:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/NextcloudData:/data
+      - ${SHARE_DIRECTORY:-/tmp/share}:/external/drive:rw
+      - ${SHARE_DIRECTORY:-/tmp/share}/Movies:/external/movies:rw
+      - ${SHARE_DIRECTORY:-/tmp/share}/Series:/external/series:rw
+      - ${SHARE_DIRECTORY:-/tmp/share}/Music:/external/music:rw
+      - ${SHARE_DIRECTORY:-/tmp/share}/Books:/external/books:rw
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/external/downloads:rw
+      - /mnt/sdcard:/external/sdcard:rw
+    ports:
+      - 8087:443
+    restart: unless-stopped
+    depends_on:
+      - swag
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'https://localhost:443/status.php', -k]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 25m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  # WATCHTOWER: Removed due to dockerproxy security risk
+  # Recommendation: Run Watchtower directly on host with minimal socket access, or use
+  # a dedicated update mechanism. If you must use Watchtower, bind mount the Docker socket
+  # with strict read-only permissions and consider using --scope to limit container access.
+  #
+  # Alternative approach:
+  # watchtower:
+  #   image: containrrr/watchtower:latest
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   environment:
+  #     - WATCHTOWER_CLEANUP=true
+  #     - WATCHTOWER_LABEL_ENABLE=true
+  #     - WATCHTOWER_SCHEDULE=0 0 4 * * *
+  #     - TZ=${TZ:-UTC}
+  #   command: --scope nas-stack
+  #   networks:
+  #     - nas-network
+
+  lazylibrarian:
+    image: lscr.io/linuxserver/lazylibrarian:latest # Pin specific version tag in production
+    container_name: lazylibrarian
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - DOCKER_MODS=linuxserver/mods:universal-package-install
+      - INSTALL_PACKAGES=curl
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_DIRECTORY:-/tmp/config}/lazylibrarian:/config
+      - ${SHARE_DIRECTORY:-/tmp/share}/Downloads:/downloads
+      - ${SHARE_DIRECTORY:-/tmp/share}/Books:/books
+    ports:
+      - 5299:5299
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+      - qbittorrent
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:5299/']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+    mem_limit: 256m
+    mem_reservation: 96m
+    cpus: 0.25
+
+  # AUTOHEAL: Removed due to dockerproxy security risk
+  # Recommendation: Monitor container health via external monitoring (e.g., Prometheus + Alertmanager)
+  # or run autoheal on host with minimal socket permissions. Docker's built-in restart policies
+  # (unless-stopped, on-failure) handle most crash scenarios adequately.

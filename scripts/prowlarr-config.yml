@@ -11,38 +11,133 @@
 
 indexer_priorities:
   # Premium/High Quality Indexers (1-10)
-  YTS: 1 # High quality movie releases
+  YTS: 1 # High quality movie releases, excellent encodes
+  Nyaa.si: 3 # Best anime tracker, very reliable
   SubsPlease: 5 # Reliable anime releases
+  Anidex: 6 # Anime tracker with good variety
+  Tokyo Toshokan: 7 # Japanese anime tracker
+  EZTV: 8 # Excellent for TV shows, highly reliable
   showRSS: 10 # TV show RSS feeds
 
   # Mid-tier Indexers (11-30)
-  The Pirate Bay: 15 # Popular public tracker
+  1337x: 12 # Very popular, reliable general tracker
+  kickasstorrents.to: 14 # KickassTorrents mirror
+  kickasstorrents.ws: 14 # KickassTorrents mirror
+  The Pirate Bay: 15 # Popular public tracker, good variety
+  BT.etree: 16 # Lossless music tracker
+  BitSearch: 17 # Modern DHT search engine
+  Internet Archive: 18 # Legitimate content, public domain
+  Isohunt2: 19 # Isohunt successor, good general tracker
+  LimeTorrents: 20 # Decent general tracker
   TorrentGalaxyClone: 21 # General purpose tracker
+  LinuxTracker: 22 # Specialized for Linux ISOs
+  ExtraTorrent.st: 23 # ExtraTorrent clone
+  RuTracker.RU: 24 # Russian tracker, huge library
   Solid Torrents: 25 # Decent general tracker
+  0Magnet: 26 # Magnet link database
   Torrent Downloads: 28 # General downloads
   Torrent9: 30 # French tracker
 
   # Standard Quality Indexers (31-40)
+  ilCorSaRoNeRo: 31 # Italian tracker, regional content
+  Knaben: 32 # Metasearch engine, aggregates results
   TorrentDownload: 33 # Standard tracker
+  TorrentsCSV: 34 # Database-driven tracker
   OxTorrent: 35 # French tracker
+  NorTorrent: 35 # Norwegian tracker
   YourBittorrent: 36 # General tracker
+  TorrentKitty: 37 # DHT search engine
   TheRARBG: 38 # RARBG clone
   Uindex: 40 # Search engine
+  BTdirectory: 40 # Torrent directory
+  Magnetz: 40 # Magnet search engine
+  Magnet Cat: 40 # Magnet directory
 
   # Backup/Lower Priority Indexers (41-50)
   UzTracker: 42 # Regional tracker
   Torrentz2nz: 44 # Torrentz clone
+  TorrentProject2: 45 # Backup tracker
   RuTor: 46 # Russian tracker
   "Pirate's Paradise": 48 # General tracker
+  Byrutor: 48 # Russian tracker
+  sosulki: 48 # Russian tracker
+  BitRu: 48 # Russian tracker
+  torrent.by: 48 # Russian tracker
 
   # Lowest Priority/Fallback (50)
+  # Specialized content
   Mac Torrents Download: 50 # Mac-specific content
+  GamesTorrents: 50 # Game torrents
+  BlueRoms: 50 # ROM files
+  CrackingPatching: 50 # Software cracks
+  SkidrowRepack: 50 # Game repacks
+  EBookBay: 50 # eBooks
+  
+  # Magnet/DHT search engines
   MagnetDownload: 50 # Magnet links
+  DaMagNet: 50 # Magnet search
+  Catorrent: 50 # Software/PC torrents
   PC-torrent: 50 # PC software
   plugintorrent: 50 # Plugin/software
+  
+  # Audio production software
   VST Torrentz: 50 # VST/audio software
   VSTHouse: 50 # VST/audio software
   VSTorrent: 50 # VST/audio software
+  
+  # Media torrents
+  MixtapeTorrent: 50 # Mixtapes
+  MoviesDVDR: 50 # DVD releases
+  
+  # Regional/Niche trackers
+  52BT: 50 # Chinese tracker
+  dmhy: 50 # Chinese anime
+  nekoBT: 50 # Chinese anime
+  ACG.RIP: 50 # Chinese anime
+  BigFANGroup: 50 # Chinese anime
+  Mikan: 50 # Chinese anime
+  U3C3: 50 # Chinese anime
+  Bangumi Moe: 50 # Chinese anime
+  ZkTorrent: 50 # Czech tracker
+  Elitetorrent-wf: 50 # Spanish tracker
+  cpasbien clone: 50 # French tracker
+  arab-torrents.com: 50 # Arabic tracker
+  World-torrent: 50 # Regional tracker
+  NewStudio: 50 # Regional tracker
+  btstate: 50 # Regional tracker
+  torrent-pirat: 50 # Regional tracker
+  Zamunda RIP: 50 # Bulgarian tracker
+  OpenSharing: 50 # Regional tracker
+  GTorrent.club: 50 # Regional tracker
+  MegaPeer: 50 # Regional tracker
+  NoNaMe Club: 50 # Regional tracker
+  RinTor.NeT: 50 # Regional tracker
+  Torrent Oyun indir: 50 # Turkish games
+  Postman: 50 # Miscellaneous
+  FileMood: 50 # File sharing
+  Torrentsome: 50 # Miscellaneous
+  Torrenttip: 50 # Miscellaneous
+  TorrentQQ: 50 # Miscellaneous
+  Torrent[CORE]: 50 # Miscellaneous
+  Frozen Layer: 50 # Miscellaneous
+  AniSource: 50 # Anime alternative
+  Shana Project: 50 # Anime RSS
+  Nipponsei: 50 # Japanese music
+  
+  # Adult content (lowest priority unless specifically needed)
+  sukebei.nyaa.si: 50 # Adult anime
+  E-Hentai: 50 # Adult manga
+  Free JAV Torrent: 50 # Adult content
+  OneJAV: 50 # Adult content
+  MyPornClub: 50 # Adult content
+  PornRips: 50 # Adult content
+  PornoTorrent: 50 # Adult content
+  Sexy-Pics: 50 # Adult content
+  XXXClub: 50 # Adult content
+  xxxtor: 50 # Adult content
+  
+  # RSS/Generic feeds
+  Torrent RSS Feed: 50 # Generic RSS feed
 
 # Configuration settings
 settings:

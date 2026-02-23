@@ -8,7 +8,7 @@ Short-form instruction file (auto-injected into chat per GitHub feature preview)
 
 ## 1. Project Overview
 
-Infrastructure-as-code + minimal landing page for a self‑hosted NAS / media stack (Raspberry Pi 5 tuned, but generic Linux capable). Core services: Jellyfin, \*arr suite (Sonarr/Radarr/Bazarr/Prowlarr), qBittorrent, Nextcloud, SWAG (reverse proxy + TLS), Watchtower, Autoheal, Cloudflare DDNS, supporting utilities. Frontend: a tiny static root page built with Vite + TailwindCSS.
+Infrastructure-as-code + minimal landing page for a self‑hosted NAS / media stack (Raspberry Pi 5 tuned, but generic Linux capable). Core services: Jellyfin, \*arr suite (Sonarr/Radarr/Lidarr/Bazarr/Prowlarr), qBittorrent, slskd (Soulseek), Jellyseerr, Flaresolverr, Nextcloud, SWAG (reverse proxy + TLS), Watchtower, Autoheal, Cloudflare DDNS, supporting utilities. Frontend: a tiny static root page built with Vite + TailwindCSS.
 
 Focus areas:
 
