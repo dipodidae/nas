@@ -204,6 +204,8 @@ Required in `.env`:
 - `QBITTORRENT_USER`, `QBITTORRENT_PASS` - qBittorrent WebUI credentials
 - `CLEAN_SUBTITLES_DIRECTORY` - Path to clean subtitles for Bazarr
 - `API_KEY_PROWLARR` - Prowlarr API key (used by scripts)
+- `API_KEY_LIDARR` - Lidarr API key (used by scripts)
+- `API_KEY_SLSKD` - slskd API key (used by scripts)
 
 ## General Development Principles
 

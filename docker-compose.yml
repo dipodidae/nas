@@ -201,6 +201,8 @@ services:
       - SLSKD_SHARED_DIR=/music
       - SLSKD_SLSK_USERNAME=${SLSKD_SLSK_USERNAME}
       - SLSKD_SLSK_PASSWORD=${SLSKD_SLSK_PASSWORD}
+      - SLSKD_USERNAME=${SLSKD_USERNAME}
+      - SLSKD_PASSWORD=${SLSKD_PASSWORD}
       - TZ=${TZ:-UTC}
     volumes:
       - ${CONFIG_DIRECTORY}/slskd:/app
@@ -227,12 +229,12 @@ services:
       options:
         max-size: 10m
         max-file: "2"
-    mem_limit: 384m
-    mem_reservation: 128m
-    cpus: 0.4
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 0.5
 
   lidarr:
-    image: lscr.io/linuxserver/lidarr:latest
+    image: lscr.io/linuxserver/lidarr:nightly
     container_name: lidarr
     security_opt:
       - no-new-privileges:true
@@ -279,9 +281,9 @@ services:
       options:
         max-size: 10m
         max-file: "2"
-    mem_limit: 384m
-    mem_reservation: 192m
-    cpus: 0.4
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 1.0
 
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
@@ -500,6 +502,9 @@ services:
       nofile:
         soft: 8192
         hard: 8192
+    # I/O priority: high priority for smooth streaming
+    blkio_config:
+      weight: 800
     healthcheck:
       test: [CMD, curl, -f, "http://localhost:8096/System/Info/Public"]
       interval: 60s
@@ -511,9 +516,10 @@ services:
       options:
         max-size: 10m
         max-file: "2"
+    # Audio transcoding (EAC3->AAC) needs headroom; video is direct-play only
     mem_limit: 1536m
-    mem_reservation: 512m
-    cpus: 1.5
+    mem_reservation: 256m
+    cpus: 2.0
 
   jellyseerr:
     image: ghcr.io/fallenbagel/jellyseerr:latest

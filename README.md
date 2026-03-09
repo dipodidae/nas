@@ -141,7 +141,7 @@ The compose file uses the following variables (see `.env.example`):
 
 The `.env.example` also includes API keys/tokens that are not referenced in `docker-compose.yml`, but are used by scripts under `scripts/`:
 
-- `API_KEY_RADARR`, `API_KEY_SONARR`, `API_KEY_JELLYFIN`, `API_KEY_PROWLARR`
+- `API_KEY_RADARR`, `API_KEY_SONARR`, `API_KEY_JELLYFIN`, `API_KEY_PROWLARR`, `API_KEY_LIDARR`, `API_KEY_SLSKD`
 - `PLEX_TOKEN` (used by `enable_bazarr_plex.py` if Plex integration is needed)
 
 See the scripts documentation in [scripts/README.md](scripts/README.md).
@@ -221,4 +221,4 @@ A backup helper exists at [scripts/config_backup.py](scripts/config_backup.py) (
 - `nextcloud` mounts `/mnt/sdcard:/external/sdcard:rw`. If your host does not have `/mnt/sdcard`, remove or change that bind mount.
 - qBittorrent credentials default to `qbittorrent` / `changeme_password` unless overridden; set `QBITTORRENT_USER` and `QBITTORRENT_PASS` before exposing the Web UI.
 - `swag` bind-mounts `./rootpage/dist`. If you have not built the rootpage, the landing page content may be missing.
-- slskd default credentials are `slskd` / `slskd`; change them before exposing the service publicly.
+- slskd WebUI credentials are set via `SLSKD_USERNAME` and `SLSKD_PASSWORD` in `.env`.

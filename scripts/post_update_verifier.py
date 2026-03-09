@@ -15,7 +15,7 @@ Exit codes:
   2 fatal (no services reachable / docker unavailable)
 
 Environment:
-  API_KEY_PROWLARR / API_KEY_SONARR / API_KEY_RADARR (optional for auth)
+  API_KEY_PROWLARR / API_KEY_SONARR / API_KEY_RADARR / API_KEY_LIDARR / API_KEY_SLSKD (optional for auth)
   DOCKER_BIN (default: docker)
   VERIFY_SERVICES comma list override of default services
 """
@@ -32,7 +32,7 @@ import urllib.request
 from dataclasses import dataclass
 
 # Auto-load .env to pick up API keys if not already in environment.
-if not any(k in os.environ for k in ("API_KEY_PROWLARR", "API_KEY_SONARR", "API_KEY_RADARR")):
+if not any(k in os.environ for k in ("API_KEY_PROWLARR", "API_KEY_SONARR", "API_KEY_RADARR", "API_KEY_LIDARR", "API_KEY_SLSKD")):
   try:  # pragma: no cover
     from dotenv import load_dotenv  # type: ignore
 
@@ -46,6 +46,7 @@ DEFAULT_SERVICES = [
   ("prowlarr", 9696, "/", False),
   ("sonarr", 8989, "/", False),
   ("radarr", 7878, "/", False),
+  ("lidarr", 8686, "/", False),
   ("bazarr", 6767, "/", False),
   ("jellyfin", 8096, "/System/Info/Public", False),
   ("swag", 443, "/", True),
@@ -55,6 +56,7 @@ API_KEY_ENV = {
   "prowlarr": "API_KEY_PROWLARR",
   "sonarr": "API_KEY_SONARR",
   "radarr": "API_KEY_RADARR",
+  "lidarr": "API_KEY_LIDARR",
 }
 
 

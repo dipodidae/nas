@@ -69,7 +69,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
       - name: Create minimal .env for tests
-        run: echo 'API_KEY_PROWLARR=dummy_api_key_for_ci' > .env
+        run: echo -e 'API_KEY_PROWLARR=dummy_api_key_for_ci\nAPI_KEY_LIDARR=dummy_api_key_for_ci\nAPI_KEY_SLSKD=dummy_api_key_for_ci' > .env
       - name: Ruff Lint
         run: python -m ruff check scripts
       - name: Run legacy script test harness
