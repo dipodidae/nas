@@ -17,17 +17,20 @@ These are already at their best settings!
 ### 1. Virtual Memory Tuning
 
 **Changes:**
+
 - `vm.swappiness`: 60 → 10 (minimize swap usage)
 - `vm.vfs_cache_pressure`: 30 → 10 (keep file cache longer)
 - `vm.dirty_ratio`: 15 (better write buffering)
 - `vm.dirty_background_ratio`: 5
 
 **Why this helps:**
+
 - **Lower swappiness**: With 8GB RAM, we want to use RAM, not swap
 - **Lower cache pressure**: Keep media files in cache longer (fewer disk reads)
 - **Dirty ratios**: Better write buffering without excessive dirty pages
 
 **Impact on streaming:**
+
 - Media files stay in cache after first access (instant subsequent loads)
 - Less disk thrashing during concurrent operations
 - More consistent performance
@@ -35,6 +38,7 @@ These are already at their best settings!
 ### 2. Network Stack Optimization
 
 **Changes:**
+
 ```bash
 # TCP buffer sizes
 net.core.rmem_max=134217728        # 128MB receive buffer
@@ -58,6 +62,7 @@ net.ipv4.tcp_keepalive_probes=3
 ```
 
 **Why this helps:**
+
 - **128MB buffers**: Can buffer several seconds of 4K video (prevents jitter)
 - **Auto-tuning**: Kernel automatically optimizes buffer sizes per connection
 - **TCP Fast Open**: Saves 1 RTT on connection setup (faster stream start)
@@ -65,6 +70,7 @@ net.ipv4.tcp_keepalive_probes=3
 - **Optimized keepalive**: Keep streaming connections alive without overhead
 
 **Impact on streaming:**
+
 - Smoother playback over WAN (better buffering)
 - Faster stream startup (TCP Fast Open)
 - Better handling of multiple concurrent users
@@ -73,6 +79,7 @@ net.ipv4.tcp_keepalive_probes=3
 ### 3. File System Optimization
 
 **Changes:**
+
 ```bash
 fs.file-max=2097152                    # 2M max file descriptors
 fs.inotify.max_user_watches=524288     # Increased file watches
@@ -80,10 +87,12 @@ fs.inotify.max_user_instances=512      # Increased inotify instances
 ```
 
 **Why this helps:**
+
 - **File descriptors**: Each connection uses file descriptors; 2M allows many concurrent streams
 - **Inotify**: Radarr/Sonarr/Lidarr watch files; default limits cause "too many files" errors
 
 **Impact on streaming:**
+
 - Support more concurrent streams
 - Media management apps work without file watching errors
 - Better scalability
@@ -93,6 +102,7 @@ fs.inotify.max_user_instances=512      # Increased inotify instances
 Beyond the basic scheduler/read-ahead optimizations:
 
 **Changes:**
+
 ```bash
 max_sectors_kb: 512KB → 1024KB     # Larger I/O transfers
 add_random: 1 → 0                   # Disable entropy collection
@@ -100,11 +110,13 @@ rotational: 1                       # Confirm HDD optimization
 ```
 
 **Why this helps:**
+
 - **1024KB I/O size**: Transfer more data per I/O operation (fewer operations)
 - **Disable entropy**: Media reads don't need to contribute to random pool (slight overhead reduction)
 - **Rotational flag**: Ensures kernel treats it as HDD (seeks are expensive)
 
 **Impact on streaming:**
+
 - Higher throughput for large sequential reads
 - Slightly lower overhead per operation
 
@@ -169,18 +181,22 @@ bash optimize-nginx-workers.sh
 ### Real-World Impact
 
 **Single remote 4K stream:**
+
 - Before: Occasional stuttering, especially on network jitter
 - After: Smooth playback, large network buffers absorb jitter
 
 **Multiple concurrent streams:**
+
 - Before: Performance degradation with 3+ streams
 - After: Can handle 5+ concurrent streams smoothly
 
 **Stream startup time:**
+
 - Before: 2-5 seconds to start
 - After: 1-2 seconds (TCP Fast Open + better caching)
 
 **File management (Sonarr/Radarr):**
+
 - Before: Occasional "too many files" errors
 - After: No errors, smooth operation
 
@@ -189,14 +205,17 @@ bash optimize-nginx-workers.sh
 All optimizations are made persistent via:
 
 **Sysctl parameters:**
+
 - `/etc/sysctl.d/99-nas-performance.conf`
 - Applied on every boot automatically
 
 **Udev rules:**
+
 - `/etc/udev/rules.d/60-nas-disk-optimization.rules`
 - Applied when disk is detected
 
 **Docker configuration:**
+
 - `docker-compose.yml` (already modified)
 - `/etc/docker/daemon.json` (if created)
 
@@ -269,6 +288,7 @@ sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
 If stuttering persists after all optimizations:
 
 1. **Check upload bandwidth** - Most common issue
+
    ```bash
    speedtest-cli  # Need 180+ Mbps for 4K remux
    ```
@@ -278,6 +298,7 @@ If stuttering persists after all optimizations:
    - Should show "Direct Play" not "Transcoding"
 
 3. **Monitor during playback**
+
    ```bash
    # In one terminal
    docker stats jellyfin
@@ -297,6 +318,7 @@ If stuttering persists after all optimizations:
 Even with all optimizations, hardware has limits:
 
 **Raspberry Pi 5 limits:**
+
 - **Disk I/O**: ~150 MB/s (USB 3.0 HDD)
   - Supports: 5-6 concurrent 4K streams (theoretical)
   - Real-world: 3-4 streams with headroom
@@ -310,6 +332,7 @@ Even with all optimizations, hardware has limits:
   - Transcoding: Would be limited to 1-2 4K streams
 
 **Bottleneck priority:**
+
 1. Network upload bandwidth (most common)
 2. Disk I/O (if HDD, especially with many streams)
 3. CPU (only if transcoding)
@@ -320,11 +343,13 @@ Even with all optimizations, hardware has limits:
 ### Custom Tuning
 
 If you want to tune further, edit:
+
 ```bash
 sudo nano /etc/sysctl.d/99-nas-performance.conf
 ```
 
 Then apply:
+
 ```bash
 sudo sysctl -p /etc/sysctl.d/99-nas-performance.conf
 ```
@@ -358,12 +383,14 @@ If you need even more performance:
 ## Comparison with Basic Fixes
 
 **Basic fixes (already applied):**
+
 - Disk scheduler optimization
 - Read-ahead buffer increase
 - Jellyfin resource limits
 - Nginx streaming config
 
 **Advanced optimizations (new):**
+
 - Memory management tuning
 - Network stack optimization
 - File system limits
@@ -382,16 +409,19 @@ If you need even more performance:
 If issues persist after all optimizations:
 
 1. Run full diagnostics:
+
    ```bash
    bash ~/nas/scripts/check-streaming-status.sh
    ```
 
 2. Check Jellyfin logs:
+
    ```bash
    docker logs jellyfin --tail 200 | grep -i "error\|warn"
    ```
 
 3. Test upload speed:
+
    ```bash
    speedtest-cli
    ```

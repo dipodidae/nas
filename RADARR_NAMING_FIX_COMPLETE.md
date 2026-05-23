@@ -1,6 +1,6 @@
 # Radarr Directory Naming - Comprehensive Fix Implementation
 
-**Date:** February 20, 2026  
+**Date:** February 20, 2026
 **Status:** ✅ COMPLETED
 
 ## Summary
@@ -16,15 +16,16 @@ Successfully implemented a comprehensive, multi-layered solution to permanently 
 **Problem:** 171 movie folders had broken names with literal pattern text
 
 **Actions Taken:**
+
 1. ✅ Created timestamped backups:
    - `/mnt/docker-usb/radarr/radarr.db.backup_20260220_195336`
    - `/mnt/docker-usb/jellyfin/data/data/library.db.backup_20260220_195400`
 
 2. ✅ Fixed 171 broken folder names on filesystem:
-   - Replaced `{Movie Collection: - }` → ` - ` for collection movies
+   - Replaced `{Movie Collection: - }` → `-` for collection movies
    - Removed leading `- ` for non-collection movies
    - Example fixes:
-     - `Back to the Future Collection{Movie Collection: - }Back to the Future (1985)` 
+     - `Back to the Future Collection{Movie Collection: - }Back to the Future (1985)`
        → `Back to the Future Collection - Back to the Future (1985)`
      - `{Movie Collection: - }Persona (1966)` → `Persona (1966)`
 
@@ -65,6 +66,7 @@ Successfully implemented a comprehensive, multi-layered solution to permanently 
 **Purpose:** Automatically catches and fixes any broken folder names immediately after import
 
 **Functionality:**
+
 - Triggered on every movie Download and Upgrade event
 - Detects folders with literal `{` characters in the path
 - Automatically renames broken folders
@@ -73,6 +75,7 @@ Successfully implemented a comprehensive, multi-layered solution to permanently 
 - Comprehensive logging to `/config/logs/PostImportFixer.txt`
 
 **Integration:**
+
 - Registered as Radarr Custom Script (ID: 5)
 - Runs on: `onDownload: true`, `onUpgrade: true`
 
@@ -81,34 +84,42 @@ Successfully implemented a comprehensive, multi-layered solution to permanently 
 ### Phase 4: Continuous Monitoring ✅
 
 **New Helper Script:** `scripts/jellyfin_rescan_library.py`
+
 - Triggers Jellyfin library refresh via API
 
 **Cron Jobs Added:**
 
 1. **Every 30 minutes:** Enforce Radarr settings
+
    ```bash
    */30 * * * * enforce_radarr_settings.py
    ```
+
    - Validates naming pattern matches `naming.json`
    - Validates `autoRenameFolders: true`
    - Auto-corrects any drift
 
 2. **Every hour:** Validate and auto-fix folders
+
    ```bash
    0 * * * * validate_radarr_naming.py + auto-fix pipeline
    ```
+
    - Scans for folders with literal braces
    - If found: fixes folders → updates DB → restarts Radarr → rescans Jellyfin
    - Logs to: `logs/radarr-validation.log` and `logs/radarr-folder-fix.log`
 
 3. **Daily at 3 AM:** Generate summary report
+
    ```bash
    0 3 * * * Generate daily summary
    ```
+
    - Aggregates last 100 lines from enforcement and fix logs
    - Output: `logs/radarr-daily-summary.log`
 
 **Log Files Created:**
+
 - `logs/radarr-enforce.log` - Settings enforcement
 - `logs/radarr-validation.log` - Folder validation
 - `logs/radarr-folder-fix.log` - Auto-fix actions
@@ -121,16 +132,19 @@ Successfully implemented a comprehensive, multi-layered solution to permanently 
 ### Radarr Naming Settings
 
 **Folder Format:**
+
 ```
 {Movie Collection}{Movie Collection: - }{Movie CleanTitleThe} ({Release Year})
 ```
 
 **File Format:**
+
 ```
 {Movie CleanTitle} {(Release Year)} {imdb-{ImdbId}} {edition-{Edition Tags}} {[Custom Formats]}{[Quality Full]}{[MediaInfo 3D]}{[MediaInfo VideoDynamicRangeType]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels}]{MediaInfo AudioLanguagesAll}[{MediaInfo VideoBitDepth}bit][{Mediainfo VideoCodec}]{MediaInfo SubtitleLanguagesAll}{-Release Group}
 ```
 
 **Critical Settings:**
+
 - `renameMovies`: `true` ✅
 - `autoRenameFolders`: `true` ✅
 
@@ -143,28 +157,34 @@ Successfully implemented a comprehensive, multi-layered solution to permanently 
 The implemented solution provides **6 layers of protection**:
 
 ### Layer 1: AutoConfig Sets Correct Settings
+
 - Runs at Radarr startup
 - Applies correct naming pattern from `naming.json`
 - Sets `autoRenameFolders: true`
 
 ### Layer 2: AutoConfig Validates Settings
+
 - Confirms settings applied correctly with retry loop
 - Prevents race conditions and initialization issues
 
 ### Layer 3: PostImportFixer Hook
+
 - Catches broken folders immediately after import
 - Auto-fixes before user even notices
 - Real-time protection
 
 ### Layer 4: 30-Minute Enforcement
+
 - Continuously monitors settings via cron
 - Auto-corrects any manual UI changes or drift
 
 ### Layer 5: Hourly Folder Scan
+
 - Detects any broken folders that slip through
 - Triggers full fix pipeline automatically
 
 ### Layer 6: Daily Summary
+
 - Provides visibility into system health
 - Early warning of persistent issues
 
@@ -173,17 +193,20 @@ The implemented solution provides **6 layers of protection**:
 ## Files Modified
 
 ### New Files Created:
+
 1. `/home/tom/nas/scripts/jellyfin_rescan_library.py` - Jellyfin API helper
 2. `/mnt/docker-usb/radarr/extended/PostImportFixer.bash` - Post-import fixer hook
 3. `/home/tom/nas/logs/` directory with log files
 
 ### Modified Files:
+
 1. `/home/tom/nas/scripts/fix_radarr_folders.py` - Enhanced to handle leading dashes
 2. `/home/tom/nas/scripts/fix_radarr_db_paths.py` - Enhanced to detect `/ - ` patterns
 3. `/mnt/docker-usb/radarr/custom-services.d/AutoConfig` - Added validation loops and PostImportFixer registration
 4. Crontab - Added 3 monitoring jobs
 
 ### Backup Files Created:
+
 1. `/mnt/docker-usb/radarr/radarr.db.backup_20260220_195336`
 2. `/mnt/docker-usb/radarr/radarr.db.backup-path-fix` (multiple)
 3. `/mnt/docker-usb/jellyfin/data/data/library.db.backup_20260220_195400`
@@ -196,7 +219,7 @@ The implemented solution provides **6 layers of protection**:
 ### ✅ All Checks Passing:
 
 1. **Broken folders:** `0` (was 171)
-2. **Radarr settings:** 
+2. **Radarr settings:**
    - Folder format: ✅ Correct
    - `autoRenameFolders`: ✅ `true`
 3. **PostImportFixer:** ✅ Registered (Custom Script ID: 5)
@@ -224,30 +247,37 @@ When a new movie is downloaded, the system will:
 ## Monitoring Commands
 
 ### Check for broken folders:
+
 ```bash
 ls /mnt/drive-next/Movies/ | grep -E "(\{|^- )"
 ```
-Should return: *empty*
+
+Should return: _empty_
 
 ### Validate settings:
+
 ```bash
 cd /home/tom/nas
 export $(grep -v '^#' .env | xargs)
 python3 scripts/enforce_radarr_settings.py
 ```
+
 Should show: `✅ All critical settings are correct`
 
 ### Check PostImportFixer logs:
+
 ```bash
 docker exec radarr cat /config/logs/PostImportFixer.txt | tail -50
 ```
 
 ### View daily summary:
+
 ```bash
 cat /home/tom/nas/logs/radarr-daily-summary.log
 ```
 
 ### Check cron jobs:
+
 ```bash
 crontab -l | grep radarr
 ```
@@ -259,6 +289,7 @@ crontab -l | grep radarr
 If something goes wrong and you need to rollback:
 
 ### Restore Radarr Database:
+
 ```bash
 docker stop radarr
 cp /mnt/docker-usb/radarr/radarr.db.backup_20260220_195336 \
@@ -267,6 +298,7 @@ docker start radarr
 ```
 
 ### Restore AutoConfig:
+
 ```bash
 cp /mnt/docker-usb/radarr/custom-services.d/AutoConfig.backup_20260220_195902 \
    /mnt/docker-usb/radarr/custom-services.d/AutoConfig
@@ -274,12 +306,14 @@ docker restart radarr
 ```
 
 ### Remove cron jobs:
+
 ```bash
 crontab -e
 # Delete the 3 lines starting with "# Radarr"
 ```
 
 ### Unregister PostImportFixer:
+
 ```bash
 docker exec radarr curl -s -X DELETE \
   -H "X-Api-Key: ea321b11a5894e9195d95b77dbbe23ef" \
@@ -291,15 +325,18 @@ docker exec radarr curl -s -X DELETE \
 ## Maintenance
 
 ### Weekly:
+
 - Check `logs/radarr-daily-summary.log` for any issues
 - Verify cron jobs are running: `grep radarr /var/log/syslog`
 
 ### Monthly:
+
 - Review `/config/logs/PostImportFixer.txt` for auto-fix patterns
 - Clean old log files if they grow too large
 
 ### After Radarr Updates:
-- Verify PostImportFixer is still registered: 
+
+- Verify PostImportFixer is still registered:
   ```bash
   docker exec radarr curl -s -H "X-Api-Key: ea321b11a5894e9195d95b77dbbe23ef" \
     http://localhost:7878/api/v3/notification | jq '.[] | select(.name=="PostImportFixer")'
@@ -310,12 +347,14 @@ docker exec radarr curl -s -X DELETE \
 ## Success Metrics
 
 **Before:**
+
 - 171 movies with broken folder names
 - Settings would revert unpredictably
 - Manual fixes required every few days
 - Jellyfin database out of sync
 
 **After:**
+
 - 0 broken folders
 - 6 layers of automated protection
 - Settings enforced every 30 minutes
@@ -342,8 +381,8 @@ This comprehensive solution addresses the Radarr directory naming issue through 
 
 ---
 
-**Implementation completed:** February 20, 2026, 8:06 PM  
-**Total files fixed:** 171 movies  
-**Protection layers:** 6  
-**Monitoring frequency:** Every 30 minutes  
+**Implementation completed:** February 20, 2026, 8:06 PM
+**Total files fixed:** 171 movies
+**Protection layers:** 6
+**Monitoring frequency:** Every 30 minutes
 **Status:** ✅ PRODUCTION READY

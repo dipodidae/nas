@@ -1,0 +1,68 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Repository purpose
+
+Single-host homelab NAS stack: one `docker-compose.yml` orchestrates SWAG (reverse proxy + Let's Encrypt), the \*arr suite (Sonarr/Radarr/Lidarr/Bazarr/Prowlarr), qBittorrent, slskd, Jellyfin, Jellyseerr, Nextcloud, and Flaresolverr, plus a Vite landing page (`rootpage/`) and Python operations scripts (`scripts/`).
+
+## Authoritative docs — read these first
+
+- `AGENTS.md` — full conventions (Python style, shell style, Docker Compose rules, env var contract, exit codes). Treat as binding.
+- `.github/copilot-instructions.md` — short-form version of the same rules.
+- `README.md` — service table, ports, setup walkthrough.
+- `scripts/README.md` — per-script flags, exit codes, and the operational workflows (backup, audit, log prune, post-update verify, qBittorrent kickstart, Prowlarr priority management).
+
+The root-level `*-README.md` / `OPTIMIZATION-*.md` / `RADARR_NAMING_*.md` / `JELLYFIN-NO-TRANSCODING-*.md` files document one-off historical fixes and tuning work. They are reference material, not active runbooks — don't assume their advice is still current without checking the live config.
+
+## Common commands
+
+Most tooling is wrapped in `package.json` scripts; prefer those over raw commands.
+
+```bash
+# Stack lifecycle
+pnpm up | pnpm down | pnpm restart | pnpm logs | pnpm update
+
+# JS/TS lint (rootpage + repo)
+pnpm lint              # check
+pnpm lint:fix          # autofix
+
+# Python (scripts/ — venv at .venv)
+pnpm py:venv           # one-time: create .venv and install requirements
+pnpm py:deps           # refresh deps in existing venv
+pnpm py:lint           # ruff check scripts
+pnpm scripts:test      # legacy import/env smoke harness (scripts/test_scripts.py)
+
+# Pytest (unit tests in scripts/tests/) — no pnpm wrapper, run directly
+. .venv/bin/activate && pytest -q scripts/tests
+. .venv/bin/activate && pytest scripts/tests/test_backup.py::test_create_backup_success
+
+# Compose validation (matches CI)
+docker compose config > /dev/null
+
+# Landing page (rootpage/ is its own pnpm workspace)
+cd rootpage && pnpm install && pnpm run build   # outputs dist/, bind-mounted into SWAG
+```
+
+CI (`.github/workflows/ci.yml`) runs three gates: `docker compose config`, `pnpm lint`, and `ruff check scripts` + `python scripts/test_scripts.py` + `pytest -q scripts/tests` across Python 3.11/3.12/3.13. Match this locally before pushing.
+
+## Architecture essentials
+
+**One bridge network, one reverse proxy.** All services join `nas-network` (172.30.0.0/24). SWAG terminates TLS on `:80`/`:443` and auto-generates nginx proxy configs from container labels via the linuxserver SWAG auto-proxy mod — adding `labels: [swag=enable]` is what publishes a service on its subdomain. Internal WebUIs bind to `127.0.0.1:<port>` only; the public surface is SWAG plus the P2P ports for qBittorrent (51413) and slskd (50300) and Jellyfin's LAN ports (8096/8920/7359/1900).
+
+**Two persistence roots, both env-driven.** Every service config lives at `${CONFIG_DIRECTORY}/<service>`; media and downloads live under `${SHARE_DIRECTORY}` with lowercase subfolders (`movies/`, `series/`, `music/`, `downloads/`, `books/`, `nextcloud-data/`). Never hard-code paths — the compose file is intentionally portable across hosts. On this host (Minisforum MS01) `SHARE_DIRECTORY=/mnt/drive` is an ext4 mount.
+
+**Service dependency chain (compose `depends_on`):** prowlarr ← {sonarr, radarr, lidarr, bazarr}; qbittorrent ← {sonarr, radarr, lidarr, prowlarr}; slskd ← lidarr; jellyfin + sonarr + radarr ← jellyseerr; swag ← nextcloud. Lidarr is pinned to the `:nightly` tag; everything else uses `:latest` from `lscr.io/linuxserver/*` except slskd (no LSIO image — uses `slskd/slskd:latest` running as `${PUID}:${PGID}`), flaresolverr (ghcr.io), and jellyseerr (ghcr.io).
+
+**Hardening pattern (apply to any new service):** `security_opt: no-new-privileges:true`, `cap_drop: ALL`, selective `cap_add` (typically `CHOWN`, `SETUID`, `SETGID`, `DAC_OVERRIDE`), bind WebUI to `127.0.0.1`, include a `curl -f` or `wget --spider` healthcheck, and cap container logs (`json-file` with `max-size: 10m`, `max-file: "2"`). The header comment in `docker-compose.yml` explicitly notes Pi-era resource limits (`mem_limit`, `cpus`, `blkio_config`, `ulimit`) were removed for the MS01 host — do not reintroduce them without reason.
+
+**Scripts are operational, not deployed.** Nothing in `scripts/` runs inside containers; they are Python/Bash utilities executed from the host venv against the live services' HTTP APIs (using `API_KEY_*` env vars from `.env`) or directly against the filesystem. They share a small contract documented in `AGENTS.md`: exit `0` success / `1` partial / `2` fatal; side effects centralized in `main()`; pure logic elsewhere for testability.
+
+## Repo-specific gotchas
+
+- **Do not modify Jellyfin's volume mappings.** The owner has a standing instruction (comment at `docker-compose.yml` ~line 414) — `${SHARE_DIRECTORY}:/data/movies:ro` is intentional even though it looks misnamed.
+- **`.env` holds two distinct concerns.** Variables consumed by `docker-compose.yml` (paths, domain, Cloudflare token, qBittorrent/slskd creds) _and_ `API_KEY_*` tokens used only by `scripts/`. When you add a script that needs a new key, document it in both `.env.example` and `AGENTS.md`'s env list.
+- **Folder name casing matters.** The compose file expects lowercase subfolders under `${SHARE_DIRECTORY}` (`movies`, `series`, `music`, `downloads`, `books`, `nextcloud-data`). The README's old `Movies/Series/Music` casing is stale — trust the compose file.
+- **Watchtower is referenced but not in the compose file.** `WATCHTOWER_SCHEDULE` in `.env.example` and "only labeled containers auto-update" guidance in AGENTS.md refer to an updater that isn't currently defined. If you add auto-update logic, follow the labels-only pattern.
+- **`rootpage/dist/` is bind-mounted read-only into SWAG.** Editing source under `rootpage/src/` requires a `pnpm run build` before SWAG sees the change.
+- **`docker-compose.yml.backup.*`** is a historical snapshot, not an active file. Don't edit it.

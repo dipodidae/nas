@@ -72,23 +72,23 @@ indexer_priorities:
   CrackingPatching: 50 # Software cracks
   SkidrowRepack: 50 # Game repacks
   EBookBay: 50 # eBooks
-  
+
   # Magnet/DHT search engines
   MagnetDownload: 50 # Magnet links
   DaMagNet: 50 # Magnet search
   Catorrent: 50 # Software/PC torrents
   PC-torrent: 50 # PC software
   plugintorrent: 50 # Plugin/software
-  
+
   # Audio production software
   VST Torrentz: 50 # VST/audio software
   VSTHouse: 50 # VST/audio software
   VSTorrent: 50 # VST/audio software
-  
+
   # Media torrents
   MixtapeTorrent: 50 # Mixtapes
   MoviesDVDR: 50 # DVD releases
-  
+
   # Regional/Niche trackers
   52BT: 50 # Chinese tracker
   dmhy: 50 # Chinese anime
@@ -123,7 +123,7 @@ indexer_priorities:
   AniSource: 50 # Anime alternative
   Shana Project: 50 # Anime RSS
   Nipponsei: 50 # Japanese music
-  
+
   # Adult content (lowest priority unless specifically needed)
   sukebei.nyaa.si: 50 # Adult anime
   E-Hentai: 50 # Adult manga
@@ -135,7 +135,7 @@ indexer_priorities:
   Sexy-Pics: 50 # Adult content
   XXXClub: 50 # Adult content
   xxxtor: 50 # Adult content
-  
+
   # RSS/Generic feeds
   Torrent RSS Feed: 50 # Generic RSS feed
 

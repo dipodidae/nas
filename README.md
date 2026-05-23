@@ -11,7 +11,6 @@ This repository provides a single `docker-compose.yml` that:
 - Mounts a configurable “share” root for media and downloads.
 - Uses SWAG (nginx + Let’s Encrypt) as the front door, with the linuxserver SWAG auto-proxy mod enabled.
 
-
 Typical use case: a single Linux host (NAS or homelab) with a large storage mount for media and application configs.
 
 ## Services
@@ -31,7 +30,7 @@ All services are defined in `docker-compose.yml`.
 | `qbittorrent`  | Download client                                                 | `127.0.0.1:8080:8080`, `51413:51413/tcp`, `51413:51413/udp` | `${CONFIG_DIRECTORY}/qbittorrent:/config`, `${SHARE_DIRECTORY}/Downloads:/downloads`                                                                           |
 | `jellyfin`     | Media streaming server                                          | `8096:8096`, `8920:8920`, `7359:7359/udp`, `1900:1900/udp`  | `${CONFIG_DIRECTORY}/jellyfin:/config`, `${SHARE_DIRECTORY}:/data/movies:ro`                                                                                   |
 | `jellyseerr`   | Media requests for Jellyfin/Sonarr/Radarr                       | `127.0.0.1:5056:5056`                                       | `${CONFIG_DIRECTORY}/jellyseerr:/app/config`                                                                                                                   |
-| `nextcloud`    | Files + sync (linuxserver Nextcloud)                            | `127.0.0.1:8087:443`                                        | `${CONFIG_DIRECTORY}/nextcloud:/config`, `${SHARE_DIRECTORY}/NextcloudData:/data`, `${SHARE_DIRECTORY}:/external/drive:rw`, `/mnt/sdcard:/external/sdcard:rw` |
+| `nextcloud`    | Files + sync (linuxserver Nextcloud)                            | `127.0.0.1:8087:443`                                        | `${CONFIG_DIRECTORY}/nextcloud:/config`, `${SHARE_DIRECTORY}/NextcloudData:/data`, `${SHARE_DIRECTORY}:/external/drive:rw`, `/mnt/sdcard:/external/sdcard:rw`  |
 
 Notes:
 

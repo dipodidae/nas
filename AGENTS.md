@@ -9,12 +9,14 @@ Docker Compose-based NAS solution with media management (Jellyfin, Sonarr, Radar
 ## Build, Lint, and Test Commands
 
 ### JavaScript/TypeScript Linting
+
 ```bash
 pnpm lint              # Run ESLint on JS/TS files
 pnpm lint:fix          # Auto-fix linting issues
 ```
 
 ### Python Linting
+
 ```bash
 pnpm py:lint           # Run ruff on scripts/ directory
 # Or directly:
@@ -22,6 +24,7 @@ pnpm py:lint           # Run ruff on scripts/ directory
 ```
 
 ### Python Testing
+
 ```bash
 # Run all tests
 pnpm scripts:test
@@ -39,6 +42,7 @@ pnpm scripts:test
 ```
 
 ### Docker Operations
+
 ```bash
 pnpm up                # Start all services
 pnpm down              # Stop all services
@@ -48,6 +52,7 @@ pnpm update            # Pull images and restart
 ```
 
 ### Python Environment Setup
+
 ```bash
 pnpm py:venv           # Create venv and install dependencies
 pnpm py:deps           # Install/update dependencies in existing venv
@@ -58,12 +63,14 @@ pnpm py:deps           # Install/update dependencies in existing venv
 ### Python Scripts (`scripts/`)
 
 #### Import Order
+
 1. Standard library imports (alphabetical)
 2. Third-party imports (alphabetical)
 3. Local/relative imports (alphabetical)
 4. Blank line between each group
 
 Example:
+
 ```python
 #!/usr/bin/env python3
 """Module docstring."""
@@ -83,12 +90,14 @@ from prowlarr_config import load_prowlarr_config
 ```
 
 #### Type Hints
+
 - Always use type hints for function parameters and return values
 - Use modern type hint syntax: `list[str]` not `List[str]` (requires `from __future__ import annotations`)
 - Use `Path` for filesystem paths, not `str`
 - Use `None` for optional returns explicitly
 
 #### Function Design
+
 - Small, focused functions with single responsibility
 - Avoid boolean flag parameters—split into separate functions instead
 - Keep side effects (filesystem, network) thin and centralized in `main()`
@@ -96,6 +105,7 @@ from prowlarr_config import load_prowlarr_config
 - Use dataclasses for structured data instead of long parameter lists
 
 #### Naming Conventions
+
 - Functions/variables: `snake_case`
 - Constants: `UPPER_SNAKE_CASE`
 - Classes: `PascalCase`
@@ -103,17 +113,20 @@ from prowlarr_config import load_prowlarr_config
 - Favor meaningful names over abbreviations
 
 #### Error Handling
+
 - Catch narrow, specific exceptions where possible
 - Only use broad `except Exception:` at top-level for clean exit codes
 - Provide actionable error messages with context (paths, service names, counts)
 - Return meaningful exit codes: 0 (success), 1 (partial/warning), 2 (fatal)
 
 #### Documentation
+
 - Module-level docstring explaining purpose, usage, exit codes
 - Docstrings for public functions (one-liner or detailed)
 - Inline comments only for non-obvious logic
 
 #### Code Organization
+
 ```python
 # 1. Shebang and module docstring
 #!/usr/bin/env python3
@@ -163,6 +176,7 @@ if __name__ == "__main__":
 ## Docker Compose Guidelines
 
 ### Adding New Services
+
 - Join network: `nas-network`
 - Include lightweight healthcheck: `curl -f http://localhost:port || exit 1`
 - Use linuxserver.io images where precedent exists (justify alternatives in comment)
@@ -193,6 +207,7 @@ if __name__ == "__main__":
 ## Environment Variables
 
 Required in `.env`:
+
 - `CONFIG_DIRECTORY` - Root for service configs
 - `SHARE_DIRECTORY` - Root for media/data shares
 - `PUID`, `PGID` - User/group IDs for containers

@@ -23,6 +23,7 @@
 ## What Was Fixed
 
 ### ✅ Disk I/O Optimization
+
 - **Scheduler**: `none` → `mq-deadline` (optimal for HDD sequential reads)
 - **Read-ahead**: 2MB → 16MB (handles bitrate spikes)
 - **Queue depth**: 60 → 1024 (better throughput)
@@ -30,12 +31,14 @@
 - **Status**: ✅ **Persistent across reboots**
 
 ### ✅ Memory Management
+
 - **Swappiness**: 60 → 10 (minimize swap, prefer RAM)
 - **Cache pressure**: 30 → 10 (keep file cache longer)
 - **Dirty ratios**: Optimized for better write buffering
 - **Status**: ✅ **Persistent across reboots**
 
 ### ✅ Network Stack
+
 - **TCP buffers**: Default → 128MB max (600x increase!)
 - **TCP Fast Open**: Enabled (lower connection latency)
 - **Connection backlog**: 1024 → 4096 (handle concurrent streams)
@@ -44,12 +47,14 @@
 - **Status**: ✅ **Persistent across reboots**
 
 ### ✅ Docker/Jellyfin
+
 - **Memory limit**: 2GB → 1.5GB (freed 500MB)
 - **CPU limit**: 2.5 cores → 1.0 core (freed 1.5 cores)
 - **I/O priority**: Added weight 800 (high priority)
 - **Status**: ✅ **Permanent in docker-compose.yml**
 
 ### ✅ Nginx/SWAG
+
 - **Sendfile**: Enabled (kernel-level file transfers)
 - **TCP optimizations**: tcp_nopush, tcp_nodelay enabled
 - **Buffers**: Increased to 64KB
@@ -57,6 +62,7 @@
 - **Status**: ✅ **Permanent in nginx config**
 
 ### ✅ File System
+
 - **File descriptors**: Increased to 2M (more connections)
 - **Inotify watches**: 524K (for Sonarr/Radarr/Lidarr)
 - **Status**: ✅ **Persistent across reboots**
@@ -82,11 +88,13 @@
 ### Before Optimization
 
 **Remote 4K Streaming:**
+
 - Severe stuttering and buffering
 - Long startup times (3-5 seconds)
 - Degraded performance with multiple streams
 
 **System Resources:**
+
 - Jellyfin: 2GB/2.5 cores allocated
 - Swappiness: 60 (aggressive swapping)
 - TCP buffers: ~212KB
@@ -95,11 +103,13 @@
 ### After Optimization
 
 **Remote 4K Streaming:**
+
 - ✅ Smooth playback expected
 - ✅ Faster startup (1-2 seconds with TCP Fast Open)
 - ✅ Better handling of concurrent streams
 
 **System Resources:**
+
 - Jellyfin: 1.5GB/1.0 core (more efficient)
 - Swappiness: 10 (minimal swapping)
 - TCP buffers: 128MB (600x larger!)
@@ -110,12 +120,14 @@
 ## Files Modified/Created
 
 ### Configuration Files (Persistent)
+
 ✅ `/etc/sysctl.d/99-nas-performance.conf` - System tuning parameters
 ✅ `/etc/udev/rules.d/60-nas-disk-optimization.rules` - Disk I/O rules
 ✅ `~/nas/docker-compose.yml` - Jellyfin resource limits
 ✅ `/mnt/docker-usb/swag/nginx/proxy-confs/jellyfin.subdomain.conf` - Nginx optimization
 
 ### Scripts Created
+
 ✅ `~/nas/scripts/optimize-disk-io.sh` - Basic I/O optimization
 ✅ `~/nas/scripts/make-io-persistent.sh` - Make I/O persistent
 ✅ `~/nas/scripts/advanced-system-tuning.sh` - Advanced system tuning
@@ -126,6 +138,7 @@
 ✅ `~/nas/scripts/optimize-nginx-workers.sh` - Nginx tuning info
 
 ### Documentation Created
+
 ✅ `~/nas/PERFORMANCE-FIXES-README.md` - Basic fixes documentation
 ✅ `~/nas/ADVANCED-OPTIMIZATIONS-README.md` - Advanced tuning docs
 ✅ `~/nas/OPTIMIZATION-COMPLETE.md` - This summary
@@ -155,20 +168,22 @@
 
 ⚠️ **IMPORTANT**: Upload bandwidth is still critical!
 
-| Content Quality | Bitrate | Required Upload |
-|----------------|---------|-----------------|
-| 1080p Standard | 5-10 Mbps | 15+ Mbps |
-| 1080p High | 10-20 Mbps | 30+ Mbps |
-| 4K SDR | 40-60 Mbps | 80+ Mbps |
-| 4K HDR | 60-100 Mbps | 120+ Mbps |
-| **4K Remux** | **80-150 Mbps** | **180+ Mbps** |
+| Content Quality | Bitrate         | Required Upload |
+| --------------- | --------------- | --------------- |
+| 1080p Standard  | 5-10 Mbps       | 15+ Mbps        |
+| 1080p High      | 10-20 Mbps      | 30+ Mbps        |
+| 4K SDR          | 40-60 Mbps      | 80+ Mbps        |
+| 4K HDR          | 60-100 Mbps     | 120+ Mbps       |
+| **4K Remux**    | **80-150 Mbps** | **180+ Mbps**   |
 
 **Check your upload speed:**
+
 ```bash
 speedtest-cli
 ```
 
 If upload < 180 Mbps for 4K remux, consider:
+
 - Pre-encoding lower bitrate versions
 - Using Jellyfin quality limiting
 - Upgrading internet plan
@@ -208,6 +223,7 @@ All optimizations are persistent across reboots:
 ✅ **Nginx**: Saved in config files
 
 **Verify after reboot:**
+
 ```bash
 # After a reboot, run:
 bash ~/nas/scripts/check-streaming-status.sh
@@ -222,6 +238,7 @@ bash ~/nas/scripts/check-streaming-status.sh
 ### If stuttering persists:
 
 1. **Check upload bandwidth** (most common issue)
+
    ```bash
    speedtest-cli
    ```
@@ -235,15 +252,18 @@ bash ~/nas/scripts/check-streaming-status.sh
    - Use Jellyfin Media Player or native apps
 
 4. **Check during playback**
+
    ```bash
    docker stats jellyfin
    ```
+
    - CPU should be <10%
    - Memory should be stable
 
 ### If system seems slow:
 
 1. **Check swappiness is applied**
+
    ```bash
    cat /proc/sys/vm/swappiness  # Should be 10
    ```
@@ -268,17 +288,20 @@ bash ~/nas/scripts/check-streaming-status.sh
 ## Expected Performance Targets
 
 **Single 4K Remux Stream:**
+
 - Startup: 1-2 seconds
 - Playback: Smooth, no stuttering
 - CPU: <10%
 - RAM: ~300-500MB
 
 **Multiple Concurrent Streams:**
+
 - 3-4 streams: Should work well
 - 5-6 streams: May work (depends on upload bandwidth)
 - 7+ streams: May hit network/disk limits
 
 **Hardware Bottlenecks (in order):**
+
 1. Upload bandwidth (most common)
 2. Disk I/O (HDD: ~150 MB/s max)
 3. Network (1 Gbps = 125 MB/s max)
@@ -301,6 +324,7 @@ bash ~/nas/scripts/check-streaming-status.sh
 ### Scripts Available
 
 All scripts in `~/nas/scripts/`:
+
 - `ultimate-performance-boost.sh` - Apply everything
 - `check-streaming-status.sh` - Verify status
 - Individual optimization scripts as needed
@@ -308,6 +332,7 @@ All scripts in `~/nas/scripts/`:
 ### Documentation
 
 All docs in `~/nas/`:
+
 - `OPTIMIZATION-COMPLETE.md` - This summary
 - `PERFORMANCE-FIXES-README.md` - Basic fixes
 - `ADVANCED-OPTIMIZATIONS-README.md` - Advanced tuning
@@ -320,6 +345,7 @@ All docs in `~/nas/`:
 🎉 **Your NAS is now fully optimized for maximum streaming performance!**
 
 The disk I/O, memory, network, and application layers are all tuned for:
+
 - High-bitrate 4K remux streaming
 - Multiple concurrent users
 - Remote WAN access
@@ -328,6 +354,7 @@ The disk I/O, memory, network, and application layers are all tuned for:
 **Next step**: Test your remote streaming!
 
 If you still experience issues, it's almost certainly:
+
 1. Upload bandwidth (check with speedtest-cli)
 2. Client codec support (try different client)
 3. ISP throttling (check different times of day)
@@ -340,4 +367,4 @@ If you still experience issues, it's almost certainly:
 
 ---
 
-*Optimizations applied by Claude Code on March 2, 2026*
+_Optimizations applied by Claude Code on March 2, 2026_

@@ -13,7 +13,7 @@ networks:
     name: nas-network
     driver: bridge
     driver_opts:
-      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.enable_ip_masquerade: 'true'
     ipam:
       config:
         - subnet: 172.30.0.0/24
@@ -46,19 +46,21 @@ services:
       - EMAIL=${ADMIN_EMAIL}
     volumes:
       - ${CONFIG_DIRECTORY}/swag:/config
-      - ./rootpage/dist:/config/www/rootpage:ro
-      - ./rootpage/nginx-rootpage.conf:/config/nginx/site-confs/root.conf:ro
+      - ./webapps/4eva-rootpage/4eva-rootpage.root.conf:/config/nginx/site-confs/root.conf:ro
       - ./nginx-cache:/var/cache/nginx:rw
     ports:
-      - "443:443"
-      - "80:80"
+      - '443:443'
+      - '80:80'
     restart: unless-stopped
     networks:
       - nas-network
     labels:
       - swag=enable
+    depends_on:
+      4eva-rootpage:
+        condition: service_healthy
     healthcheck:
-      test: [CMD, curl, -f, "https://localhost:443", -k]
+      test: [CMD, curl, -f, 'https://localhost:443', -k]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -67,7 +69,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -90,8 +92,10 @@ services:
       - ${CONFIG_DIRECTORY}/sonarr:/config
       - ${SHARE_DIRECTORY}/series:/tv
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      - ${CONFIG_DIRECTORY}/arr-scripts/sonarr/custom-services.d:/custom-services.d
+      - ${CONFIG_DIRECTORY}/arr-scripts/sonarr/custom-cont-init.d:/custom-cont-init.d
     ports:
-      - "127.0.0.1:8989:8989"
+      - '127.0.0.1:8989:8989'
     restart: unless-stopped
     depends_on:
       prowlarr:
@@ -103,7 +107,7 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:8989/ping"]
+      test: [CMD, curl, -f, 'http://localhost:8989/ping']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -112,7 +116,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
@@ -135,8 +139,10 @@ services:
       - ${CONFIG_DIRECTORY}/radarr:/config
       - ${SHARE_DIRECTORY}/movies:/movies
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      - ${CONFIG_DIRECTORY}/arr-scripts/radarr/custom-services.d:/custom-services.d
+      - ${CONFIG_DIRECTORY}/arr-scripts/radarr/custom-cont-init.d:/custom-cont-init.d
     ports:
-      - "127.0.0.1:7878:7878"
+      - '127.0.0.1:7878:7878'
     restart: unless-stopped
     depends_on:
       prowlarr:
@@ -148,7 +154,7 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:7878/ping"]
+      test: [CMD, curl, -f, 'http://localhost:7878/ping']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -157,41 +163,42 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   # slskd: no linuxserver image exists; official slskd/slskd is the standard image.
   # Runs as the host PUID:PGID so it can write to the shared volumes.
   slskd:
     image: slskd/slskd:latest
     container_name: slskd
-    user: "${PUID:-1000}:${PGID:-1000}"
+    user: '${PUID:-1000}:${PGID:-1000}'
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     environment:
       - SLSKD_REMOTE_CONFIGURATION=true
-      - SLSKD_DOWNLOADS_DIR=/downloads
+      - SLSKD_DOWNLOADS_DIR=/downloads/complete/slskd
       - SLSKD_SHARED_DIR=/music
       - SLSKD_SLSK_USERNAME=${SLSKD_SLSK_USERNAME}
       - SLSKD_SLSK_PASSWORD=${SLSKD_SLSK_PASSWORD}
       - SLSKD_USERNAME=${SLSKD_USERNAME}
       - SLSKD_PASSWORD=${SLSKD_PASSWORD}
+      - SLSKD_API_KEY=${API_KEY_SLSKD}
       - TZ=${TZ:-UTC}
     volumes:
       - ${CONFIG_DIRECTORY}/slskd:/app
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
     ports:
-      - "127.0.0.1:5030:5030"   # HTTP WebUI: behind SWAG
-      - "50300:50300/tcp"        # Soulseek: must be public for P2P connections
+      - '127.0.0.1:5030:5030' # HTTP WebUI: behind SWAG
+      - '50300:50300/tcp' # Soulseek: must be public for P2P connections
     restart: unless-stopped
     networks:
       - nas-network
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, wget, --no-verbose, --tries=1, --spider, "http://localhost:5030/"]
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -200,7 +207,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   lidarr:
     image: lscr.io/linuxserver/lidarr:nightly
@@ -223,8 +230,10 @@ services:
       - ${CONFIG_DIRECTORY}/lidarr:/config
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      - ${CONFIG_DIRECTORY}/arr-scripts/lidarr/custom-services.d:/custom-services.d
+      - ${CONFIG_DIRECTORY}/arr-scripts/lidarr/custom-cont-init.d:/custom-cont-init.d
     ports:
-      - "127.0.0.1:8686:8686"
+      - '127.0.0.1:8686:8686'
     restart: unless-stopped
     depends_on:
       prowlarr:
@@ -238,7 +247,7 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:8686/ping"]
+      test: [CMD, curl, -f, 'http://localhost:8686/ping']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -247,7 +256,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
@@ -270,19 +279,22 @@ services:
       - ${CONFIG_DIRECTORY}/bazarr:/config
       - ${SHARE_DIRECTORY}/movies:/movies
       - ${SHARE_DIRECTORY}/series:/tv
+      - ${CONFIG_DIRECTORY}/subcleaner:/opt/subcleaner:ro
       - ${CLEAN_SUBTITLES_DIRECTORY}:/clean-subtitles:ro
     ports:
-      - "127.0.0.1:6767:6767"
+      - '127.0.0.1:6767:6767'
     restart: unless-stopped
     depends_on:
       prowlarr:
+        condition: service_started
+      whisper:
         condition: service_started
     networks:
       - nas-network
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:6767/ping"]
+      test: [CMD, curl, -f, 'http://localhost:6767/ping']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -291,35 +303,105 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
+  # CPU-based Whisper ASR. On the MS01's Intel CPU, `small` transcribes ~5-10x real-time.
+  # Upgrade to `medium` for better accuracy if you don't mind waiting longer per episode.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: whisper
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     environment:
-      - LOG_LEVEL=info
-      - LOG_HTML=false
-      - TZ=${TZ:-UTC}
+      - ASR_ENGINE=faster_whisper
+      - ASR_MODEL=small
+      - ASR_DEVICE=cpu
+      - ASR_MODEL_PATH=/models
+    volumes:
+      - ${CONFIG_DIRECTORY}/whisper:/models
     ports:
-      - "127.0.0.1:8191:8191"
+      - '127.0.0.1:9000:9000'
     restart: unless-stopped
     networks:
       - nas-network
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:8191/health"]
-      interval: 60s
-      timeout: 5s
+      test: [CMD, curl, -f, 'http://localhost:9000/docs']
+      interval: 120s
+      timeout: 15s
       retries: 3
-      start_period: 30s
+      start_period: 180s
     logging:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
+
+  lingarr:
+    image: lingarr/lingarr:latest
+    container_name: lingarr
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - ASPNETCORE_URLS=http://+:8080
+      - MAX_CONCURRENT_JOBS=2
+      - DB_CONNECTION=sqlite
+    volumes:
+      - ${CONFIG_DIRECTORY}/lingarr:/app/config
+      - ${SHARE_DIRECTORY}/movies:/app/movies
+      - ${SHARE_DIRECTORY}/series:/app/tv
+    ports:
+      - '127.0.0.1:9876:8080'
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  byparr:
+    image: ghcr.io/thephaseless/byparr:latest
+    container_name: byparr
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+      - LOG_LEVEL=INFO
+    ports:
+      - '127.0.0.1:8191:8191'
+    restart: unless-stopped
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8191/docs']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
@@ -340,7 +422,7 @@ services:
     volumes:
       - ${CONFIG_DIRECTORY}/prowlarr:/config
     ports:
-      - "127.0.0.1:9696:9696"
+      - '127.0.0.1:9696:9696'
     restart: unless-stopped
     depends_on:
       qbittorrent:
@@ -350,7 +432,7 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:9696/ping"]
+      test: [CMD, curl, -f, 'http://localhost:9696/ping']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -359,7 +441,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -385,16 +467,16 @@ services:
       - ${CONFIG_DIRECTORY}/qbittorrent:/config
       - ${SHARE_DIRECTORY}/downloads:/downloads
     ports:
-      - "127.0.0.1:8080:8080"
-      - "51413:51413/tcp"
-      - "51413:51413/udp"
+      - '127.0.0.1:8080:8080'
+      - '51413:51413/tcp'
+      - '51413:51413/udp'
     restart: unless-stopped
     networks:
       - nas-network
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:8080/"]
+      test: [CMD, curl, -f, 'http://localhost:8080/']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -403,7 +485,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   # NOTE: Jellyfin volume mappings are NOT to be changed per owner's instructions
   jellyfin:
@@ -427,17 +509,17 @@ services:
       - ${CONFIG_DIRECTORY}/jellyfin:/config
       - ${SHARE_DIRECTORY}:/data/movies:ro
     ports:
-      - "8096:8096"
-      - "8920:8920"
-      - "7359:7359/udp"
-      - "1900:1900/udp"
+      - '8096:8096'
+      - '8920:8920'
+      - '7359:7359/udp'
+      - '1900:1900/udp'
     networks:
       - nas-network
     restart: unless-stopped
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:8096/System/Info/Public"]
+      test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -446,7 +528,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   jellyseerr:
     image: ghcr.io/fallenbagel/jellyseerr:latest
@@ -471,7 +553,7 @@ services:
     volumes:
       - ${CONFIG_DIRECTORY}/jellyseerr:/app/config
     ports:
-      - "127.0.0.1:5056:5056"
+      - '127.0.0.1:5056:5056'
     restart: unless-stopped
     depends_on:
       jellyfin:
@@ -485,7 +567,7 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, wget, --no-verbose, --tries=1, --spider, "http://localhost:5056/api/v1/status"]
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5056/api/v1/status']
       interval: 60s
       timeout: 5s
       retries: 3
@@ -494,7 +576,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
-        max-file: "2"
+        max-file: '2'
 
   nextcloud:
     image: lscr.io/linuxserver/nextcloud:latest
@@ -523,7 +605,7 @@ services:
       - ${SHARE_DIRECTORY}/books:/external/books:rw
       - ${SHARE_DIRECTORY}/downloads:/external/downloads:rw
     ports:
-      - "127.0.0.1:8087:443"
+      - '127.0.0.1:8087:443'
     restart: unless-stopped
     depends_on:
       swag:
@@ -533,7 +615,7 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, "https://localhost:443/status.php", -k]
+      test: [CMD, curl, -f, 'https://localhost:443/status.php', -k]
       interval: 60s
       timeout: 5s
       retries: 3
@@ -542,4 +624,164 @@ services:
       driver: json-file
       options:
         max-size: 25m
-        max-file: "3"
+        max-file: '3'
+
+  lidarr-bulk:
+    build:
+      context: ./webapps/lidarr-bulk
+    image: nas/lidarr-bulk:latest
+    container_name: lidarr-bulk
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Entrypoint chowns /config then drops to `node` via su-exec; needs these
+    # caps briefly during startup, app itself runs unprivileged afterwards.
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    environment:
+      - TZ=${TZ:-UTC}
+      - NITRO_HOST=0.0.0.0
+      - NITRO_PORT=3000
+      - LIDARR_URL=http://lidarr:8686
+      - LIDARR_API_KEY=${API_KEY_LIDARR}
+      - CONFIG_DIR=/config
+      # Session login. When both username and password are set, the UI requires
+      # login and /api/* requires either a valid session cookie or bearer token.
+      - APP_USERNAME=${LIDARR_BULK_USERNAME:-}
+      - APP_PASSWORD=${LIDARR_BULK_PASSWORD:-}
+      # Optional bearer-token gate on /api/* (for programmatic clients).
+      - APP_BEARER_TOKEN=${LIDARR_BULK_BEARER_TOKEN:-}
+      - RATE_LIMIT_PER_MINUTE=30
+      - BODY_LIMIT_BYTES=262144
+    volumes:
+      - ${CONFIG_DIRECTORY}/lidarr-bulk:/config
+    ports:
+      - '127.0.0.1:3000:3000'
+    restart: unless-stopped
+    depends_on:
+      lidarr:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:3000/healthz']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  cleanuparr:
+    image: ghcr.io/cleanuparr/cleanuparr:latest
+    container_name: cleanuparr
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - PORT=11011
+    volumes:
+      - ${CONFIG_DIRECTORY}/cleanuparr:/config
+    ports:
+      - '127.0.0.1:11011:11011'
+    restart: unless-stopped
+    depends_on:
+      sonarr:
+        condition: service_started
+      radarr:
+        condition: service_started
+      lidarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_healthy
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:11011/api/v1/health']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  recyclarr:
+    image: recyclarr/recyclarr:8
+    container_name: recyclarr
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+      - CRON_SCHEDULE=0 4 * * *
+      - DOCKER_UID=${PUID:-1000}
+      - DOCKER_GID=${PGID:-1000}
+    volumes:
+      - ${CONFIG_DIRECTORY}/recyclarr:/config
+    restart: unless-stopped
+    depends_on:
+      sonarr:
+        condition: service_started
+      radarr:
+        condition: service_started
+    networks:
+      - nas-network
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  4eva-rootpage:
+    build:
+      context: ./webapps/4eva-rootpage
+    image: nas/4eva-rootpage:latest
+    container_name: 4eva-rootpage
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+    ports:
+      - '127.0.0.1:8088:8080'
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:8080/healthz']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
