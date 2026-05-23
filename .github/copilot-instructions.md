@@ -8,9 +8,9 @@ Project & Infra
 - Use linuxserver.io images where precedent exists; justify alternatives in a comment.
 - Map configs under `${CONFIG_DIRECTORY}/<service>`; never hard-code user paths or secrets.
 - Expose services via SWAG by adding label `swag=enable`; otherwise keep internal.
-- Only labeled containers auto-update (Watchtower). Explain any version pin or digest.
+- Only labeled containers auto-update (Watchtower) — opt in with `com.centurylinklabs.watchtower.enable=true`. Explain any version pin or digest.
 - Do not request privileged mode, host networking, or extra capabilities without justification.
-- Access Docker only through existing `dockerproxy`; never mount raw `/var/run/docker.sock`.
+- Access Docker only through the `dockerproxy` service (tecnativa/docker-socket-proxy at `tcp://dockerproxy:2375`); never mount raw `/var/run/docker.sock` elsewhere.
 
 Security & Secrets
 

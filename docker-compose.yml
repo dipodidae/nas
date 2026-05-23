@@ -56,6 +56,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     depends_on:
       4eva-rootpage:
         condition: service_healthy
@@ -104,6 +105,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8989/ping']
       interval: 60s
@@ -149,6 +151,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:7878/ping']
       interval: 60s
@@ -193,6 +196,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
       interval: 60s
@@ -240,6 +244,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8686/ping']
       interval: 60s
@@ -274,7 +279,6 @@ services:
       - ${SHARE_DIRECTORY}/movies:/movies
       - ${SHARE_DIRECTORY}/series:/tv
       - ${CONFIG_DIRECTORY}/subcleaner:/opt/subcleaner:ro
-      - ${CLEAN_SUBTITLES_DIRECTORY}:/clean-subtitles:ro
     ports:
       - '127.0.0.1:6767:6767'
     restart: unless-stopped
@@ -287,6 +291,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:6767/ping']
       interval: 60s
@@ -320,6 +325,8 @@ services:
     restart: unless-stopped
     networks:
       - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:9000/docs']
       interval: 120s
@@ -361,6 +368,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       disable: true
     logging:
@@ -385,6 +393,8 @@ services:
     restart: unless-stopped
     networks:
       - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8191/docs']
       interval: 60s
@@ -425,6 +435,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:9696/ping']
       interval: 60s
@@ -469,6 +480,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8080/']
       interval: 60s
@@ -512,6 +524,7 @@ services:
     restart: unless-stopped
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
       interval: 60s
@@ -560,6 +573,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5056/api/v1/status']
       interval: 60s
@@ -608,6 +622,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'https://localhost:443/status.php', -k]
       interval: 60s
@@ -624,7 +639,9 @@ services:
     build:
       context: ./webapps/lidarr-bulk
     image: nas/lidarr-bulk:latest
+    pull_policy: build
     container_name: lidarr-bulk
+    # Locally-built image: Watchtower cannot pull, so opt-out.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -710,6 +727,7 @@ services:
       - nas-network
     labels:
       - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:11011/api/v1/health']
       interval: 60s
@@ -744,6 +762,8 @@ services:
         condition: service_started
     networks:
       - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
     logging:
       driver: json-file
       options:
@@ -754,7 +774,9 @@ services:
     build:
       context: ./webapps/4eva-rootpage
     image: nas/4eva-rootpage:latest
+    pull_policy: build
     container_name: 4eva-rootpage
+    # Locally-built image: Watchtower cannot pull, so opt-out.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -774,6 +796,75 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # Read-only Docker API proxy. Exposes only the endpoints Watchtower needs
+  # (containers/images/ping/version + POST/DELETE) so Watchtower never touches
+  # /var/run/docker.sock directly. Only reachable inside nas-network.
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: dockerproxy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - PING=1
+      - VERSION=1
+      - INFO=1
+      - POST=1
+      - DELETE=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    restart: unless-stopped
+    networks:
+      - nas-network
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # Watches containers labeled com.centurylinklabs.watchtower.enable=true and
+  # pulls newer images on the schedule defined by WATCHTOWER_SCHEDULE.
+  # Talks to Docker through `dockerproxy`, not the raw socket.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+      - DOCKER_HOST=tcp://dockerproxy:2375
+      - DOCKER_API_VERSION=1.40
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_ROLLING_RESTART=true
+      - WATCHTOWER_REMOVE_VOLUMES=false
+    depends_on:
+      dockerproxy:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - nas-network
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:

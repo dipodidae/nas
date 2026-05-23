@@ -601,8 +601,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--container-downloads",
         type=str,
-        default="/downloads",
-        help="Container path to downloads directory (default: /downloads)",
+        default="/downloads/complete/slskd",
+        help="Container path to downloads directory (default: /downloads/complete/slskd)",
     )
     parser.add_argument(
         "--skip-queue-tracked",
@@ -643,8 +643,8 @@ def main(argv: list[str] | None = None) -> int:
     lidarr_url = args.lidarr_url or os.environ.get(
         "LIDARR_URL", "http://127.0.0.1:8686",
     )
-    share_dir = os.environ.get("SHARE_DIRECTORY", "/mnt/drive-next")
-    host_downloads = args.downloads_dir or Path(share_dir) / "Downloads"
+    share_dir = os.environ.get("SHARE_DIRECTORY", "/mnt/drive")
+    host_downloads = args.downloads_dir or Path(share_dir) / "downloads" / "complete" / "slskd"
 
     if not host_downloads.is_dir():
         log.error("Downloads directory not found: %s", host_downloads)

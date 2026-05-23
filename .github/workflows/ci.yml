@@ -26,7 +26,6 @@ jobs:
           echo 'QBITTORRENT_USER=dummy' >> .env
           echo 'QBITTORRENT_PASS=dummy_pass' >> .env
           echo 'WATCHTOWER_SCHEDULE=0 0 4 * * *' >> .env
-          # Intentionally leave CLEAN_SUBTITLES_DIRECTORY unset to exercise fallback path
       - name: Validate docker-compose.yml
         run: docker compose config > /dev/null
 

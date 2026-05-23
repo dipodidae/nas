@@ -24,13 +24,15 @@ All services are defined in `docker-compose.yml`.
 | `radarr`       | Movie management                                                | `127.0.0.1:7878:7878`                                       | `${CONFIG_DIRECTORY}/radarr:/config`, `${SHARE_DIRECTORY}/Movies:/movies`, `${SHARE_DIRECTORY}/Downloads:/downloads`                                           |
 | `lidarr`       | Music collection management                                     | `127.0.0.1:8686:8686`                                       | `${CONFIG_DIRECTORY}/lidarr:/config`, `${SHARE_DIRECTORY}/Music:/music`, `${SHARE_DIRECTORY}/Downloads:/downloads`                                             |
 | `slskd`        | Soulseek P2P client                                             | `127.0.0.1:5030:5030`, `50300:50300/tcp`                    | `${CONFIG_DIRECTORY}/slskd:/app`, `${SHARE_DIRECTORY}/Music:/music`, `${SHARE_DIRECTORY}/Downloads:/downloads`                                                 |
-| `bazarr`       | Subtitle management                                             | `127.0.0.1:6767:6767`                                       | `${CONFIG_DIRECTORY}/bazarr:/config`, `${SHARE_DIRECTORY}/Movies:/movies`, `${SHARE_DIRECTORY}/Series:/tv`, `${CLEAN_SUBTITLES_DIRECTORY}:/clean-subtitles:ro` |
+| `bazarr`       | Subtitle management                                             | `127.0.0.1:6767:6767`                                       | `${CONFIG_DIRECTORY}/bazarr:/config`, `${SHARE_DIRECTORY}/movies:/movies`, `${SHARE_DIRECTORY}/series:/tv`, `${CONFIG_DIRECTORY}/subcleaner:/opt/subcleaner:ro` |
 | `flaresolverr` | Cloudflare challenge bypass proxy (used by Prowlarr)            | `127.0.0.1:8191:8191`                                       | None                                                                                                                                                           |
 | `prowlarr`     | Indexer management                                              | `127.0.0.1:9696:9696`                                       | `${CONFIG_DIRECTORY}/prowlarr:/config`                                                                                                                         |
 | `qbittorrent`  | Download client                                                 | `127.0.0.1:8080:8080`, `51413:51413/tcp`, `51413:51413/udp` | `${CONFIG_DIRECTORY}/qbittorrent:/config`, `${SHARE_DIRECTORY}/Downloads:/downloads`                                                                           |
 | `jellyfin`     | Media streaming server                                          | `8096:8096`, `8920:8920`, `7359:7359/udp`, `1900:1900/udp`  | `${CONFIG_DIRECTORY}/jellyfin:/config`, `${SHARE_DIRECTORY}:/data/movies:ro`                                                                                   |
 | `jellyseerr`   | Media requests for Jellyfin/Sonarr/Radarr                       | `127.0.0.1:5056:5056`                                       | `${CONFIG_DIRECTORY}/jellyseerr:/app/config`                                                                                                                   |
 | `nextcloud`    | Files + sync (linuxserver Nextcloud)                            | `127.0.0.1:8087:443`                                        | `${CONFIG_DIRECTORY}/nextcloud:/config`, `${SHARE_DIRECTORY}/NextcloudData:/data`, `${SHARE_DIRECTORY}:/external/drive:rw`, `/mnt/sdcard:/external/sdcard:rw`  |
+| `dockerproxy`  | Read-only Docker API proxy (tecnativa/docker-socket-proxy)      | none (internal `tcp://dockerproxy:2375`)                    | `/var/run/docker.sock:/var/run/docker.sock:ro`                                                                                                                 |
+| `watchtower`   | Scheduled image updater for labeled containers                  | none                                                        | none (talks to Docker through `dockerproxy`)                                                                                                                   |
 
 Notes:
 
@@ -134,7 +136,6 @@ The compose file uses the following variables (see `.env.example`):
 - `CLOUDFLARE_API_TOKEN`: used by `swag` for DNS validation.
 - `JELLYFIN_PUBLISHED_URL`: passed to Jellyfin as `JELLYFIN_PublishedServerUrl`.
 - `QBITTORRENT_USER`, `QBITTORRENT_PASS`: passed into the qBittorrent container.
-- `CLEAN_SUBTITLES_DIRECTORY`: read-only mount used by Bazarr for pre-cleaned subtitle files.
 
 ### Script-only environment variables
 
@@ -176,6 +177,18 @@ To manually pull newer images and recreate containers:
 ```bash
 docker compose pull
 docker compose up -d
+```
+
+For automatic updates, the stack runs **Watchtower** on a schedule (`WATCHTOWER_SCHEDULE`, default `0 0 4 * * *` — daily at 04:00). It only acts on services labeled `com.centurylinklabs.watchtower.enable=true` and talks to Docker through the `dockerproxy` service rather than `/var/run/docker.sock` directly. Locally-built images (`lidarr-bulk`, `4eva-rootpage`) are intentionally unlabeled — Watchtower cannot pull them and will skip with a `pull access denied` warning if labeled by mistake.
+
+To verify a Watchtower run on demand (monitor only, no restarts):
+
+```bash
+docker run --rm --network nas-network \
+  -e DOCKER_HOST=tcp://dockerproxy:2375 \
+  -e DOCKER_API_VERSION=1.40 \
+  containrrr/watchtower:latest \
+  --run-once --label-enable --monitor-only
 ```
 
 ### Check logs

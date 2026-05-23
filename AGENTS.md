@@ -183,10 +183,10 @@ if __name__ == "__main__":
 - Config volumes: `${CONFIG_DIRECTORY}/<service>:/config`
 - Never hard-code user paths or secrets—use env vars
 - Expose via SWAG: add label `swag=enable` (otherwise keep internal)
-- Only labeled containers auto-update (Watchtower)
+- Only labeled containers auto-update (Watchtower). Add `com.centurylinklabs.watchtower.enable=true` to opt a service into auto-updates; omit it for locally-built images or anything you want to upgrade manually.
 - Explain version pins or digest usage in comments
 - Security: never request privileged mode, host networking, or extra capabilities without justification
-- Access Docker only through existing `dockerproxy` pattern; never mount raw `/var/run/docker.sock`
+- Access Docker only through the existing `dockerproxy` service (tecnativa/docker-socket-proxy on `tcp://dockerproxy:2375`); never mount raw `/var/run/docker.sock` into any other container.
 
 ## Security & Secrets
 
@@ -217,7 +217,6 @@ Required in `.env`:
 - `CLOUDFLARE_API_TOKEN` - For DNS validation
 - `JELLYFIN_PUBLISHED_URL` - Public URL for Jellyfin
 - `QBITTORRENT_USER`, `QBITTORRENT_PASS` - qBittorrent WebUI credentials
-- `CLEAN_SUBTITLES_DIRECTORY` - Path to clean subtitles for Bazarr
 - `API_KEY_PROWLARR` - Prowlarr API key (used by scripts)
 - `API_KEY_LIDARR` - Lidarr API key (used by scripts)
 - `API_KEY_SLSKD` - slskd API key (used by scripts)
