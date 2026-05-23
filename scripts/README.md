@@ -307,6 +307,20 @@ python scripts/log_pruner.py --roots /custom/logs --dry-run
 
 Environment: `LOG_PRUNE_MAX_MB` (default 25), `LOG_PRUNE_MIN_AGE_DAYS` (1), `LOG_PRUNE_COMPRESS` (true/false).
 
+### `slskd_rescan.py`
+
+Forces slskd to rescan `SLSKD_SHARED_DIR` (`/music`). slskd scans only at startup; if the share is empty or unmounted at that moment, the stack silently advertises zero files to Soulseek peers, which triggers heavy peer-side throttling (`Transfer rejected: Overwhelmed with requests`). A periodic rescan ensures newly imported albums become available to peers and keeps the share advertised as non-empty.
+
+```bash
+python scripts/slskd_rescan.py              # fire and forget
+python scripts/slskd_rescan.py --wait       # block until scan finishes, report counts
+python scripts/slskd_rescan.py --dry-run    # print intended action
+```
+
+Exit codes: `0` success, `1` scan completed with empty share (mount/perms issue), `2` fatal (config / network / HTTP error).
+
+Environment: `API_KEY_SLSKD` (required), `SLSKD_HOST` (default `http://localhost:5030`).
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. Add cron/systemd timers as needed, for example:
@@ -317,6 +331,9 @@ All new scripts are included in `test_scripts.py` for import validation. Add cro
 
 # Hourly post-update verification (or triggered by Watchtower hook)
 0 * * * * /usr/bin/env bash -c 'cd /home/<username>/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/verify.log 2>&1'
+
+# Daily 03:30 slskd share rescan (keeps Soulseek peers seeing real share contents)
+30 3 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
 ```
 
 ### Common Issues
