@@ -92,8 +92,6 @@ services:
       - ${CONFIG_DIRECTORY}/sonarr:/config
       - ${SHARE_DIRECTORY}/series:/tv
       - ${SHARE_DIRECTORY}/downloads:/downloads
-      - ${CONFIG_DIRECTORY}/arr-scripts/sonarr/custom-services.d:/custom-services.d
-      - ${CONFIG_DIRECTORY}/arr-scripts/sonarr/custom-cont-init.d:/custom-cont-init.d
     ports:
       - '127.0.0.1:8989:8989'
     restart: unless-stopped
@@ -139,8 +137,6 @@ services:
       - ${CONFIG_DIRECTORY}/radarr:/config
       - ${SHARE_DIRECTORY}/movies:/movies
       - ${SHARE_DIRECTORY}/downloads:/downloads
-      - ${CONFIG_DIRECTORY}/arr-scripts/radarr/custom-services.d:/custom-services.d
-      - ${CONFIG_DIRECTORY}/arr-scripts/radarr/custom-cont-init.d:/custom-cont-init.d
     ports:
       - '127.0.0.1:7878:7878'
     restart: unless-stopped
@@ -230,8 +226,6 @@ services:
       - ${CONFIG_DIRECTORY}/lidarr:/config
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
-      - ${CONFIG_DIRECTORY}/arr-scripts/lidarr/custom-services.d:/custom-services.d
-      - ${CONFIG_DIRECTORY}/arr-scripts/lidarr/custom-cont-init.d:/custom-cont-init.d
     ports:
       - '127.0.0.1:8686:8686'
     restart: unless-stopped
