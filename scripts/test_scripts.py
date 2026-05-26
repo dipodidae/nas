@@ -116,7 +116,9 @@ def main():
     ("scripts/qbittorrent_stalled_kickstart.py", "qbittorrent-stalled-kickstart"),
     ("scripts/slskd_rescan.py", "slskd-rescan"),
     ("scripts/slskd_cleanup.py", "slskd-cleanup"),
+    ("scripts/slskd_complete_sweep.py", "slskd-complete-sweep"),
     ("scripts/lidarr_queue_unstick.py", "lidarr-queue-unstick"),
+    ("scripts/lidarr_purge_empty_artists.py", "lidarr-purge-empty-artists"),
   ]
 
   for script_path, script_name in scripts:

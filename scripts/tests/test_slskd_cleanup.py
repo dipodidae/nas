@@ -214,23 +214,55 @@ def test_filter_old_enough_within_window():
   assert ids_skipped == {"id-4", "id-5"}
 
 
-def test_partition_by_gate_idle_returns_all_deletable():
+def test_partition_by_gate_no_active_names_returns_all_deletable():
   stale = cleanup.collect_stale(_make_downloads())
-  deletable, deferred = cleanup.partition_by_gate(stale, lidarr_busy=False)
+  deletable, deferred = cleanup.partition_by_gate(stale, active_names=set())
   assert {t.transfer_id for t in deletable} == {"id-1", "id-2", "id-4", "id-5"}
   assert deferred == []
 
 
-def test_partition_by_gate_busy_defers_only_succeeded():
-  # _make_downloads() has:
-  #   id-1: `Completed, Succeeded`  -> deferred when Lidarr is busy
-  #   id-2: `Completed, Errored`    -> always deletable (terminal failure)
-  #   id-4: `Completed, Rejected`   -> always deletable (terminal failure)
-  #   id-5: `Completed, Succeeded`  -> deferred when Lidarr is busy
+def test_partition_by_gate_none_active_names_returns_all_deletable():
   stale = cleanup.collect_stale(_make_downloads())
-  deletable, deferred = cleanup.partition_by_gate(stale, lidarr_busy=True)
-  assert {t.transfer_id for t in deletable} == {"id-2", "id-4"}
-  assert {t.transfer_id for t in deferred} == {"id-1", "id-5"}
+  deletable, deferred = cleanup.partition_by_gate(stale, active_names=None)
+  assert {t.transfer_id for t in deletable} == {"id-1", "id-2", "id-4", "id-5"}
+  assert deferred == []
+
+
+def test_partition_by_gate_only_defers_matched_succeeded():
+  # _make_downloads() has:
+  #   id-1: `Completed, Succeeded` local_dirname=Filosofem
+  #   id-2: `Completed, Errored`   (terminal failure — always deletable)
+  #   id-4: `Completed, Rejected`  (terminal failure — always deletable)
+  #   id-5: `Completed, Succeeded` local_dirname="" (empty -> can never match)
+  # Active name "Filosofem" should defer id-1 only.
+  stale = cleanup.collect_stale(_make_downloads())
+  deletable, deferred = cleanup.partition_by_gate(stale, active_names={"Filosofem"})
+  assert {t.transfer_id for t in deletable} == {"id-2", "id-4", "id-5"}
+  assert {t.transfer_id for t in deferred} == {"id-1"}
+
+
+def test_partition_by_gate_unmatched_succeeded_is_deletable():
+  # Active names that match nothing in the slskd batch -> nothing deferred,
+  # all rows (including Succeeded) returned as deletable.
+  stale = cleanup.collect_stale(_make_downloads())
+  deletable, deferred = cleanup.partition_by_gate(
+    stale, active_names={"SomeOtherAlbum"}
+  )
+  assert {t.transfer_id for t in deletable} == {"id-1", "id-2", "id-4", "id-5"}
+  assert deferred == []
+
+
+def test_partition_by_gate_terminal_failure_never_deferred_even_if_matched():
+  # Even if a terminal-failure record's name happens to be in active_names,
+  # it never has a Tubifarry-side actor, so it's still deletable.
+  stale = cleanup.collect_stale(_make_downloads())
+  deletable, deferred = cleanup.partition_by_gate(
+    stale, active_names={"Filosofem", "Democracy"}
+  )
+  # id-4 (Rejected) has local_dirname=Democracy — but Rejected is terminal,
+  # so it stays deletable. Only id-1 (Succeeded, Filosofem) is deferred.
+  assert {t.transfer_id for t in deferred} == {"id-1"}
+  assert "id-4" in {t.transfer_id for t in deletable}
 
 
 def test_active_lidarr_states_includes_importFailed():

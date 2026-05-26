@@ -24,14 +24,17 @@ What this script does
 
 Safety rails (avoid racing the Tubifarry / Lidarr import flow)
 --------------------------------------------------------------
-- **Lidarr-quiet gate** (selective): if any Lidarr queue item is in
+- **Lidarr-quiet gate** (per-transfer): build the set of dir basenames
+  referenced by *active* Lidarr queue items (in
   `downloading` / `importPending` / `importing` / `importBlocked` /
-  `importFailed`, defer deletion of `Completed, Succeeded` records — Tubifarry
-  may still be importing them, OR `lidarr_queue_unstick.py` is about to issue
-  a DELETE through Tubifarry to clear the matching slskd record. Either way,
-  we let Lidarr's side win that race. Terminal-failure states (`Completed,
-  Errored / Rejected / Cancelled`) are still cleaned — they will never trigger
-  a Tubifarry callback, so gating them just lets them pile up indefinitely.
+  `importFailed`). Defer a `Completed, Succeeded` slskd record only if its
+  `local_dirname` is in that set — Tubifarry may still be importing it, OR
+  `lidarr_queue_unstick.py` is about to issue a DELETE through Tubifarry to
+  clear the matching slskd record. Either way, we let Lidarr's side win that
+  race. Succeeded records that no Lidarr queue item references are safe to
+  clean even while other items are mid-flow. Terminal-failure states
+  (`Completed, Errored / Rejected / Cancelled`) are always cleaned — they
+  will never trigger a Tubifarry callback.
 - **Per-record age gate**: only delete a slskd record whose `endedAt` is
   older than `--min-age-hours` (default 1). Records with no `endedAt` (very
   old slskd schemas) are skipped conservatively.
@@ -224,46 +227,63 @@ def filter_old_enough(
 
 
 def partition_by_gate(
-  stale: list[StaleTransfer], *, lidarr_busy: bool
+  stale: list[StaleTransfer], *, active_names: set[str] | None
 ) -> tuple[list[StaleTransfer], list[StaleTransfer]]:
   """Split stale transfers into (deletable_now, deferred) by the Lidarr gate.
 
-  When Lidarr has items mid-flow, `Completed, Succeeded` records are deferred
-  (Tubifarry may still be importing them). All other terminal-failure
-  `Completed,*` states are returned as deletable regardless.
+  ``active_names`` is the set of dir basenames currently referenced by active
+  Lidarr queue items (see :func:`lidarr_active_names`). Only
+  ``Completed, Succeeded`` rows whose ``local_dirname`` appears in that set
+  are deferred — Tubifarry / lidarr_queue_unstick may still act on them.
+  All other rows (including terminal-failure ``Completed, *`` states) are
+  always deletable. ``None`` or empty ``active_names`` means no deferrals.
   """
-  if not lidarr_busy:
+  if not active_names:
     return stale, []
   deletable: list[StaleTransfer] = []
   deferred: list[StaleTransfer] = []
   for transfer in stale:
-    if transfer.state == GATED_COMPLETED_STATE:
+    if (
+      transfer.state == GATED_COMPLETED_STATE
+      and transfer.local_dirname
+      and transfer.local_dirname in active_names
+    ):
       deferred.append(transfer)
     else:
       deletable.append(transfer)
   return deletable, deferred
 
 
-def lidarr_active_imports(host: str, api_key: str) -> int:
-  """Return how many Lidarr queue items are mid-flow (downloading/importing).
+def lidarr_active_names(host: str, api_key: str) -> set[str] | None:
+  """Return basenames of dirs referenced by active Lidarr queue items.
 
-  Returns -1 if Lidarr is unreachable — caller should treat that as
-  "unknown" and decline to delete anything.
+  "Active" means the item's ``trackedDownloadState`` is in
+  :data:`ACTIVE_LIDARR_STATES`. We extract every available path-like field
+  (``outputPath``, ``downloadForcedClientPath``, ``title``) and reduce each
+  to its basename so it can be compared against
+  :class:`StaleTransfer.local_dirname`. Returns ``None`` if Lidarr is
+  unreachable — caller should treat that as "unknown" and decline to act.
   """
   url = f"{host}/api/v1/queue?pageSize=200&includeUnknownArtistItems=true"
   try:
     status, body = _request("GET", url, api_key, header="X-Api-Key")
   except urllib.error.URLError:
-    return -1
+    return None
   if status >= 400:
-    return -1
+    return None
   try:
     records = json.loads(body).get("records", [])
   except (TypeError, ValueError, json.JSONDecodeError):
-    return -1
-  return sum(
-    1 for r in records if r.get("trackedDownloadState") in ACTIVE_LIDARR_STATES
-  )
+    return None
+  names: set[str] = set()
+  for r in records:
+    if r.get("trackedDownloadState") not in ACTIVE_LIDARR_STATES:
+      continue
+    for key in ("outputPath", "downloadForcedClientPath", "title"):
+      val = r.get(key)
+      if isinstance(val, str) and val:
+        names.add(os.path.basename(val.rstrip("/").rstrip("\\")))
+  return names
 
 
 def delete_transfer(host: str, api_key: str, transfer: StaleTransfer) -> bool:
@@ -363,10 +383,10 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.get("INCOMPLETE_DIR", DEFAULT_INCOMPLETE_DIR)
   )
 
-  lidarr_busy = 0
+  active_names: set[str] | None = None
   if lidarr_key and not args.skip_lidarr_check:
-    lidarr_busy = lidarr_active_imports(lidarr_host, lidarr_key)
-    if lidarr_busy < 0:
+    active_names = lidarr_active_names(lidarr_host, lidarr_key)
+    if active_names is None:
       print(
         "ERROR: cannot reach Lidarr to verify the queue is idle; "
         "refusing to touch slskd records",
@@ -385,13 +405,14 @@ def main(argv: list[str] | None = None) -> int:
     print("nothing to clean: 0 Completed transfers, 0 dirs")
     return 0
 
-  if lidarr_busy > 0 and not args.skip_lidarr_check:
-    all_stale, deferred = partition_by_gate(all_stale, lidarr_busy=True)
-    print(
-      f"Lidarr has {lidarr_busy} item(s) downloading/importing — "
-      f"deferring {len(deferred)} 'Completed, Succeeded' record(s); "
-      f"will still clean {len(all_stale)} terminal-failure record(s)"
-    )
+  if active_names and not args.skip_lidarr_check:
+    all_stale, deferred = partition_by_gate(all_stale, active_names=active_names)
+    if deferred:
+      print(
+        f"Lidarr has {len(active_names)} active name(s) — "
+        f"deferring {len(deferred)} matched 'Completed, Succeeded' record(s); "
+        f"will still clean {len(all_stale)} unmatched record(s)"
+      )
     if not all_stale:
       return 0
 
