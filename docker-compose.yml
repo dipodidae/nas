@@ -803,8 +803,10 @@ services:
         max-file: '2'
 
   # Read-only Docker API proxy. Exposes only the endpoints Watchtower needs
-  # (containers/images/ping/version + POST/DELETE) so Watchtower never touches
-  # /var/run/docker.sock directly. Only reachable inside nas-network.
+  # (containers/images/networks/ping/version + POST/DELETE) so Watchtower never
+  # touches /var/run/docker.sock directly. Only reachable inside nas-network.
+  # NETWORKS=1 is required for Watchtower to disconnect/reconnect containers
+  # on the custom nas-network during the recreate flow.
   dockerproxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: dockerproxy
@@ -815,6 +817,7 @@ services:
     environment:
       - CONTAINERS=1
       - IMAGES=1
+      - NETWORKS=1
       - PING=1
       - VERSION=1
       - INFO=1

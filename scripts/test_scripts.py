@@ -114,6 +114,9 @@ def main():
     ("scripts/post_update_verifier.py", "post-update-verifier"),
     ("scripts/log_pruner.py", "log-pruner"),
     ("scripts/qbittorrent_stalled_kickstart.py", "qbittorrent-stalled-kickstart"),
+    ("scripts/slskd_rescan.py", "slskd-rescan"),
+    ("scripts/slskd_cleanup.py", "slskd-cleanup"),
+    ("scripts/lidarr_queue_unstick.py", "lidarr-queue-unstick"),
   ]
 
   for script_path, script_name in scripts:

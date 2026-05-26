@@ -86,12 +86,14 @@ export function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promis
 }
 
 // Adding a specific album: tell Lidarr to add the album + its artist with
-// monitor=none for other albums, then search the new album by id.
-// Body shape per Lidarr v1: POST /api/v1/album with foreignAlbumId + artist {}
-// + addOptions, monitored=true. If the artist already exists Lidarr links it.
+// monitor=none for other albums, then explicitly monitor the just-added album
+// + its parent artist. Lidarr applies the artist's addOptions.monitor to the
+// album too, so the top-level `monitored: true` on the POST body is ignored —
+// we PUT /album/monitor and /artist/editor afterward to force the right state.
+// If the artist already exists Lidarr links it (PUT is a no-op in that case).
 export interface AddAlbumOptions extends AddArtistOptions {}
 
-export function addAlbum(c: LidarrAlbumCandidate, o: AddAlbumOptions): Promise<{ id: number }> {
+export async function addAlbum(c: LidarrAlbumCandidate, o: AddAlbumOptions): Promise<{ id: number, artistId: number }> {
   const artistFid = typeof c.artist === 'string' ? undefined : c.artist?.foreignArtistId
   const artistName = typeof c.artist === 'string' ? c.artist : c.artist?.artistName
   const body = {
@@ -112,7 +114,23 @@ export function addAlbum(c: LidarrAlbumCandidate, o: AddAlbumOptions): Promise<{
       },
     },
   }
-  return call('/api/v1/album', { method: 'POST', body: JSON.stringify(body) })
+  const created = await call<{ id: number, artistId: number }>(
+    '/api/v1/album',
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+  if (created?.artistId) {
+    await call('/api/v1/artist/editor', {
+      method: 'PUT',
+      body: JSON.stringify({ artistIds: [created.artistId], monitored: true }),
+    })
+  }
+  if (created?.id) {
+    await call('/api/v1/album/monitor', {
+      method: 'PUT',
+      body: JSON.stringify({ albumIds: [created.id], monitored: true }),
+    })
+  }
+  return created
 }
 
 export function commandSearchArtist(artistId: number): Promise<unknown> {

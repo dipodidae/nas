@@ -321,6 +321,52 @@ Exit codes: `0` success, `1` scan completed with empty share (mount/perms issue)
 
 Environment: `API_KEY_SLSKD` (required), `SLSKD_HOST` (default `http://localhost:5030`).
 
+### `slskd_cleanup.py`
+
+Clears stale slskd `Completed, *` transfer rows that Tubifarry (Lidarr's slskd plugin) leaves behind after Lidarr imports a download. Tubifarry only removes a transfer record while the item is still in Lidarr's queue; once Lidarr drops the queue entry, the slskd row sits in `Completed, Succeeded` / `Errored` / `Rejected` state forever and slowly clogs slskd's transfer manager + peer connection state. Run hourly to keep the channel clean.
+
+Safety design — does **not** conflict with the Lidarr/Tubifarry flow:
+
+1. **Lidarr-quiet gate (selective)** — if any Lidarr queue item is in `downloading` / `importPending` / `importing` / `importBlocked`, the script defers `Completed, Succeeded` deletions only (Tubifarry may still be importing them). Terminal-failure states (`Completed, Errored / Rejected / Cancelled`) are still cleaned in the same run — they will never trigger a Tubifarry callback, so leaving them gated lets them pile up indefinitely and re-clog the slskd transfer manager.
+2. **Per-record age gate** — only deletes records whose `endedAt` is older than `--min-age-hours` (default `1`). Records without `endedAt` are skipped conservatively.
+3. **Per-dir age gate** — only removes `/downloads/incomplete/<name>` whose mtime is older than the same threshold.
+4. **Name allowlist on disk** — only ever deletes incomplete dirs that slskd itself listed in the transfer it just removed. qBittorrent shares `/downloads/incomplete` with slskd (as its `Session\TempPath`), so this is critical: indiscriminate sweeps would destroy in-progress torrents.
+
+```bash
+python scripts/slskd_cleanup.py                       # clean now
+python scripts/slskd_cleanup.py --dry-run             # report only
+python scripts/slskd_cleanup.py --min-age-hours 6     # extra safety buffer
+python scripts/slskd_cleanup.py --keep-dirs           # clear API rows only, leave fs
+python scripts/slskd_cleanup.py --skip-lidarr-check   # bypass the quiet gate (manual one-offs)
+```
+
+Exit codes: `0` success or nothing to do, `1` partial (some API deletes / fs ops failed), `2` fatal (config / network).
+
+Environment: `API_KEY_SLSKD` (required), `API_KEY_LIDARR` (required for the quiet-gate), `SLSKD_HOST` (default `http://localhost:5030`), `LIDARR_HOST` (default `http://localhost:8686`), `INCOMPLETE_DIR` (default `/mnt/drive/downloads/incomplete`).
+
+### `lidarr_queue_unstick.py`
+
+Removes Lidarr queue items wedged in `completed / importFailed` state. These accumulate when slskd peers deliver a download that Lidarr can't accept — typically `Album release not requested` (peer sent a different MusicBrainz release than the one Lidarr asked for) or `Album match is not close enough: X% vs 80%`. Lidarr has no built-in "remove failed import after N hours" setting; `autoRedownloadFailed` only fires for download-side failures, so these rows live forever, block Tubifarry from clearing the matching slskd transfer, and gum up the whole pipeline. Run hourly to keep throughput high.
+
+For each eligible row the script issues `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=false`. That drops the queue entry, kills the slskd transfer record via Tubifarry, blocklists the specific release so it isn't re-grabbed, and asks Lidarr to search for a different release.
+
+Safety design:
+
+1. **State gate** — only rows with `trackedDownloadState == importFailed` are touched. Downloading / importing rows are left strictly alone.
+2. **Age gate** — only deletes rows whose `added` timestamp is older than `--min-age-hours` (default `1`). Rows missing `added` are skipped conservatively.
+
+```bash
+python scripts/lidarr_queue_unstick.py                       # clean now (1h age gate)
+python scripts/lidarr_queue_unstick.py --dry-run             # report only
+python scripts/lidarr_queue_unstick.py --min-age-hours 0     # immediate (manual one-off)
+python scripts/lidarr_queue_unstick.py --skip-redownload     # blocklist without auto re-search
+python scripts/lidarr_queue_unstick.py --no-blocklist        # remove only (not recommended — Tubifarry will re-grab the same junk)
+```
+
+Exit codes: `0` success or nothing to do, `1` partial (some deletes failed), `2` fatal (config / network / HTTP error).
+
+Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localhost:8686`).
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. Add cron/systemd timers as needed, for example:
@@ -334,7 +380,23 @@ All new scripts are included in `test_scripts.py` for import validation. Add cro
 
 # Daily 03:30 slskd share rescan (keeps Soulseek peers seeing real share contents)
 30 3 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
+
+# Hourly Tubifarry/slskd "clog" cleanup — must run in this order, mutex-locked
+# 1. :07 — drain Lidarr's importFailed queue first; Tubifarry clears the matching slskd records as it goes
+07 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/lidarr_queue_unstick.py >> logs/lidarr_queue_unstick.log 2>&1"
+# 2. :37 — direct slskd sweep picks up anything Lidarr never tracked (errored/rejected/cancelled transfers)
+37 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_cleanup.py >> logs/slskd_cleanup.log 2>&1"
 ```
+
+#### Concurrency and race-safety
+
+The two cleanup scripts target overlapping state (a Lidarr `importFailed` queue item is backed by a `Completed, Succeeded` slskd transfer) and could in principle fight each other or fight Tubifarry's own import flow. They are designed not to:
+
+1. **Mutex via `flock`** — both cron entries share `/tmp/nas-tubifarry-cleanup.lock` with `flock -n`, so a second invocation while the first is running exits immediately (next hour will pick it up). This covers cron overrun *and* manual one-offs that fire during a scheduled run.
+2. **Schedule ordering** — `lidarr_queue_unstick` runs first (`:07`), `slskd_cleanup` second (`:37`). Within each hour the Lidarr→Tubifarry→slskd path drains first, then the direct slskd sweep mops up what was never tied to Lidarr (errored peer transfers, rejected handshakes, cancelled grabs).
+3. **State-aware deferrals in `slskd_cleanup`** — `Completed, Succeeded` is deferred whenever any Lidarr queue item is in `downloading / importPending / importing / importBlocked / importFailed`. Tubifarry's own import flow owns the first four; `lidarr_queue_unstick` owns the fifth. Either way `slskd_cleanup` declines to race a Lidarr-side actor for the same transfer ID. Terminal-failure slskd states (`Completed, Errored / Rejected / Cancelled`) have no Lidarr-side actor and are always safe to clean.
+4. **Strict state filters in `lidarr_queue_unstick`** — only `trackedDownloadState == 'importFailed'` rows are touched. `importPending` / `importing` rows (mid-flight in Tubifarry's import pipeline) are never targeted, so the script cannot pull a queue item out from under an active import.
+5. **Age gates on both sides** — `slskd_cleanup` requires `endedAt` older than `--min-age-hours` (default 1h); `lidarr_queue_unstick` requires `added` older than the same threshold. Rows without timestamps are conservatively skipped. This means in-progress workflows (which are sub-hour) are structurally excluded from cleanup.
 
 ### Common Issues
 
