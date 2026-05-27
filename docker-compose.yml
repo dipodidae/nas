@@ -196,7 +196,6 @@ services:
     ports:
       - '127.0.0.1:5030:5030' # slskd WebUI (behind SWAG)
       - '127.0.0.1:8080:8080' # qbittorrent WebUI (behind SWAG)
-      - '127.0.0.1:9696:9696' # prowlarr WebUI (behind SWAG)
       - '37020:37020/tcp' # slskd Soulseek P2P inbound (forwarded by AirVPN)
       - '37021:37021/tcp' # qbittorrent BT inbound (forwarded by AirVPN)
       - '37021:37021/udp'
@@ -206,7 +205,6 @@ services:
         aliases:
           - slskd
           - qbittorrent
-          - prowlarr
     labels:
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
@@ -475,20 +473,22 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
-    network_mode: service:gluetun
-    depends_on:
-      gluetun:
-        condition: service_healthy
-      qbittorrent:
-        condition: service_started
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
     volumes:
       - ${CONFIG_DIRECTORY}/prowlarr:/config
+    ports:
+      - '127.0.0.1:9696:9696'
     restart: unless-stopped
+    depends_on:
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
     labels:
+      - swag=enable
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:9696/ping']
