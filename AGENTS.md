@@ -188,6 +188,17 @@ if __name__ == "__main__":
 - Security: never request privileged mode, host networking, or extra capabilities without justification
 - Access Docker only through the existing `dockerproxy` service (tecnativa/docker-socket-proxy on `tcp://dockerproxy:2375`); never mount raw `/var/run/docker.sock` into any other container.
 
+### VPN sidecar (gluetun)
+
+- `slskd`, `qbittorrent`, and `prowlarr` route through `gluetun` (AirVPN WireGuard) via `network_mode: service:gluetun`. These three services own no nas-network attachment, no `ports:`, and no SWAG label of their own — all of that lives on the `gluetun` block. Gluetun registers their names as nas-network aliases so existing inter-service references (`http://qbittorrent:8080`, `slskd:5030`, `prowlarr:9696`) keep resolving.
+- When adding a new inbound P2P port for one of these services: forward it via AirVPN's client area, publish it on `gluetun` (e.g. `'37022:37022/tcp'`), and add it to `FIREWALL_INPUT_PORTS` on gluetun (comma-separated). Set the listening port inside the service's own config — qbit uses `Session\Port` in `qBittorrent.conf`; slskd uses `soulseek.listen_port` in `slskd.yml`. Disable any in-app UPnP/NAT-PMP/auto-port-mapping ("PortForwardingEnabled" in qbit) — these are dangerous inside a VPN.
+- WireGuard secrets live in `.env` as `WIREGUARD_PRIVATE_KEY` / `WIREGUARD_PRESHARED_KEY` / `WIREGUARD_PUBLIC_KEY` / `WIREGUARD_ENDPOINT_IP` / `WIREGUARD_ENDPOINT_PORT` / `WIREGUARD_ADDRESSES` / `WIREGUARD_MTU`. Raw `.conf` files in `vpn-configs/` are gitignored — never commit them.
+- **Recreating gluetun cascades.** `network_mode: service:gluetun` resolves to a literal container ID, not a service name — so when gluetun is recreated (port change, env edit, image bump), `slskd` / `qbittorrent` / `prowlarr` keep their stale reference to the *old* gluetun container. Symptom: they appear "healthy" individually (their own loopback check works) but other containers on `nas-network` get `Connection refused` when hitting their service alias. Use `docker compose up -d --force-recreate gluetun slskd qbittorrent prowlarr` (all four together) whenever you touch gluetun, or recreate the tunneled services right after.
+
+### Operational gotchas
+
+- **qBittorrent crash-loop after compose recreate / forced restart:** qbit leaves `lockfile` in both `${CONFIG_DIRECTORY}/qbittorrent/qBittorrent/lockfile` and `${CONFIG_DIRECTORY}/qbittorrent/qBittorrent/config/lockfile` when killed ungracefully. On next start the container enters a tight start→"termination initiated"→exit loop with no error logged. Fix: `docker stop qbittorrent && rm -f ${CONFIG_DIRECTORY}/qbittorrent/qBittorrent{,/config}/lockfile && docker start qbittorrent`. Do this *before* investigating other causes when qbit logs show rapid PID churn.
+
 ## Security & Secrets
 
 - Never commit secrets to git
