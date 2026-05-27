@@ -164,8 +164,66 @@ services:
         max-size: 10m
         max-file: '2'
 
+  # gluetun: WireGuard tunnel for slskd. slsknet soft-blocked our home IP after
+  # reconnect storms; slskd now shares this container's network namespace so all
+  # its egress (and Soulseek inbound on 50300) flows through AirVPN.
+  # Aliases 'slskd' on nas-network so Lidarr/SWAG still resolve slskd:5030.
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_PRESHARED_KEY=${WIREGUARD_PRESHARED_KEY}
+      - WIREGUARD_PUBLIC_KEY=${WIREGUARD_PUBLIC_KEY}
+      - WIREGUARD_ENDPOINT_IP=${WIREGUARD_ENDPOINT_IP}
+      - WIREGUARD_ENDPOINT_PORT=${WIREGUARD_ENDPOINT_PORT}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - WIREGUARD_MTU=${WIREGUARD_MTU:-1320}
+      - FIREWALL_OUTBOUND_SUBNETS=172.30.0.0/24
+      - FIREWALL_INPUT_PORTS=50300,51413
+      - DNS_KEEP_NAMESERVER=on
+      - TZ=${TZ:-UTC}
+    ports:
+      - '127.0.0.1:5030:5030' # slskd WebUI (behind SWAG)
+      - '127.0.0.1:8080:8080' # qbittorrent WebUI (behind SWAG)
+      - '127.0.0.1:9696:9696' # prowlarr WebUI (behind SWAG)
+      - '50300:50300/tcp' # slskd Soulseek P2P inbound (also needs AirVPN port forward)
+      - '51413:51413/tcp' # qbittorrent BT inbound (also needs AirVPN port forward)
+      - '51413:51413/udp'
+    restart: unless-stopped
+    networks:
+      nas-network:
+        aliases:
+          - slskd
+          - qbittorrent
+          - prowlarr
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, wget, -qO-, --timeout=5, --tries=1, https://ipinfo.io/ip]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
   # slskd: no linuxserver image exists; official slskd/slskd is the standard image.
   # Runs as the host PUID:PGID so it can write to the shared volumes.
+  # Shares gluetun's network namespace (no own network / ports / swag label).
   slskd:
     image: slskd/slskd:latest
     container_name: slskd
@@ -174,6 +232,10 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
     environment:
       - SLSKD_REMOTE_CONFIGURATION=true
       - SLSKD_DOWNLOADS_DIR=/downloads/complete/slskd
@@ -188,14 +250,8 @@ services:
       - ${CONFIG_DIRECTORY}/slskd:/app
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
-    ports:
-      - '127.0.0.1:5030:5030' # HTTP WebUI: behind SWAG
-      - '50300:50300/tcp' # Soulseek: must be public for P2P connections
     restart: unless-stopped
-    networks:
-      - nas-network
     labels:
-      - swag=enable
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
@@ -419,22 +475,20 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_started
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
     volumes:
       - ${CONFIG_DIRECTORY}/prowlarr:/config
-    ports:
-      - '127.0.0.1:9696:9696'
     restart: unless-stopped
-    depends_on:
-      qbittorrent:
-        condition: service_started
-    networks:
-      - nas-network
     labels:
-      - swag=enable
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:9696/ping']
@@ -460,6 +514,10 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -467,19 +525,11 @@ services:
       - WEBUI_PORT=8080
       - QBITTORRENT_USER=${QBITTORRENT_USER}
       - QBITTORRENT_PASS=${QBITTORRENT_PASS}
-      - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
     volumes:
       - ${CONFIG_DIRECTORY}/qbittorrent:/config
       - ${SHARE_DIRECTORY}/downloads:/downloads
-    ports:
-      - '127.0.0.1:8080:8080'
-      - '51413:51413/tcp'
-      - '51413:51413/udp'
     restart: unless-stopped
-    networks:
-      - nas-network
     labels:
-      - swag=enable
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8080/']
