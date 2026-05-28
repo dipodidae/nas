@@ -17,8 +17,16 @@ import {
   commandSearchArtist,
   lookupAlbum,
   lookupArtist,
+  monitorAlbums,
+  waitForArtistRefresh,
 } from './lidarr'
+import { normKeyLoose, pickAutoMatch, rankCandidates, similarity } from './matching'
 import { loadSettings } from './settings'
+
+// Lidarr's /album/lookup proxies MusicBrainz, which throttles per-IP at ~1 req/s
+// in the worst case. 6 in flight saturates Lidarr's local cache without
+// flooding the upstream.
+const LOOKUP_CONCURRENCY = 6
 
 type Listener = (snap: JobSnapshot) => void
 
@@ -26,6 +34,10 @@ interface JobInternal extends JobSnapshot {
   listeners: Set<Listener>
   // resolved when user picks a candidate or skips (per item id)
   pending: Map<string, (chosen: Candidate | null) => void>
+  // promises retained so phase B can await a pick that phase A already
+  // registered. Without this the user can only pick the item phase B is
+  // currently waiting on; all other 'needs-choice' clicks 404.
+  picks: Map<string, Promise<Candidate | null>>
 }
 
 export interface JobOptions {
@@ -89,6 +101,7 @@ export function createJob(
     done: false,
     listeners: new Set(),
     pending: new Map(),
+    picks: new Map(),
   }
   jobs.set(job.id, job)
   // Fire-and-forget; SSE consumers see progress.
@@ -135,59 +148,62 @@ async function run(j: JobInternal): Promise<void> {
     metadataProfileId: j.metadataProfileId ?? settings.metadataProfileId,
   }
 
+  // Phase 0 — eagerly flag needsReview items as needs-choice + spawn pick
+  // handlers so user clicks land regardless of phase B's current position.
   for (const item of j.items) {
-    try {
-      if (item.parsed.needsReview) {
-        setStatus(j, item, { status: 'needs-choice', message: 'ambiguous input — edit and retry' })
-        const picked = await waitForChoice(j, item.id)
-        if (!picked) {
-          setStatus(j, item, { status: 'skipped' })
-          continue
-        }
-        item.chosen = picked
-      }
+    if (item.parsed.needsReview) {
+      setStatus(j, item, { status: 'needs-choice', message: 'ambiguous input — edit and retry' })
+      spawnPickHandler(j, item)
+    }
+  }
 
+  // Phase A — parallel lookups + auto-match for non-needsReview items. Sets
+  // status to matched / needs-choice / not-found / error. needs-choice items
+  // get a pick handler so user clicks land regardless of phase B's position.
+  const lookupItems = j.items.filter(i => !i.parsed.needsReview)
+  await mapWithConcurrency(lookupItems, LOOKUP_CONCURRENCY, async (item) => {
+    try {
       setStatus(j, item, { status: 'searching' })
       const candidates = await searchCandidates(j.kind, item.parsed)
       if (candidates.length === 0) {
         setStatus(j, item, { status: 'not-found' })
-        continue
+        return
       }
-
       const auto = pickAutoMatch(j.kind, item.parsed, candidates)
-      let chosen: Candidate
       if (auto) {
-        chosen = auto
+        setStatus(j, item, { status: 'matched', chosen: auto })
       }
       else {
-        setStatus(j, item, { status: 'needs-choice', candidates })
-        const picked = await waitForChoice(j, item.id)
-        if (!picked) {
-          setStatus(j, item, { status: 'skipped' })
-          continue
-        }
-        chosen = picked
+        setStatus(j, item, {
+          status: 'needs-choice',
+          candidates: rankCandidates(j.kind, item.parsed, candidates),
+        })
+        spawnPickHandler(j, item)
       }
-
-      setStatus(j, item, { status: 'matched', chosen, candidates: undefined })
-
-      if (j.dryRun) {
-        setStatus(j, item, { status: 'would-add' })
-        continue
-      }
-
-      setStatus(j, item, { status: 'adding' })
-      await addToLidarr(chosen, effective, j.monitorMode)
-      setStatus(j, item, { status: 'searching-on-lidarr' })
-      setStatus(j, item, { status: 'done' })
     }
     catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (/already been added/i.test(msg))
-        setStatus(j, item, { status: 'already-added' })
-      else
-        setStatus(j, item, { status: 'error', message: msg })
+      setStatus(j, item, { status: 'error', message: msg })
     }
+  })
+
+  // Phase B — serial add worker, but drives by readiness, not input order.
+  // Pulls any 'matched' item first; if none, awaits the next pick to resolve
+  // (which the pick handler will flip to 'matched' or 'skipped'). Adds stay
+  // serial — Lidarr's artist-creation + RefreshArtist wait can't overlap.
+  while (j.items.some(i => i.status === 'matched' || i.status === 'needs-choice')) {
+    const ready = j.items.find(i => i.status === 'matched')
+    if (ready) {
+      await processAdd(j, ready, effective)
+      continue
+    }
+    const pendingPicks = j.items
+      .filter(i => i.status === 'needs-choice')
+      .map(i => j.picks.get(i.id))
+      .filter((p): p is Promise<Candidate | null> => p !== undefined)
+    if (pendingPicks.length === 0)
+      break
+    await Promise.race(pendingPicks)
   }
   j.done = true
   emit(j)
@@ -202,65 +218,146 @@ async function run(j: JobInternal): Promise<void> {
   }
 }
 
-function waitForChoice(j: JobInternal, itemId: string): Promise<Candidate | null> {
-  return new Promise((resolve) => {
+function registerPick(j: JobInternal, itemId: string): Promise<Candidate | null> {
+  const existing = j.picks.get(itemId)
+  if (existing)
+    return existing
+  const p = new Promise<Candidate | null>((resolve) => {
     j.pending.set(itemId, resolve)
+  })
+  j.picks.set(itemId, p)
+  return p
+}
+
+// Spawns a background promise that flips item.status once the user picks. This
+// is what makes the phase-B worker loop able to find the next 'matched' item
+// without iterating in input order.
+function spawnPickHandler(j: JobInternal, item: JobItem): void {
+  void registerPick(j, item.id).then((picked) => {
+    if (picked)
+      setStatus(j, item, { status: 'matched', chosen: picked, candidates: undefined })
+    else
+      setStatus(j, item, { status: 'skipped' })
   })
 }
 
-function norm(s: string | undefined): string {
-  return (s ?? '').toLowerCase().trim().replace(/\s+/g, ' ')
+async function processAdd(j: JobInternal, item: JobItem, effective: AppSettings): Promise<void> {
+  try {
+    if (j.dryRun) {
+      setStatus(j, item, { status: 'would-add' })
+      return
+    }
+    if (!item.chosen) {
+      setStatus(j, item, { status: 'skipped' })
+      return
+    }
+    setStatus(j, item, { status: 'adding' })
+    const added = await addToLidarr(item.chosen, effective, j.monitorMode)
+    setStatus(j, item, { status: 'searching-on-lidarr' })
+    if (j.kind === 'album' && added.albumId && added.artistId) {
+      await waitForArtistRefresh(added.artistId).catch(() => undefined)
+      await monitorAlbums([added.albumId], true).catch(() => undefined)
+    }
+    setStatus(j, item, { status: 'done' })
+  }
+  catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/already been added/i.test(msg))
+      setStatus(j, item, { status: 'already-added' })
+    else
+      setStatus(j, item, { status: 'error', message: msg })
+  }
 }
 
-function pickAutoMatch(
-  kind: Kind,
-  parsed: ParsedItem,
-  candidates: Candidate[],
-): Candidate | undefined {
-  if (candidates.length === 1)
-    return candidates[0]
-  const top = candidates[0]
-  if (!top)
-    return undefined
-  if (kind === 'artist') {
-    if (top.kind !== 'artist')
-      return undefined
-    if (norm(top.value.artistName) === norm(parsed.raw))
-      return top
-    return undefined
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0)
+    return []
+  const out: R[] = Array.from({ length: items.length })
+  let next = 0
+  const workerCount = Math.min(Math.max(1, concurrency), items.length)
+  const workers: Promise<void>[] = []
+  for (let w = 0; w < workerCount; w++) {
+    workers.push((async () => {
+      while (true) {
+        const i = next++
+        if (i >= items.length)
+          return
+        out[i] = await fn(items[i]!, i)
+      }
+    })())
   }
-  // album
-  if (top.kind !== 'album')
-    return undefined
-  const v = top.value
-  const cArtist = typeof v.artist === 'string' ? v.artist : v.artist?.artistName
-  if (
-    parsed.artist
-    && parsed.title
-    && norm(v.title) === norm(parsed.title)
-    && norm(cArtist) === norm(parsed.artist)
-  )
-    return top
-  return undefined
+  await Promise.all(workers)
+  return out
+}
+
+// Lidarr's lookup proxies MusicBrainz / api.lidarr.audio; both regularly emit
+// 5xx with bodies like "Invalid response received from LidarrAPI" or
+// "Unable to communicate with LidarrAPI" — every one of those is transient and
+// clears within seconds. Retry 3x with exponential backoff before giving up.
+const TRANSIENT_LOOKUP_ERROR = /\b50[0-9]\b|Invalid response received|Unable to communicate/i
+
+async function retryOnTransient<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn()
+    }
+    catch (err) {
+      lastErr = err
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!TRANSIENT_LOOKUP_ERROR.test(msg) || i === attempts - 1)
+        throw err
+      await new Promise(r => setTimeout(r, 1000 * 2 ** i))
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
 }
 
 async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<Candidate[]> {
   if (kind === 'artist') {
-    const res = await lookupArtist(parsed.raw)
+    const res = await retryOnTransient(() => lookupArtist(parsed.raw))
     return res.map(value => ({ kind: 'artist', value }))
   }
   const term = parsed.artist && parsed.title
     ? `${parsed.artist} ${parsed.title}`
     : parsed.raw
-  const res = await lookupAlbum(term)
-  return res.map(value => ({ kind: 'album', value }))
+  const primary = await retryOnTransient(() => lookupAlbum(term))
+
+  // Fallback: if nothing in the primary result is title-similar to what was
+  // typed AND the title carries a parens/bracket qualifier, re-query with the
+  // qualifier stripped. Catches "Carnal Leftovers (demos)" → "Carnal Leftovers"
+  // and merges any new hits in.
+  if (parsed.title && /[([]/.test(parsed.title)) {
+    const wantTitle = normKeyLoose(parsed.title)
+    const hasGoodMatch = primary.some(c => similarity(normKeyLoose(c.title), wantTitle) > 0.8)
+    if (!hasGoodMatch) {
+      const stripped = parsed.title.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
+      if (stripped && stripped !== parsed.title) {
+        const fallbackTerm = parsed.artist ? `${parsed.artist} ${stripped}` : stripped
+        const fallback = await retryOnTransient(() => lookupAlbum(fallbackTerm)).catch(() => [] as typeof primary)
+        const seen = new Set(primary.map(r => r.foreignAlbumId))
+        for (const c of fallback) {
+          if (!seen.has(c.foreignAlbumId)) {
+            primary.push(c)
+            seen.add(c.foreignAlbumId)
+          }
+        }
+      }
+    }
+  }
+
+  return primary.map(value => ({ kind: 'album', value }))
 }
 
 async function addToLidarr(
   chosen: Candidate,
   settings: AppSettings,
   monitorMode: 'all' | 'future',
-): Promise<void> {
+): Promise<{ albumId?: number, artistId?: number }> {
   const opts = {
     rootFolderPath: settings.rootFolderPath,
     qualityProfileId: settings.qualityProfileId,
@@ -272,10 +369,10 @@ async function addToLidarr(
     const r = await addArtist(chosen.value, opts)
     if (r?.id)
       await commandSearchArtist(r.id).catch(() => undefined)
+    return { artistId: r?.id }
   }
-  else {
-    const r = await addAlbum(chosen.value, opts)
-    if (r?.id)
-      await commandSearchAlbum([r.id]).catch(() => undefined)
-  }
+  const r = await addAlbum(chosen.value, opts)
+  if (r?.id)
+    await commandSearchAlbum([r.id]).catch(() => undefined)
+  return { albumId: r?.id, artistId: r?.artistId }
 }

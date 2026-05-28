@@ -147,6 +147,47 @@ export function commandSearchAlbum(albumIds: number[]): Promise<unknown> {
   })
 }
 
+interface LidarrCommand {
+  name: string
+  status: string
+  body?: { artistId?: number }
+}
+
+// Lidarr enqueues a RefreshArtist after every album add. That refresh runs
+// AlbumMonitoredService with the artist's stored addOptions.monitor='none' and
+// unmonitors every album — clobbering the album/monitor PUT addAlbum just did.
+// Callers poll this to wait the clobber out before re-PUTting monitor=true.
+export async function waitForArtistRefresh(
+  artistId: number,
+  opts: { timeoutMs?: number, intervalMs?: number, sleep?: (ms: number) => Promise<void> } = {},
+): Promise<{ timedOut: boolean }> {
+  const timeoutMs = opts.timeoutMs ?? 5 * 60_000
+  const intervalMs = opts.intervalMs ?? 1_500
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const cmds = await call<LidarrCommand[]>('/api/v1/command').catch(() => [] as LidarrCommand[])
+    const active = cmds.some(c =>
+      c.name === 'RefreshArtist'
+      && (c.status === 'queued' || c.status === 'started')
+      && c.body?.artistId === artistId,
+    )
+    if (!active)
+      return { timedOut: false }
+    await sleep(intervalMs)
+  }
+  return { timedOut: true }
+}
+
+export async function monitorAlbums(albumIds: number[], monitored: boolean): Promise<void> {
+  if (albumIds.length === 0)
+    return
+  await call('/api/v1/album/monitor', {
+    method: 'PUT',
+    body: JSON.stringify({ albumIds, monitored }),
+  })
+}
+
 // --- Health cache (60s TTL) used by /healthz so probes don't hammer Lidarr ---
 let lastCheck = 0
 let lastOk = false

@@ -100,7 +100,7 @@ function label(p: ParsedItem): string {
   return p.artist && p.title ? `${p.artist} — ${p.title}` : p.raw
 }
 function topCandidates(cands: Candidate[] | undefined): Candidate[] {
-  return (cands ?? []).slice(0, 5)
+  return cands ?? []
 }
 function badge(status: ItemStatus): { text: string, cls: string } {
   switch (status) {
@@ -257,9 +257,6 @@ function badge(status: ItemStatus): { text: string, cls: string } {
           <button class="secondary" @click="choose(item.id, null)">
             skip
           </button>
-          <span v-if="(item.candidates?.length ?? 0) > 5" class="meta" style="margin-left:8px">
-            (+{{ (item.candidates?.length ?? 0) - 5 }} more — pick a top-5 or skip)
-          </span>
         </div>
       </div>
     </div>
