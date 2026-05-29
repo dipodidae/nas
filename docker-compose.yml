@@ -251,12 +251,24 @@ services:
     restart: unless-stopped
     labels:
       - com.centurylinklabs.watchtower.enable=true
+      - autoheal=true
+    # Login-aware healthcheck. The web server (5030) can be up while the Soulseek
+    # connection is dead, so probe real login state via the API instead of just
+    # spidering the root. $$SLSKD_API_KEY is expanded by the container shell at
+    # runtime ($$ escapes Compose interpolation). Marked unhealthy only after 5
+    # consecutive failures (~5 min) so the brief Connected->LoggingIn transitions
+    # slskd makes during normal reconnects don't trip it. The `autoheal=true`
+    # label above lets the autoheal service restart it once it goes unhealthy.
     healthcheck:
-      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
+      test:
+        - CMD-SHELL
+        - >-
+          wget -qO- --header="X-API-Key: $$SLSKD_API_KEY"
+          http://localhost:5030/api/v0/server | grep -q '"isLoggedIn":true'
       interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     logging:
       driver: json-file
       options:
@@ -910,6 +922,43 @@ services:
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - WATCHTOWER_ROLLING_RESTART=true
       - WATCHTOWER_REMOVE_VOLUMES=false
+    depends_on:
+      dockerproxy:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - nas-network
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # Restarts containers labeled `autoheal=true` when Docker marks them unhealthy.
+  # Used for slskd, whose Soulseek login can drop while its web server stays up
+  # (see slskd's login-aware healthcheck). Talks to Docker through `dockerproxy`
+  # over TCP (DOCKER_SOCK=tcp://...), never the raw socket — same rule as
+  # watchtower. dockerproxy already exposes CONTAINERS + POST, all autoheal needs.
+  # Left unlabeled for watchtower, like the other control-plane containers.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      - TZ=${TZ:-UTC}
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=60
+      - DOCKER_SOCK=tcp://dockerproxy:2375
+      - CURL_TIMEOUT=30
     depends_on:
       dockerproxy:
         condition: service_started
