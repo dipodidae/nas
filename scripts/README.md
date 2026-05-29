@@ -346,19 +346,27 @@ Environment: `API_KEY_SLSKD` (required), `API_KEY_LIDARR` (required for the quie
 
 ### `lidarr_queue_unstick.py`
 
-Removes Lidarr queue items wedged in `completed / importFailed` state. These accumulate when slskd peers deliver a download that Lidarr can't accept — typically `Album release not requested` (peer sent a different MusicBrainz release than the one Lidarr asked for) or `Album match is not close enough: X% vs 80%`. Lidarr has no built-in "remove failed import after N hours" setting; `autoRedownloadFailed` only fires for download-side failures, so these rows live forever, block Tubifarry from clearing the matching slskd transfer, and gum up the whole pipeline. Run hourly to keep throughput high.
+Clears Lidarr queue items wedged in `completed / importFailed` state. These accumulate when slskd peers deliver a download that Lidarr can't accept. Lidarr has no built-in "remove failed import after N hours" setting; `autoRedownloadFailed` only fires for download-side failures, so these rows live forever, block Tubifarry from clearing the matching slskd transfer, and gum up the whole pipeline. Run hourly to keep throughput high.
 
-For each eligible row the script issues `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=false`. That drops the queue entry, kills the slskd transfer record via Tubifarry, blocklists the specific release so it isn't re-grabbed, and asks Lidarr to search for a different release.
+The script splits failures by **why** they failed, because they need opposite handling:
+
+**Reclaim pass (default on).** `Album release not requested` is *not* a bad download — the peer sent a complete, valid album that maps to a different MusicBrainz release than the one Lidarr monitors. Lidarr's automatic import pipeline deliberately disables release switching (so a random peer can't flip your monitored edition) and there is **no global toggle** for it, so these sit wedged forever. For each such row the script re-imports the download via the manual-import API with `disableReleaseSwitching: false`: Lidarr re-points the monitored release to the edition on disk and imports the files already there. Success is verified against the album's `trackFile` count (a ManualImport that imports nothing still reports `completed`), and if the primary import is a no-op — files were already copied into the library by a prior `albumImportIncomplete` but never registered — it re-scans the artist folder and registers those orphans in place. Only when track files actually appear is the now-satisfied row dropped with `blocklist=false&skipRedownload=true` (no re-download, no blocklist). Disable with `--no-reclaim`.
+
+**Destructive pass.** Genuine bad matches (`Album match is not close enough: X% vs 80%`, `Couldn't find similar album`) and any reclaim that failed get `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=false`: drops the entry, kills the slskd transfer via Tubifarry, blocklists the specific release, and asks Lidarr to search for a different one.
 
 Safety design:
 
 1. **State gate** — only rows with `trackedDownloadState == importFailed` are touched. Downloading / importing rows are left strictly alone.
-2. **Age gate** — only deletes rows whose `added` timestamp is older than `--min-age-hours` (default `1`). Rows missing `added` are skipped conservatively.
+2. **Age gate** — only acts on rows whose `added` timestamp is older than `--min-age-hours` (default `1`). Rows missing `added` are skipped conservatively.
+3. **Reclaim is conservative** — a row is only reclaimed when `Album release not requested` is present *and* no hard blocker (`not close enough`, `couldn't find similar`, `destination already exists`) is, so fuzzy matches never get force-imported.
+4. **Effect-verified** — reclaim never clears a queue row unless the album's track-file count actually increased.
 
 ```bash
-python scripts/lidarr_queue_unstick.py                       # clean now (1h age gate)
-python scripts/lidarr_queue_unstick.py --dry-run             # report only
+python scripts/lidarr_queue_unstick.py                       # reclaim + clean now (1h age gate)
+python scripts/lidarr_queue_unstick.py --dry-run             # report the reclaim/remove split only
 python scripts/lidarr_queue_unstick.py --min-age-hours 0     # immediate (manual one-off)
+python scripts/lidarr_queue_unstick.py --no-reclaim          # legacy: delete+blocklist+redownload everything
+python scripts/lidarr_queue_unstick.py --import-mode move    # reclaim with move instead of copy
 python scripts/lidarr_queue_unstick.py --skip-redownload     # blocklist without auto re-search
 python scripts/lidarr_queue_unstick.py --no-blocklist        # remove only (not recommended — Tubifarry will re-grab the same junk)
 ```

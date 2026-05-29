@@ -176,6 +176,237 @@ def test_main_delete_succeeds(monkeypatch, capsys):
   assert "removed 1/1" in capsys.readouterr().out
 
 
+def _wedged(qid, *, output_path="", messages=()):
+  return unstick.WedgedItem(
+    queue_id=qid,
+    title=f"Item {qid}",
+    status="completed",
+    tracked_state="importFailed",
+    added=None,
+    output_path=output_path,
+    messages=tuple(messages),
+  )
+
+
+def test_flatten_messages():
+  rec = {
+    "statusMessages": [
+      {"title": "t1", "messages": ["Album release not requested", ""]},
+      {"title": "t2", "messages": ["Has unmatched tracks"]},
+      {"title": "t3"},
+    ]
+  }
+  assert unstick._flatten_messages(rec) == (
+    "Album release not requested",
+    "Has unmatched tracks",
+  )
+
+
+def test_is_reclaimable_pure_edition_mismatch():
+  item = _wedged(
+    1,
+    output_path="/downloads/complete/slskd/Heir",
+    messages=["Album release not requested", "Album release not requested"],
+  )
+  assert unstick.is_reclaimable(item) is True
+
+
+def test_is_reclaimable_requires_output_path():
+  item = _wedged(1, output_path="", messages=["Album release not requested"])
+  assert unstick.is_reclaimable(item) is False
+
+
+def test_is_reclaimable_blocked_by_hard_blocker():
+  # signal present but a fuzzy-match blocker means release switching won't help
+  item = _wedged(
+    1,
+    output_path="/downloads/complete/slskd/Foo",
+    messages=[
+      "Album release not requested",
+      "Album match is not close enough: 52.2 % vs 80 %",
+    ],
+  )
+  assert unstick.is_reclaimable(item) is False
+
+
+def test_is_reclaimable_no_signal():
+  item = _wedged(1, output_path="/x", messages=["Has unmatched tracks"])
+  assert unstick.is_reclaimable(item) is False
+
+
+def test_reclaim_item_success_on_trackfile_increase(monkeypatch):
+  item = _wedged(1, output_path="/downloads/x", messages=["Album release not requested"])
+  monkeypatch.setattr(
+    unstick, "_scan_for_import",
+    lambda *a, **k: [{"albumId": 9, "artistId": 4, "path": "/downloads/x/a.mp3"}],
+  )
+  counts = iter([0, 7])  # before=0, after=7
+  monkeypatch.setattr(unstick, "_trackfile_count", lambda *a, **k: next(counts))
+  submitted: list[str] = []
+  monkeypatch.setattr(
+    unstick, "_submit_import",
+    lambda h, k, items, mode: submitted.append(mode) or True,
+  )
+  assert unstick.reclaim_item("h", "k", item) is True
+  assert submitted == ["copy"]  # primary import only, no in-place fallback
+
+
+def test_reclaim_item_falls_back_to_in_place(monkeypatch):
+  item = _wedged(1, output_path="/downloads/x", messages=["Album release not requested"])
+
+  def _scan(host, key, folder):
+    return [{"albumId": 9, "artistId": 4, "path": f"{folder}/a.mp3"}]
+
+  monkeypatch.setattr(unstick, "_scan_for_import", _scan)
+  # before=0, after primary import=0 (no-op), after in-place=7
+  counts = iter([0, 0, 7])
+  monkeypatch.setattr(unstick, "_trackfile_count", lambda *a, **k: next(counts))
+  monkeypatch.setattr(unstick, "_artist_path", lambda *a, **k: "/music/Artist")
+  modes: list[str] = []
+  monkeypatch.setattr(
+    unstick, "_submit_import",
+    lambda h, k, items, mode: modes.append(mode) or True,
+  )
+  assert unstick.reclaim_item("h", "k", item) is True
+  assert modes == ["copy", "move"]  # primary copy, then in-place move
+
+
+def test_reclaim_item_false_when_no_effect(monkeypatch):
+  item = _wedged(1, output_path="/downloads/x", messages=["Album release not requested"])
+  monkeypatch.setattr(
+    unstick, "_scan_for_import",
+    lambda *a, **k: [{"albumId": 9, "artistId": 4, "path": "/downloads/x/a.mp3"}],
+  )
+  monkeypatch.setattr(unstick, "_trackfile_count", lambda *a, **k: 0)  # never increases
+  monkeypatch.setattr(unstick, "_artist_path", lambda *a, **k: "/music/Artist")
+  monkeypatch.setattr(unstick, "_submit_import", lambda *a, **k: True)
+  # No track files ever appear -> must not report success (no false row clear).
+  assert unstick.reclaim_item("h", "k", item) is False
+
+
+def test_reclaim_item_false_on_empty_scan(monkeypatch):
+  item = _wedged(1, output_path="/downloads/x", messages=["Album release not requested"])
+  monkeypatch.setattr(unstick, "_scan_for_import", lambda *a, **k: [])
+  assert unstick.reclaim_item("h", "k", item) is False
+
+
+def test_main_reclaim_then_clear(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  records = [
+    {
+      "id": 1,
+      "title": "Lamp of Murmuur — Heir",
+      "status": "completed",
+      "trackedDownloadState": "importFailed",
+      "added": "2026-05-25T08:00:00Z",
+      "outputPath": "/downloads/complete/slskd/Heir",
+      "statusMessages": [
+        {"title": "x", "messages": ["Album release not requested"]},
+      ],
+    },
+  ]
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: records)
+  fixed_now = _dt.datetime(2026, 5, 25, 12, 0, 0)
+
+  class _FixedDateTime(_dt.datetime):
+    @classmethod
+    def now(cls, tz=None):  # type: ignore[override]
+      return fixed_now
+
+  monkeypatch.setattr(unstick._dt, "datetime", _FixedDateTime)
+
+  reclaimed_ids: list[int] = []
+  monkeypatch.setattr(
+    unstick,
+    "reclaim_item",
+    lambda h, k, item, **kw: reclaimed_ids.append(item.queue_id) or True,
+  )
+  cleared: list[tuple] = []
+
+  def _del(host, key, item, blocklist=True, skip_redownload=False):
+    cleared.append((item.queue_id, blocklist, skip_redownload))
+    return True
+
+  monkeypatch.setattr(unstick, "delete_item", _del)
+  assert unstick.main(["--min-age-hours", "1"]) == 0
+  assert reclaimed_ids == [1]
+  # cleanup delete must be non-destructive: no blocklist, no re-search
+  assert cleared == [(1, False, True)]
+  out = capsys.readouterr().out
+  assert "reclaimed 1/1" in out
+
+
+def test_main_reclaim_failure_falls_through_to_delete(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  records = [
+    {
+      "id": 1,
+      "title": "Lamp of Murmuur — Heir",
+      "status": "completed",
+      "trackedDownloadState": "importFailed",
+      "added": "2026-05-25T08:00:00Z",
+      "outputPath": "/downloads/complete/slskd/Heir",
+      "statusMessages": [
+        {"title": "x", "messages": ["Album release not requested"]},
+      ],
+    },
+  ]
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: records)
+  fixed_now = _dt.datetime(2026, 5, 25, 12, 0, 0)
+
+  class _FixedDateTime(_dt.datetime):
+    @classmethod
+    def now(cls, tz=None):  # type: ignore[override]
+      return fixed_now
+
+  monkeypatch.setattr(unstick._dt, "datetime", _FixedDateTime)
+  monkeypatch.setattr(unstick, "reclaim_item", lambda *a, **k: False)
+  deleted: list[tuple] = []
+
+  def _del(host, key, item, blocklist=True, skip_redownload=False):
+    deleted.append((item.queue_id, blocklist, skip_redownload))
+    return True
+
+  monkeypatch.setattr(unstick, "delete_item", _del)
+  assert unstick.main(["--min-age-hours", "1"]) == 0
+  # failed reclaim falls through to destructive delete (blocklist on)
+  assert deleted == [(1, True, False)]
+
+
+def test_main_no_reclaim_skips_reclaim_pass(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  records = [
+    {
+      "id": 1,
+      "title": "Lamp of Murmuur — Heir",
+      "status": "completed",
+      "trackedDownloadState": "importFailed",
+      "added": "2026-05-25T08:00:00Z",
+      "outputPath": "/downloads/complete/slskd/Heir",
+      "statusMessages": [
+        {"title": "x", "messages": ["Album release not requested"]},
+      ],
+    },
+  ]
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: records)
+  fixed_now = _dt.datetime(2026, 5, 25, 12, 0, 0)
+
+  class _FixedDateTime(_dt.datetime):
+    @classmethod
+    def now(cls, tz=None):  # type: ignore[override]
+      return fixed_now
+
+  monkeypatch.setattr(unstick._dt, "datetime", _FixedDateTime)
+
+  def _boom(*a, **k):
+    raise AssertionError("reclaim_item must not be called with --no-reclaim")
+
+  monkeypatch.setattr(unstick, "reclaim_item", _boom)
+  monkeypatch.setattr(unstick, "delete_item", lambda *a, **k: True)
+  assert unstick.main(["--min-age-hours", "1", "--no-reclaim"]) == 0
+  assert "reclaim 0" in capsys.readouterr().out
+
+
 def test_main_partial_failure_returns_1(monkeypatch, capsys):
   monkeypatch.setenv("API_KEY_LIDARR", "x")
   monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: _records())
