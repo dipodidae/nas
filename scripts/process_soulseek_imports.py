@@ -38,8 +38,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import csv
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -260,8 +262,13 @@ def _build_import_item(file_info: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+_NOT_CLOSE_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+
+
 def _evaluate_rejections(
     file_info: dict[str, Any],
+    *,
+    accept_min_match: float = 80.0,
 ) -> tuple[bool, list[str]]:
     """Evaluate whether rejections are acceptable for import.
 
@@ -270,11 +277,12 @@ def _evaluate_rejections(
     We accept:
       - "Has missing tracks" (partial album is still useful)
       - "Has unmatched tracks" (extra tracks are ok)
+      - "Album match is not close enough: X % vs 80 %" when X >= accept_min_match
 
     We reject:
-      - "Album match is not close enough" (wrong album)
       - "Not an upgrade" (already have it)
       - "Couldn't find similar album" (no match at all)
+      - "Destination already exists"
     """
     rejections = file_info.get("rejections", [])
     reasons = []
@@ -283,16 +291,22 @@ def _evaluate_rejections(
     for rej in rejections:
         reason = rej.get("reason", "")
         reasons.append(reason)
+        lower = reason.lower()
 
-        # Permanent rejections that indicate wrong match or no value
+        if "not close enough" in lower:
+            match = _NOT_CLOSE_PCT_RE.search(reason)
+            actual_pct = float(match.group(1)) if match else 0.0
+            if actual_pct < accept_min_match:
+                dominated_by_blockers = True
+            continue
+
         if any(
-            phrase in reason.lower()
-            for phrase in [
-                "not close enough",
+            phrase in lower
+            for phrase in (
                 "not an upgrade",
                 "couldn't find similar",
                 "destination already exists",
-            ]
+            )
         ):
             dominated_by_blockers = True
 
@@ -329,6 +343,7 @@ def process_folder(
     folder_name: str,
     *,
     execute: bool = False,
+    accept_min_match: float = 80.0,
     log: logging.Logger,
 ) -> FolderResult:
     """Process a single download folder through Lidarr's manual import.
@@ -377,7 +392,9 @@ def process_folder(
         if file_info.get("additionalFile"):
             continue
 
-        should_import, reasons = _evaluate_rejections(file_info)
+        should_import, reasons = _evaluate_rejections(
+            file_info, accept_min_match=accept_min_match,
+        )
         all_rejections.extend(reasons)
 
         if not should_import:
@@ -536,15 +553,94 @@ def print_summary(summary: ImportSummary, *, log: logging.Logger) -> None:
         log.info("")
 
 
+REPORT_COLUMNS = (
+    "status", "folder", "artist", "album",
+    "tracks_imported", "tracks_total", "reason",
+)
+
+
 def write_report(summary: ImportSummary, report_path: Path) -> None:
     """Write a machine-readable report (tab-separated)."""
     with report_path.open("w", encoding="utf-8") as fh:
-        fh.write("status\tfolder\tartist\talbum\ttracks_imported\ttracks_total\treason\n")
+        fh.write("\t".join(REPORT_COLUMNS) + "\n")
         for r in summary.results:
             fh.write(
                 f"{r.status}\t{r.folder}\t{r.artist}\t{r.album}\t"
                 f"{r.tracks_imported}\t{r.tracks_total}\t{r.reason}\n",
             )
+
+
+def _result_to_row(r: FolderResult) -> list[str]:
+    return [
+        r.status, r.folder, r.artist, r.album,
+        str(r.tracks_imported), str(r.tracks_total), r.reason,
+    ]
+
+
+def load_state(
+    state_path: Path,
+    *,
+    retry_errors: bool,
+    retry_skipped: bool = False,
+) -> tuple[dict[str, FolderResult], list[FolderResult]]:
+    """Load prior FolderResults from a checkpoint TSV.
+
+    Returns (skip_map, all_prior). ``skip_map`` lists folders we should *not*
+    re-process. ``retry_errors`` drops 'error'/'failed' rows from skip_map;
+    ``retry_skipped`` drops 'skipped' rows. 'imported' rows are always kept
+    (already done).
+    """
+    skip_map: dict[str, FolderResult] = {}
+    prior: list[FolderResult] = []
+    if not state_path.exists():
+        return skip_map, prior
+
+    with state_path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            try:
+                tracks_imported = int(row.get("tracks_imported") or 0)
+            except ValueError:
+                tracks_imported = 0
+            try:
+                tracks_total = int(row.get("tracks_total") or 0)
+            except ValueError:
+                tracks_total = 0
+            result = FolderResult(
+                folder=row.get("folder", ""),
+                status=row.get("status", ""),
+                reason=row.get("reason", ""),
+                artist=row.get("artist", ""),
+                album=row.get("album", ""),
+                tracks_imported=tracks_imported,
+                tracks_total=tracks_total,
+            )
+            if not result.folder:
+                continue
+            prior.append(result)
+            if result.status == "imported":
+                skip_map[result.folder] = result
+            elif result.status == "skipped":
+                if not retry_skipped:
+                    skip_map[result.folder] = result
+            elif result.status in ("error", "failed"):
+                if not retry_errors:
+                    skip_map[result.folder] = result
+            else:
+                skip_map[result.folder] = result
+    return skip_map, prior
+
+
+def open_state_writer(state_path: Path) -> tuple[Any, Any]:
+    """Open the state file in append mode; write header if new."""
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not state_path.exists() or state_path.stat().st_size == 0
+    fh = state_path.open("a", encoding="utf-8", newline="")
+    writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+    if new_file:
+        writer.writerow(REPORT_COLUMNS)
+        fh.flush()
+    return fh, writer
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +705,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Skip folders already tracked in Lidarr's queue",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=int,
+        default=None,
+        help="Wall-clock budget; stop cleanly between folders once exceeded",
+    )
+    parser.add_argument(
+        "--state",
+        type=Path,
+        default=None,
+        help=(
+            "Append-only checkpoint TSV. Folders already recorded are "
+            "skipped on resume. Safe to point cron runs at the same file."
+        ),
+    )
+    parser.add_argument(
+        "--retry-errors",
+        action="store_true",
+        default=False,
+        help=(
+            "With --state, re-try folders previously marked error/failed "
+            "(still skips imported/skipped rows)"
+        ),
+    )
+    parser.add_argument(
+        "--retry-skipped",
+        action="store_true",
+        default=False,
+        help=(
+            "With --state, also re-try folders previously marked 'skipped'. "
+            "Pair with --accept-min-match to claw back near-miss matches."
+        ),
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        default=False,
+        help="With --state, ignore prior entries (state is still appended)",
+    )
+    parser.add_argument(
+        "--accept-min-match",
+        type=float,
+        default=80.0,
+        help=(
+            "Override Lidarr's 80%% album-match threshold. Accept "
+            "'Album match is not close enough: X %% vs 80 %%' when X is at "
+            "least this percentage. Set to e.g. 60 to be more permissive. "
+            "Default (80) preserves Lidarr's behaviour."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -689,42 +835,114 @@ def main(argv: list[str] | None = None) -> int:
             len(folders),
         )
 
+    # Resume from checkpoint
+    prior_results: list[FolderResult] = []
+    state_fh = None
+    state_writer = None
+    if args.state:
+        skip_map, prior_results = load_state(
+            args.state,
+            retry_errors=args.retry_errors,
+            retry_skipped=args.retry_skipped,
+        )
+        if not args.no_resume and skip_map:
+            original_count = len(folders)
+            folders = [f for f in folders if f not in skip_map]
+            log.info(
+                "Resuming from %s: %d already done, %d remaining",
+                args.state, original_count - len(folders), len(folders),
+            )
+        elif skip_map:
+            log.info(
+                "--no-resume: ignoring %d entries in %s",
+                len(skip_map), args.state,
+            )
+        state_fh, state_writer = open_state_writer(args.state)
+
     # Apply limit
     if args.limit:
         folders = folders[: args.limit]
         log.info("Limited to first %d folders", args.limit)
 
     log.info("")
-    log.info("Processing %d folders...", len(folders))
+    log.info(
+        "Processing %d folders (budget: %s)...",
+        len(folders),
+        f"{args.max_seconds}s" if args.max_seconds else "unbounded",
+    )
     log.info("-" * 70)
 
-    # Process each folder
-    summary = ImportSummary(total_folders=len(folders))
-
-    for i, folder_name in enumerate(folders, 1):
-        log.info("[%d/%d] %s", i, len(folders), folder_name)
-
-        result = process_folder(
-            client,
-            args.container_downloads,
-            folder_name,
-            execute=args.execute,
-            log=log,
-        )
-
-        summary.results.append(result)
-        if result.status == "imported":
+    # Seed summary with prior results so the final breakdown is cumulative
+    summary = ImportSummary(total_folders=len(prior_results) + len(folders))
+    for r in prior_results:
+        summary.results.append(r)
+        if r.status == "imported":
             summary.imported += 1
-        elif result.status == "skipped":
+        elif r.status == "skipped":
             summary.skipped += 1
-        elif result.status == "failed":
+        elif r.status == "failed":
             summary.failed += 1
-        elif result.status == "error":
+        elif r.status == "error":
             summary.errors += 1
 
-        # Be nice to the API
-        if i < len(folders):
-            time.sleep(API_DELAY)
+    start_mono = time.monotonic()
+    stopped_for_budget = False
+    processed_this_run = 0
+
+    try:
+        for i, folder_name in enumerate(folders, 1):
+            if args.max_seconds is not None:
+                elapsed = time.monotonic() - start_mono
+                if elapsed >= args.max_seconds:
+                    log.info(
+                        "Clock budget reached after %.0fs "
+                        "(%d/%d this run). Stopping cleanly.",
+                        elapsed, processed_this_run, len(folders),
+                    )
+                    stopped_for_budget = True
+                    break
+
+            log.info("[%d/%d] %s", i, len(folders), folder_name)
+
+            result = process_folder(
+                client,
+                args.container_downloads,
+                folder_name,
+                execute=args.execute,
+                accept_min_match=args.accept_min_match,
+                log=log,
+            )
+
+            summary.results.append(result)
+            if result.status == "imported":
+                summary.imported += 1
+            elif result.status == "skipped":
+                summary.skipped += 1
+            elif result.status == "failed":
+                summary.failed += 1
+            elif result.status == "error":
+                summary.errors += 1
+
+            if state_writer is not None:
+                state_writer.writerow(_result_to_row(result))
+                state_fh.flush()
+
+            processed_this_run += 1
+
+            # Be nice to the API
+            if i < len(folders):
+                time.sleep(API_DELAY)
+    finally:
+        if state_fh is not None:
+            state_fh.close()
+
+    elapsed = time.monotonic() - start_mono
+    log.info(
+        "Run finished: %d folders this session in %.0fs%s",
+        processed_this_run,
+        elapsed,
+        " (budget hit)" if stopped_for_budget else "",
+    )
 
     # Print summary
     print_summary(summary, log=log)
