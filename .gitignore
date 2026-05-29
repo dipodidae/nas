@@ -23,3 +23,6 @@ __pycache__
 
 # VPN configs (contain WireGuard private keys)
 vpn-configs/
+
+# never commit env backups (they contain real secrets)
+.env.bak*
