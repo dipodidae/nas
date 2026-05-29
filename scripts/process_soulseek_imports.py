@@ -13,6 +13,11 @@ This script uses Lidarr's Manual Import API to:
   3. Import matched albums using copy mode (originals are never touched)
   4. Produce a detailed report of all actions
 
+A stub guard (``--min-track-fraction``, default 0.5) refuses to import a
+folder that would only cover a small slice of the matched release — e.g. a
+dead Soulseek peer that delivered 1 of an album's 9 tracks. Without it those
+incomplete downloads get filed as one-track "albums". Set to 0 to disable.
+
 Usage:
     # Dry run (default) - show what would be imported
     python scripts/process_soulseek_imports.py
@@ -262,6 +267,40 @@ def _build_import_item(file_info: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _release_track_count(file_info: dict[str, Any]) -> int:
+    """Track count of the release this file matched, from album.releases.
+
+    Returns 0 when the matched release can't be resolved (caller treats 0 as
+    "unknown" and does not block the import).
+    """
+    album = file_info.get("album") or {}
+    release_id = file_info.get("albumReleaseId")
+    for rel in album.get("releases") or []:
+        if rel.get("id") == release_id:
+            return int(rel.get("trackCount") or 0)
+    return 0
+
+
+def stub_coverage(
+    imported_by_release: dict[int, int],
+    tracks_by_release: dict[int, int],
+) -> tuple[int, int, float]:
+    """Coverage of the dominant matched release: (imported, total, fraction).
+
+    The "dominant" release is the one the most importable files mapped to.
+    An unknown release size (0) yields a fraction of 1.0 so it never blocks —
+    we only skip when we can prove the import would be a small fraction of a
+    known-larger release (the incomplete-download stub case).
+    """
+    if not imported_by_release:
+        return (0, 0, 0.0)
+    dominant = max(imported_by_release, key=lambda r: imported_by_release[r])
+    imported = imported_by_release[dominant]
+    total = tracks_by_release.get(dominant, 0)
+    fraction = imported / total if total > 0 else 1.0
+    return imported, total, fraction
+
+
 _NOT_CLOSE_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 
@@ -344,6 +383,7 @@ def process_folder(
     *,
     execute: bool = False,
     accept_min_match: float = 80.0,
+    min_track_fraction: float = 0.5,
     log: logging.Logger,
 ) -> FolderResult:
     """Process a single download folder through Lidarr's manual import.
@@ -387,6 +427,8 @@ def process_folder(
     total_files = len(items)
     artist_name = ""
     album_title = ""
+    imported_by_release: dict[int, int] = {}
+    tracks_by_release: dict[int, int] = {}
 
     for file_info in items:
         if file_info.get("additionalFile"):
@@ -403,10 +445,32 @@ def process_folder(
         import_item = _build_import_item(file_info)
         if import_item:
             importable_items.append(import_item)
+            release_id = import_item["albumReleaseId"]
+            imported_by_release[release_id] = imported_by_release.get(release_id, 0) + 1
+            tracks_by_release[release_id] = _release_track_count(file_info)
             # Track artist/album name from first good item
             if not artist_name:
                 artist_name = file_info.get("artist", {}).get("artistName", "?")
                 album_title = file_info.get("album", {}).get("title", "?")
+
+    # Stub guard: refuse to import a folder that only covers a small fraction
+    # of the matched release (incomplete download from a dead Soulseek peer).
+    if importable_items and min_track_fraction > 0:
+        imported, rel_total, fraction = stub_coverage(imported_by_release, tracks_by_release)
+        if rel_total > 0 and fraction < min_track_fraction:
+            reason = (
+                f"stub: would import only {imported}/{rel_total} tracks of release "
+                f"({fraction:.0%} < {min_track_fraction:.0%} min) — incomplete download"
+            )
+            log.info("  SKIP: %s", reason)
+            return FolderResult(
+                folder=folder_name,
+                status="skipped",
+                reason=reason,
+                artist=artist_name,
+                album=album_title,
+                tracks_total=total_files,
+            )
 
     if not importable_items:
         unique_reasons = sorted(set(all_rejections))[:5]
@@ -746,6 +810,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="With --state, ignore prior entries (state is still appended)",
     )
     parser.add_argument(
+        "--min-track-fraction",
+        type=float,
+        default=0.5,
+        help=(
+            "Stub guard: skip a folder when it would import fewer than this "
+            "fraction of the matched release's tracks (default 0.5). Stops "
+            "incomplete downloads (e.g. 1 of 9 tracks) being filed as albums. "
+            "Set to 0 to disable and import whatever audio is present."
+        ),
+    )
+    parser.add_argument(
         "--accept-min-match",
         type=float,
         default=80.0,
@@ -910,6 +985,7 @@ def main(argv: list[str] | None = None) -> int:
                 folder_name,
                 execute=args.execute,
                 accept_min_match=args.accept_min_match,
+                min_track_fraction=args.min_track_fraction,
                 log=log,
             )
 

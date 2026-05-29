@@ -406,6 +406,8 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 30 3 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
 # 04:30 — post-Watchtower health check (Watchtower fires at 04:00)
 30 4 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/post_update_verifier.log 2>&1"
+# 05:30 — re-import orphaned slskd download folders that lost their Lidarr queue row (the 4th hygiene job); shares the cleanup flock, 50min budget, rolling --state so only new folders are fingerprinted, stub guard at 0.5
+30 5 * * * /usr/bin/flock -w 600 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/process_soulseek_imports.py --execute --skip-queue-tracked --accept-min-match 70 --min-track-fraction 0.5 --state logs/slsk_import_state.tsv --max-seconds 3000 >> logs/process_soulseek_imports.log 2>&1"
 
 # --- weekly ---
 # Sunday 02:00 — compress / truncate oversize log files inside CONFIG_DIRECTORY
