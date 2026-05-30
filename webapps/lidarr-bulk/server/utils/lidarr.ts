@@ -68,7 +68,27 @@ export interface AddArtistOptions {
   searchOnAdd: boolean
 }
 
-export function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promise<{ id: number }> {
+// The artist-add path (unlike addAlbum) had no post-POST enforcement, so two
+// Lidarr behaviours could leave a bulk-added artist dead: (1) Lidarr sometimes
+// ignores addOptions.monitor and lands the artist unmonitored with zero
+// monitored albums despite monitored:true; (2) the RefreshArtist the add
+// enqueues runs AlbumMonitoredService and can rewrite album monitoring
+// mid-flight (the same clobber addAlbum guards against). So we wait the refresh
+// out, force the artist record monitored, then (for monitor=all) explicitly
+// monitor its whole discography — reusing the same helpers as the album path.
+async function enforceMonitor(artistId: number, monitorMode: 'all' | 'future'): Promise<void> {
+  await waitForArtistRefresh(artistId).catch(() => undefined)
+  await call('/api/v1/artist/editor', {
+    method: 'PUT',
+    body: JSON.stringify({ artistIds: [artistId], monitored: true }),
+  })
+  if (monitorMode !== 'all')
+    return
+  const albums = await call<Array<{ id: number }>>(`/api/v1/album?artistId=${artistId}`).catch(() => [])
+  await monitorAlbums(albums.map(a => a.id), true)
+}
+
+export async function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promise<{ id: number }> {
   const body: AddArtistBody = {
     foreignArtistId: c.foreignArtistId,
     artistName: c.artistName,
@@ -76,13 +96,16 @@ export function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promis
     metadataProfileId: o.metadataProfileId,
     rootFolderPath: o.rootFolderPath,
     monitored: true,
-    monitorNewItems: o.monitorMode === 'future' ? 'all' : 'all',
+    monitorNewItems: 'all',
     addOptions: {
       monitor: o.monitorMode,
       searchForMissingAlbums: o.searchOnAdd,
     },
   }
-  return call('/api/v1/artist', { method: 'POST', body: JSON.stringify(body) })
+  const created = await call<{ id: number }>('/api/v1/artist', { method: 'POST', body: JSON.stringify(body) })
+  if (created?.id)
+    await enforceMonitor(created.id, o.monitorMode)
+  return created
 }
 
 // Adding a specific album: tell Lidarr to add the album + its artist with

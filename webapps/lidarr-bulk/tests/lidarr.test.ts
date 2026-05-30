@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LidarrAlbumCandidate } from '~~/shared/types'
-import { addAlbum, monitorAlbums, waitForArtistRefresh } from '../server/utils/lidarr'
+import { addAlbum, addArtist, monitorAlbums, waitForArtistRefresh } from '../server/utils/lidarr'
 
 const opts = {
   rootFolderPath: '/music',
@@ -139,5 +139,75 @@ describe('monitorAlbums', () => {
     vi.stubGlobal('fetch', fetchMock)
     await monitorAlbums([], true)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('addArtist', () => {
+  beforeEach(() => {
+    process.env.LIDARR_URL = 'http://lidarr.test'
+    process.env.LIDARR_API_KEY = 'test-key'
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('after POST /artist, waits for refresh then forces artist + all albums monitored', async () => {
+    const calls: { url: string, method: string, body: unknown }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(init.body as string) : undefined
+      calls.push({ url, method, body })
+      if (url.endsWith('/api/v1/artist') && method === 'POST')
+        return new Response(JSON.stringify({ id: 5 }), { status: 201 })
+      if (url.endsWith('/api/v1/command'))
+        return new Response(JSON.stringify([]), { status: 200 }) // no active refresh
+      if (url.includes('/api/v1/album?artistId=5'))
+        return new Response(JSON.stringify([{ id: 101 }, { id: 102 }]), { status: 200 })
+      return new Response(JSON.stringify({}), { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const artistCandidate = { foreignArtistId: 'fid-artist-1', artistName: 'Test Artist' } as never
+    const r = await addArtist(artistCandidate, { ...opts, monitorMode: 'all' as const })
+    expect(r).toEqual({ id: 5 })
+
+    const methods = calls.map(c => `${c.method} ${c.url.replace('http://lidarr.test', '')}`)
+    expect(methods).toEqual([
+      'POST /api/v1/artist',
+      'GET /api/v1/command',
+      'PUT /api/v1/artist/editor',
+      'GET /api/v1/album?artistId=5',
+      'PUT /api/v1/album/monitor',
+    ])
+    expect(calls[2].body).toEqual({ artistIds: [5], monitored: true })
+    expect(calls[4].body).toEqual({ albumIds: [101, 102], monitored: true })
+  })
+
+  it('for monitorMode=future, forces the artist monitored but does not monitor existing albums', async () => {
+    const calls: { url: string, method: string }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      calls.push({ url, method })
+      if (url.endsWith('/api/v1/artist') && method === 'POST')
+        return new Response(JSON.stringify({ id: 9 }), { status: 201 })
+      if (url.endsWith('/api/v1/command'))
+        return new Response(JSON.stringify([]), { status: 200 })
+      return new Response(JSON.stringify({}), { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const artistCandidate = { foreignArtistId: 'fid-2', artistName: 'Future Artist' } as never
+    await addArtist(artistCandidate, { ...opts, monitorMode: 'future' as const })
+
+    const methods = calls.map(c => `${c.method} ${c.url.replace('http://lidarr.test', '')}`)
+    expect(methods).toEqual([
+      'POST /api/v1/artist',
+      'GET /api/v1/command',
+      'PUT /api/v1/artist/editor',
+    ])
+    expect(methods).not.toContain('PUT /api/v1/album/monitor')
   })
 })
