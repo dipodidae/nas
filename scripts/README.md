@@ -409,6 +409,23 @@ Exit codes: `0` logged in (or out but within grace), `1` logged out past the gra
 
 Environment: `API_KEY_SLSKD` (required), `SLSKD_HOST` (default `http://localhost:5030`), `SLSKD_ALERT_WEBHOOK` (optional).
 
+### `lidarr_monitor_sweep.py`
+
+Self-heals artists that landed **monitored but with zero monitored albums** — the dead state bulk adds (lidarr-bulk) leave behind when Lidarr ignores `addOptions.monitor` or its post-add `RefreshArtist` clobbers the album monitoring. Such an artist never gets searched, so "nothing happens". The sweep monitors the whole discography of each broken artist and triggers an `ArtistSearch`.
+
+Deliberately conservative: it only touches **monitored** artists (an unmonitored artist is a deliberate "don't want this") that have albums but **none** monitored — so it never disturbs artists where you intentionally monitored just one album, and never resurrects something you unmonitored. A fixed artist gains monitored albums and is skipped on the next run, so the sweep is self-limiting and a no-op in steady state. `--limit` caps artists per run so a large backlog drains gently instead of storming slskd.
+
+```bash
+python scripts/lidarr_monitor_sweep.py            # fix + search
+python scripts/lidarr_monitor_sweep.py --dry-run  # report only
+python scripts/lidarr_monitor_sweep.py --limit 5  # cap artists per run (cron uses this)
+python scripts/lidarr_monitor_sweep.py --no-search # monitor only, don't search
+```
+
+Exit codes: `0` success / nothing to do, `1` partial (some calls failed), `2` fatal (config / Lidarr unreachable).
+
+Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localhost:8686`).
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. The full live crontab on this host:
@@ -442,6 +459,14 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 # only re-collides with the stale session. Set SLSKD_ALERT_WEBHOOK (e.g. an ntfy
 # topic) in .env to get a push instead of just a log line.
 */15 * * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_login_watch.py --grace-min 10 --state logs/slskd_login_watch.json >> logs/slskd_login_watch.log 2>&1"
+
+# --- lidarr monitor sweep (self-heals bulk-added artists left unmonitored) ---
+# 5,20,35,50 — gentle drain: fix at most 5 artists/run so a large backlog (the
+# bulk-add monitoring bug can leave hundreds of artists with 0 monitored albums)
+# trickles into searches instead of storming slskd. Offset from the :00/:15
+# watchdog so they don't run together. Self-limiting: a fixed artist gains
+# monitored albums and is skipped next run.
+5,20,35,50 * * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/lidarr_monitor_sweep.py --limit 5 >> logs/lidarr_monitor_sweep.log 2>&1"
 ```
 
 Pi-era host-tuning shell scripts and their docs live under `scripts/legacy/` — they are reference-only and not safe to run on the MS01 host (see `scripts/legacy/README.md`).
