@@ -232,6 +232,10 @@ Required in `.env`:
 - `API_KEY_PROWLARR` - Prowlarr API key (used by scripts)
 - `API_KEY_LIDARR` - Lidarr API key (used by scripts)
 - `API_KEY_SLSKD` - slskd API key (used by scripts)
+- `PLAYLIST_GENERATOR_USERNAME`, `PLAYLIST_GENERATOR_PASSWORD` - basic-auth login for the playlist-generator app
+- `PLAYLIST_GENERATOR_DB_PASSWORD` - Postgres/pgvector password for playlist-generator-db
+- `LASTFM_API_KEY` - Last.fm API key for playlist-generator enrichment (read-only; `LASTFM_API_SECRET` optional)
+- `OPENAI_API_KEY`, `DISCOGS_TOKEN` - optional API keys for playlist-generator (app degrades gracefully without them)
 
 ## General Development Principles
 
