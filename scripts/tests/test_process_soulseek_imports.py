@@ -82,3 +82,121 @@ def test_stub_coverage_dominant_release_chosen():
 
 def test_stub_coverage_empty():
   assert psi.stub_coverage({}, {}) == (0, 0, 0.0)
+
+
+# --- _is_not_upgrade --------------------------------------------------------
+
+
+def test_is_not_upgrade_all_not_upgrade():
+  assert psi._is_not_upgrade(["Not an upgrade for existing track file(s)"]) is True
+  assert psi._is_not_upgrade(
+    ["Not an upgrade for existing album file(s)", "not an upgrade for existing track file(s)"]
+  ) is True
+
+
+def test_is_not_upgrade_empty_is_false():
+  assert psi._is_not_upgrade([]) is False
+
+
+def test_is_not_upgrade_mixed_blocker_is_false():
+  # a "couldn't find similar" track may be genuinely missing — not safe to purge
+  assert psi._is_not_upgrade(
+    ["Not an upgrade for existing track file(s)", "Couldn't find similar album for ..."]
+  ) is False
+
+
+# --- process_folder purge pass ---------------------------------------------
+
+
+class _FakeLog:
+  def info(self, *a, **k):
+    pass
+
+  def warning(self, *a, **k):
+    pass
+
+  def error(self, *a, **k):
+    pass
+
+
+class _FakeClient:
+  """Minimal LidarrClient stand-in: returns canned manual-import items."""
+
+  def __init__(self, items):
+    self._items = items
+    self.posted = False
+
+  def get_manual_import(self, folder, filter_existing=True):
+    return self._items
+
+  def post_manual_import(self, items, import_mode="copy"):
+    self.posted = True
+    return {"id": 1}
+
+  def wait_for_command(self, command_id, timeout=300):
+    return {"status": "completed", "result": "successful"}
+
+
+def _rejected_item(reason):
+  return {
+    "path": "/downloads/complete/slskd/X/01.mp3",
+    "rejections": [{"reason": reason}],
+    "artist": {"id": 1, "artistName": "A"},
+    "album": {"id": 2, "title": "B"},
+    "tracks": [{"id": 3}],
+  }
+
+
+def _make_folder(tmp_path):
+  d = tmp_path / "Dead Album"
+  d.mkdir()
+  (d / "01.mp3").write_bytes(b"x")
+  return d
+
+
+def test_purge_deletes_pure_not_upgrade(tmp_path):
+  d = _make_folder(tmp_path)
+  client = _FakeClient([_rejected_item("Not an upgrade for existing track file(s)")])
+  res = psi.process_folder(
+    client, "/downloads/complete/slskd", d.name,
+    execute=True, purge_not_upgrade=True, host_folder=d, log=_FakeLog(),
+  )
+  assert res.status == "purged"
+  assert not d.exists()
+  assert client.posted is False  # never tried to import
+
+
+def test_purge_dry_run_keeps_folder(tmp_path):
+  d = _make_folder(tmp_path)
+  client = _FakeClient([_rejected_item("Not an upgrade for existing track file(s)")])
+  res = psi.process_folder(
+    client, "/downloads/complete/slskd", d.name,
+    execute=False, purge_not_upgrade=True, host_folder=d, log=_FakeLog(),
+  )
+  assert res.status == "purged"
+  assert d.exists()  # dry-run must not delete
+
+
+def test_purge_skips_when_flag_off(tmp_path):
+  d = _make_folder(tmp_path)
+  client = _FakeClient([_rejected_item("Not an upgrade for existing track file(s)")])
+  res = psi.process_folder(
+    client, "/downloads/complete/slskd", d.name,
+    execute=True, purge_not_upgrade=False, host_folder=d, log=_FakeLog(),
+  )
+  assert res.status == "skipped"
+  assert d.exists()
+
+
+def test_purge_skips_mixed_rejections(tmp_path):
+  d = _make_folder(tmp_path)
+  client = _FakeClient([
+    _rejected_item("Not an upgrade for existing track file(s)"),
+    _rejected_item("Couldn't find similar album for /downloads/complete/slskd/X"),
+  ])
+  res = psi.process_folder(
+    client, "/downloads/complete/slskd", d.name,
+    execute=True, purge_not_upgrade=True, host_folder=d, log=_FakeLog(),
+  )
+  assert res.status == "skipped"  # one track might be genuinely missing
+  assert d.exists()

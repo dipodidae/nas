@@ -34,6 +34,14 @@ Usage:
     # Process a specific folder
     python scripts/process_soulseek_imports.py --folder "Erase"
 
+    # Also delete dead "not an upgrade" downloads Lidarr already has
+    python scripts/process_soulseek_imports.py --execute --purge-not-upgrade
+
+A purge pass (``--purge-not-upgrade``) deletes a folder only when *every*
+audio file Lidarr scanned is rejected solely as "not an upgrade" — proof
+that Lidarr already holds the whole album at equal/better quality, so the
+download can never import and is pure dead weight.
+
 Exit codes:
     0 - Success (all processable items imported or dry-run complete)
     1 - Partial success (some items skipped or failed)
@@ -47,6 +55,7 @@ import csv
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -95,7 +104,7 @@ class FolderResult:
     """Result of processing a single download folder."""
 
     folder: str
-    status: str  # imported, skipped, failed, error
+    status: str  # imported, skipped, purged, failed, error
     reason: str = ""
     artist: str = ""
     album: str = ""
@@ -111,6 +120,7 @@ class ImportSummary:
     total_folders: int = 0
     imported: int = 0
     skipped: int = 0
+    purged: int = 0
     failed: int = 0
     errors: int = 0
     results: list[FolderResult] = field(default_factory=list)
@@ -304,6 +314,19 @@ def stub_coverage(
 _NOT_CLOSE_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 
+def _is_not_upgrade(reasons: list[str]) -> bool:
+    """True iff a file's rejections are non-empty and *all* are "not an upgrade".
+
+    A file qualifies only when Lidarr matched it to an existing track and
+    rejected it solely because what's on disk is equal-or-better quality. A
+    file with any other blocker (e.g. "couldn't find similar album") does not
+    qualify — that track may be genuinely absent from the library.
+    """
+    if not reasons:
+        return False
+    return all("not an upgrade" in r.lower() for r in reasons)
+
+
 def _evaluate_rejections(
     file_info: dict[str, Any],
     *,
@@ -384,6 +407,8 @@ def process_folder(
     execute: bool = False,
     accept_min_match: float = 80.0,
     min_track_fraction: float = 0.5,
+    purge_not_upgrade: bool = False,
+    host_folder: Path | None = None,
     log: logging.Logger,
 ) -> FolderResult:
     """Process a single download folder through Lidarr's manual import.
@@ -429,15 +454,20 @@ def process_folder(
     album_title = ""
     imported_by_release: dict[int, int] = {}
     tracks_by_release: dict[int, int] = {}
+    audio_items = 0
+    not_upgrade_items = 0
 
     for file_info in items:
         if file_info.get("additionalFile"):
             continue
 
+        audio_items += 1
         should_import, reasons = _evaluate_rejections(
             file_info, accept_min_match=accept_min_match,
         )
         all_rejections.extend(reasons)
+        if _is_not_upgrade(reasons):
+            not_upgrade_items += 1
 
         if not should_import:
             continue
@@ -475,6 +505,48 @@ def process_folder(
     if not importable_items:
         unique_reasons = sorted(set(all_rejections))[:5]
         reason = "; ".join(unique_reasons) if unique_reasons else "No confident matches"
+
+        # Purge pass: every audio file Lidarr saw is a confirmed "not an
+        # upgrade" — Lidarr already holds the whole folder at equal/better
+        # quality, so this download is dead weight that will never import.
+        if (
+            purge_not_upgrade
+            and audio_items > 0
+            and not_upgrade_items == audio_items
+        ):
+            purge_reason = (
+                f"not an upgrade — Lidarr already has all {audio_items} track(s) "
+                "at equal/better quality"
+            )
+            if not execute:
+                log.info("  PURGE (dry-run): would delete %s — %s", folder_name, purge_reason)
+            elif host_folder is None or not host_folder.is_dir():
+                log.warning("  PURGE skipped: host folder missing for %s", folder_name)
+            else:
+                try:
+                    shutil.rmtree(host_folder)
+                    log.info("  PURGED %s — %s", folder_name, purge_reason)
+                except OSError as exc:
+                    log.warning("  PURGE failed for %s: %s", folder_name, exc)
+                    return FolderResult(
+                        folder=folder_name,
+                        status="skipped",
+                        reason=f"purge failed: {exc}",
+                        artist=artist_name,
+                        album=album_title,
+                        tracks_total=total_files,
+                        rejections=unique_reasons,
+                    )
+            return FolderResult(
+                folder=folder_name,
+                status="purged",
+                reason=purge_reason,
+                artist=artist_name,
+                album=album_title,
+                tracks_total=total_files,
+                rejections=unique_reasons,
+            )
+
         log.info("  SKIP: %s", reason)
         return FolderResult(
             folder=folder_name,
@@ -571,6 +643,7 @@ def print_summary(summary: ImportSummary, *, log: logging.Logger) -> None:
     log.info("Total folders processed: %d", summary.total_folders)
     log.info("  Imported:  %d", summary.imported)
     log.info("  Skipped:   %d", summary.skipped)
+    log.info("  Purged:    %d", summary.purged)
     log.info("  Failed:    %d", summary.failed)
     log.info("  Errors:    %d", summary.errors)
     log.info("")
@@ -598,6 +671,14 @@ def print_summary(summary: ImportSummary, *, log: logging.Logger) -> None:
                 artist_info = f" ({r.artist} - {r.album})" if r.artist else ""
                 log.info("  [SKIP] %s%s", r.folder, artist_info)
                 log.info("         Reason: %s", r.reason)
+        log.info("")
+
+    if summary.purged > 0:
+        log.info("--- PURGED (not an upgrade — Lidarr already has it) ---")
+        for r in summary.results:
+            if r.status == "purged":
+                artist_info = f" ({r.artist} - {r.album})" if r.artist else ""
+                log.info("  [PURGE] %s%s", r.folder, artist_info)
         log.info("")
 
     if summary.failed > 0:
@@ -682,7 +763,7 @@ def load_state(
             if not result.folder:
                 continue
             prior.append(result)
-            if result.status == "imported":
+            if result.status in ("imported", "purged"):
                 skip_map[result.folder] = result
             elif result.status == "skipped":
                 if not retry_skipped:
@@ -821,6 +902,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--purge-not-upgrade",
+        action="store_true",
+        default=False,
+        help=(
+            "Delete a download folder when every audio file Lidarr saw is "
+            "rejected solely as 'not an upgrade' — i.e. Lidarr already holds "
+            "the whole album at equal/better quality, so the download is dead "
+            "weight that can never import. Only deletes with --execute; "
+            "dry-run reports what it would remove."
+        ),
+    )
+    parser.add_argument(
         "--accept-min-match",
         type=float,
         default=80.0,
@@ -955,6 +1048,8 @@ def main(argv: list[str] | None = None) -> int:
             summary.imported += 1
         elif r.status == "skipped":
             summary.skipped += 1
+        elif r.status == "purged":
+            summary.purged += 1
         elif r.status == "failed":
             summary.failed += 1
         elif r.status == "error":
@@ -986,6 +1081,8 @@ def main(argv: list[str] | None = None) -> int:
                 execute=args.execute,
                 accept_min_match=args.accept_min_match,
                 min_track_fraction=args.min_track_fraction,
+                purge_not_upgrade=args.purge_not_upgrade,
+                host_folder=host_downloads / folder_name,
                 log=log,
             )
 
@@ -994,6 +1091,8 @@ def main(argv: list[str] | None = None) -> int:
                 summary.imported += 1
             elif result.status == "skipped":
                 summary.skipped += 1
+            elif result.status == "purged":
+                summary.purged += 1
             elif result.status == "failed":
                 summary.failed += 1
             elif result.status == "error":

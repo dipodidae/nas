@@ -379,7 +379,7 @@ Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localho
 
 Reaps `/downloads/complete/slskd/<dir>` subtrees that Lidarr has already imported into `/music/`. With Lidarr configured to use hardlinks (`copyUsingHardlinks=true`), the slskd download copy is never reaped by the import path itself; over weeks this accumulates GBs of duplicates of files that already live in the music library.
 
-Match strategy is size-based against a one-shot walk of `/music/`. By default `--threshold 1.0` requires that *every* audio file in the slskd dir has a matching size in the library — false-positive risk is essentially zero. Dirs the Lidarr queue still references are skipped (mid-flight protection), and an age gate keeps freshly downloaded folders alone for the first hour.
+Match strategy is **Lidarr's own import history**, not file size. Lidarr records, per imported track, the `droppedPath` (the slskd source) and `importedPath` (the `/music` target); the sweeper pages that history (`eventType=trackFileImported`) and, for each slskd dir, counts a file as matched only when Lidarr recorded importing it *and* the recorded `importedPath` still exists on disk. By default `--threshold 1.0` requires that *every* audio file in the dir is confirmed imported-and-present — false-positive risk is essentially zero. (The previous size-based match silently reaped nothing: Lidarr rewrites tags on import, so the imported copy is a different size than the slskd original and never matched.) Dirs the Lidarr queue still references are skipped (mid-flight protection), and an age gate keeps freshly downloaded folders alone for the first hour. If Lidarr returns no import history the sweep refuses to act (exit 2) rather than risk over-reaping.
 
 ```bash
 python scripts/slskd_complete_sweep.py                    # delete confirmed dups
@@ -406,8 +406,8 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 30 3 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
 # 04:30 — post-Watchtower health check (Watchtower fires at 04:00)
 30 4 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/post_update_verifier.log 2>&1"
-# 05:30 — re-import orphaned slskd download folders that lost their Lidarr queue row (the 4th hygiene job); shares the cleanup flock, 50min budget, rolling --state so only new folders are fingerprinted, stub guard at 0.5
-30 5 * * * /usr/bin/flock -w 600 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/process_soulseek_imports.py --execute --skip-queue-tracked --accept-min-match 70 --min-track-fraction 0.5 --state logs/slsk_import_state.tsv --max-seconds 3000 >> logs/process_soulseek_imports.log 2>&1"
+# 05:30 — re-import orphaned slskd download folders that lost their Lidarr queue row (the 4th hygiene job); shares the cleanup flock, 50min budget, rolling --state so only new folders are fingerprinted, stub guard at 0.5; --purge-not-upgrade deletes downloads Lidarr already holds at equal/better quality (dead "not an upgrade" dupes)
+30 5 * * * /usr/bin/flock -w 600 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/process_soulseek_imports.py --execute --skip-queue-tracked --accept-min-match 70 --min-track-fraction 0.5 --purge-not-upgrade --state logs/slsk_import_state.tsv --max-seconds 3000 >> logs/process_soulseek_imports.log 2>&1"
 
 # --- weekly ---
 # Sunday 02:00 — compress / truncate oversize log files inside CONFIG_DIRECTORY

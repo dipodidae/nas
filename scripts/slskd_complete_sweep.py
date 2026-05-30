@@ -3,41 +3,55 @@
 
 Background
 ----------
-Tubifarry uses Lidarr's standard import flow which (with
-``copyUsingHardlinks=true`` on a same-filesystem mount) hardlinks the file
-from ``/downloads/complete/slskd/<dir>/<file>`` into
+Tubifarry (and ``process_soulseek_imports.py``) drive Lidarr's standard
+import flow, which copies/hardlinks the file from
+``/downloads/complete/slskd/<dir>/<file>`` into
 ``/music/<artist>/<album>/<file>``. The slskd copy is left behind — over
-time ``/downloads/complete/slskd/`` accumulates GBs of dirs that are 100%
+time ``/downloads/complete/slskd/`` accumulates GBs of dirs whose audio is
 already represented under ``/music/``.
 
-This script identifies those duplicates by file-size match against the
-live library and deletes only fully-duplicated slskd dirs.
+Why not match by file size
+--------------------------
+The original implementation matched download files against ``/music`` by
+exact byte size. Lidarr **rewrites tags on import** (and renames the file),
+so the imported copy under ``/music`` is a different size than the slskd
+original. The size index therefore matched ~0 files and the sweep reaped
+nothing — 600+ already-imported dirs (hundreds of GB) sat forever.
 
-Match strategy
---------------
-1. Walk ``/music`` once and build {file_size: count}.
+Match strategy (authoritative)
+------------------------------
+Lidarr's history records, for every imported track, the ``droppedPath``
+(the slskd source) and the ``importedPath`` (the ``/music`` target). That
+mapping is the ground truth for "this download was imported here".
+
+1. Page Lidarr history for ``trackFileImported`` events; build
+   ``{slskd_folder: {rel_path: imported_container_path}}`` for every drop
+   that originated under the slskd complete dir.
 2. For each ``/downloads/complete/slskd/<dir>`` directory:
-   - List its audio files (.mp3, .flac, .ogg, .m4a, .opus, .wav, .aac, .wma).
-   - Compute the fraction of those whose size matches an entry in the music
-     size index.
-   - If ``match_ratio >= --threshold`` (default 1.0 — every file matches)
-     AND the dir mtime is older than ``--min-age-hours`` (default 1) AND
-     no active Lidarr queue item references the dir, mark it for deletion.
+   - List its audio files.
+   - A file counts as matched if Lidarr recorded importing it (same folder
+     + relative path) AND the recorded ``importedPath`` still exists on
+     disk (translated container -> host).
+   - ``match_ratio = matched / audio_files``.
+   - If ``ratio >= --threshold`` (default 1.0 — every file confirmed
+     imported and still present) AND the dir mtime is older than
+     ``--min-age-hours`` AND no active Lidarr queue item references the
+     dir, mark it for deletion.
 3. Delete the marked dirs.
 
 Safety rails
 ------------
-- **Threshold defaults to 1.0** — every audio file must match. Sub-100%
-  matches are reported but skipped unless ``--threshold`` is relaxed.
+- **Threshold defaults to 1.0** — every audio file must be confirmed
+  imported-and-present. Sub-100% dirs are reported but skipped unless
+  ``--threshold`` is relaxed.
 - **Age gate** — only dirs whose mtime is older than ``--min-age-hours``
   (default 1) are eligible. Brand-new downloads in flight are excluded.
-- **Lidarr-active gate** — if any Lidarr queue item references the dir
-  (``outputPath`` / ``downloadId``-derived path), the dir is left alone.
-- **Path containment check** — only ever deletes children of
+- **Lidarr-active gate** — if any Lidarr queue item references the dir,
+  the dir is left alone.
+- **Path containment check** — only ever deletes direct children of
   ``SLSKD_COMPLETE_DIR``; refuses if the resolved target escapes it.
 - ``--dry-run`` reports the plan and exits 0.
-- ``--limit`` caps the number of deletions in a single run (safety cushion
-  while tuning).
+- ``--limit`` caps the number of deletions in a single run.
 
 Exit codes
 ----------
@@ -70,7 +84,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,9 +99,17 @@ if "API_KEY_LIDARR" not in os.environ:
 DEFAULT_LIDARR_HOST = "http://localhost:8686"
 DEFAULT_MUSIC_DIR = "/mnt/drive/music"
 DEFAULT_SLSKD_COMPLETE_DIR = "/mnt/drive/downloads/complete/slskd"
+DEFAULT_CONTAINER_MUSIC_ROOT = "/music"
+DEFAULT_CONTAINER_SLSKD_ROOT = "/downloads/complete/slskd"
+HISTORY_PAGE_SIZE = 1000
+HISTORY_PAGE_CAP = 50  # hard ceiling so a runaway never pages forever
+TRACK_FILE_IMPORTED_EVENT = "trackFileImported"
 AUDIO_EXTS = frozenset(
   {".mp3", ".flac", ".ogg", ".m4a", ".opus", ".wav", ".aac", ".wma", ".ape", ".alac"}
 )
+
+# {slskd_folder_name: {rel_path_under_folder: imported_container_path}}
+ImportMap = dict[str, dict[str, str]]
 
 
 @dataclass(frozen=True)
@@ -100,39 +121,104 @@ class DirReport:
   mtime: float
 
 
-def build_music_size_index(music_root: Path) -> Counter:
-  """Return Counter of audio-file sizes under music_root."""
-  sizes: Counter = Counter()
-  for dirpath, _dirs, files in os.walk(music_root):
-    for name in files:
-      ext = os.path.splitext(name)[1].lower()
-      if ext not in AUDIO_EXTS:
-        continue
-      try:
-        sizes[os.path.getsize(os.path.join(dirpath, name))] += 1
-      except OSError:
-        continue
-  return sizes
+def _drop_to_folder_rel(dropped: str, container_slskd_root: str) -> tuple[str, str] | None:
+  """Split a container droppedPath into (folder_name, rel_path_under_folder).
+
+  Returns None if the drop did not originate under the slskd complete dir.
+  """
+  prefix = container_slskd_root.rstrip("/") + "/"
+  if not dropped.startswith(prefix):
+    return None
+  remainder = dropped[len(prefix) :]
+  folder, _, rel = remainder.partition("/")
+  if not folder or not rel:
+    return None
+  return folder, rel
 
 
-def scan_slskd_dir(d: Path, music_sizes: Counter) -> DirReport | None:
-  audio_files = 0
-  matched = 0
+def build_import_map(host: str, api_key: str, container_slskd_root: str) -> ImportMap:
+  """Build {folder: {rel_path: imported_container_path}} from Lidarr history.
+
+  Pages ``trackFileImported`` events and keeps every drop that originated
+  under the slskd complete dir. Returns an empty map on the first network
+  error (caller treats an empty map as "nothing confirmed" — safe: reaps
+  nothing rather than over-reaping).
+  """
+  import_map: ImportMap = {}
+  for page in range(1, HISTORY_PAGE_CAP + 1):
+    query = urllib.parse.urlencode(
+      {
+        "page": page,
+        "pageSize": HISTORY_PAGE_SIZE,
+        "eventType": 3,  # trackFileImported
+        "sortKey": "date",
+        "sortDirection": "descending",
+      }
+    )
+    url = f"{host}/api/v1/history?{query}"
+    req = urllib.request.Request(url, headers={"X-Api-Key": api_key})
+    try:
+      with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - localhost
+        records = json.loads(resp.read()).get("records", [])
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
+      if not import_map:
+        print(f"WARNING: Lidarr history fetch failed on page {page}: {exc}", file=sys.stderr)
+      break
+    if not records:
+      break
+    for rec in records:
+      if rec.get("eventType") != TRACK_FILE_IMPORTED_EVENT:
+        continue
+      data = rec.get("data") or {}
+      dropped = data.get("droppedPath") or ""
+      imported = data.get("importedPath") or ""
+      if not dropped or not imported:
+        continue
+      split = _drop_to_folder_rel(dropped, container_slskd_root)
+      if split is None:
+        continue
+      folder, rel = split
+      import_map.setdefault(folder, {})[rel] = imported
+    if len(records) < HISTORY_PAGE_SIZE:
+      break
+  return import_map
+
+
+def imported_host_path(
+  imported_container: str, container_music_root: str, music_host: Path
+) -> Path | None:
+  """Translate a container importedPath to its host path, or None if unmapped."""
+  prefix = container_music_root.rstrip("/") + "/"
+  if not imported_container.startswith(prefix):
+    return None
+  return music_host / imported_container[len(prefix) :]
+
+
+def scan_slskd_dir(
+  d: Path,
+  import_map: ImportMap,
+  container_music_root: str,
+  music_host: Path,
+) -> DirReport | None:
+  """Score one slskd download dir against Lidarr's recorded imports."""
   try:
     mtime = d.stat().st_mtime
   except OSError:
     return None
+  folder_imports = import_map.get(d.name, {})
+  audio_files = 0
+  matched = 0
   for dirpath, _dirs, files in os.walk(d):
     for name in files:
-      ext = os.path.splitext(name)[1].lower()
-      if ext not in AUDIO_EXTS:
+      if os.path.splitext(name)[1].lower() not in AUDIO_EXTS:
         continue
       audio_files += 1
-      try:
-        size = os.path.getsize(os.path.join(dirpath, name))
-      except OSError:
+      rel = os.path.relpath(os.path.join(dirpath, name), d).replace(os.sep, "/")
+      imported_container = folder_imports.get(rel)
+      if not imported_container:
         continue
-      if music_sizes.get(size, 0) > 0:
+      host_path = imported_host_path(imported_container, container_music_root, music_host)
+      if host_path is not None and host_path.exists():
         matched += 1
   if audio_files == 0:
     return None
@@ -175,7 +261,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     "--threshold",
     type=float,
     default=1.0,
-    help="Match ratio required to delete (default 1.0 — every audio file must match).",
+    help="Match ratio required to delete (default 1.0 — every audio file confirmed imported).",
   )
   parser.add_argument(
     "--min-age-hours",
@@ -197,6 +283,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     type=Path,
     default=None,
     help=f"Override SLSKD_COMPLETE_DIR (env or {DEFAULT_SLSKD_COMPLETE_DIR}).",
+  )
+  parser.add_argument(
+    "--container-music-root",
+    default=DEFAULT_CONTAINER_MUSIC_ROOT,
+    help=f"Lidarr's container path for the music root (default {DEFAULT_CONTAINER_MUSIC_ROOT}).",
+  )
+  parser.add_argument(
+    "--container-slskd-root",
+    default=DEFAULT_CONTAINER_SLSKD_ROOT,
+    help=(
+      "Lidarr's container path for the slskd complete dir "
+      f"(default {DEFAULT_CONTAINER_SLSKD_ROOT})."
+    ),
   )
   parser.add_argument("--dry-run", action="store_true", help="Report only.")
   return parser.parse_args(argv)
@@ -221,9 +320,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ERROR: slskd complete dir {slskd_root} not found", file=sys.stderr)
     return 2
 
-  print(f"indexing {music} ...")
-  music_sizes = build_music_size_index(music)
-  print(f"  indexed {sum(music_sizes.values())} audio files, {len(music_sizes)} distinct sizes")
+  print("fetching Lidarr import history ...")
+  import_map = build_import_map(host, api_key, args.container_slskd_root)
+  imported_files = sum(len(v) for v in import_map.values())
+  print(f"  mapped {imported_files} imported files across {len(import_map)} slskd folders")
+  if not import_map:
+    print(
+      "ERROR: Lidarr returned no import history — refusing to reap (would be unsafe)",
+      file=sys.stderr,
+    )
+    return 2
 
   queue_names = active_queue_paths(host, api_key)
   print(f"Lidarr queue references {len(queue_names)} path basename(s)")
@@ -235,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
   for child in sorted(slskd_root.iterdir()):
     if not child.is_dir():
       continue
-    rep = scan_slskd_dir(child, music_sizes)
+    rep = scan_slskd_dir(child, import_map, args.container_music_root, music)
     if rep is None:
       continue
     reports.append(rep)
@@ -262,7 +368,10 @@ def main(argv: list[str] | None = None) -> int:
   slskd_resolved = slskd_root.resolve()
   for r in eligible:
     if r.path.resolve().parent != slskd_resolved:
-      print(f"ERROR: refusing to act on {r.path} — not a direct child of {slskd_root}", file=sys.stderr)
+      print(
+        f"ERROR: refusing to act on {r.path} — not a direct child of {slskd_root}",
+        file=sys.stderr,
+      )
       return 2
 
   if args.limit and len(eligible) > args.limit:
