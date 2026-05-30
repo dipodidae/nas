@@ -68,7 +68,27 @@ export interface AddArtistOptions {
   searchOnAdd: boolean
 }
 
-export function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promise<{ id: number }> {
+// The artist-add path (unlike addAlbum) had no post-POST enforcement, so bulk-
+// added artists could land fully unmonitored — artist monitored=false and 0/N
+// albums monitored — even with monitored:true on the body. Two Lidarr behaviours
+// cause it: it intermittently ignores addOptions.monitor, and the RefreshArtist
+// it enqueues runs AlbumMonitoredService and can rewrite album monitoring
+// mid-flight (the same clobber addAlbum guards against). So we wait the refresh
+// out, force the artist record monitored, then (for monitor=all) explicitly
+// monitor its whole discography — reusing the same helpers as the album path.
+async function enforceMonitor(artistId: number, monitorMode: 'all' | 'future'): Promise<void> {
+  await waitForArtistRefresh(artistId).catch(() => undefined)
+  await call('/api/v1/artist/editor', {
+    method: 'PUT',
+    body: JSON.stringify({ artistIds: [artistId], monitored: true }),
+  })
+  if (monitorMode !== 'all')
+    return
+  const albums = await call<Array<{ id: number }>>(`/api/v1/album?artistId=${artistId}`).catch(() => [])
+  await monitorAlbums(albums.map(a => a.id), true)
+}
+
+export async function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promise<{ id: number }> {
   const body: AddArtistBody = {
     foreignArtistId: c.foreignArtistId,
     artistName: c.artistName,
@@ -76,13 +96,16 @@ export function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): Promis
     metadataProfileId: o.metadataProfileId,
     rootFolderPath: o.rootFolderPath,
     monitored: true,
-    monitorNewItems: o.monitorMode === 'future' ? 'all' : 'all',
+    monitorNewItems: 'all',
     addOptions: {
       monitor: o.monitorMode,
       searchForMissingAlbums: o.searchOnAdd,
     },
   }
-  return call('/api/v1/artist', { method: 'POST', body: JSON.stringify(body) })
+  const created = await call<{ id: number }>('/api/v1/artist', { method: 'POST', body: JSON.stringify(body) })
+  if (created?.id)
+    await enforceMonitor(created.id, o.monitorMode)
+  return created
 }
 
 // Adding a specific album: tell Lidarr to add the album + its artist with
@@ -150,7 +173,12 @@ export function commandSearchAlbum(albumIds: number[]): Promise<unknown> {
 interface LidarrCommand {
   name: string
   status: string
-  body?: { artistId?: number }
+  // Lidarr's RefreshArtist command body carries artistIds (an array), NOT a
+  // singular artistId. Matching only artistId made waitForArtistRefresh never
+  // detect the refresh, so it returned immediately and the post-add re-monitor
+  // ran before AlbumMonitoredService clobbered it — leaving albums unmonitored.
+  // Match both shapes to be safe across Lidarr versions.
+  body?: { artistId?: number, artistIds?: number[] }
 }
 
 // Lidarr enqueues a RefreshArtist after every album add. That refresh runs
@@ -170,7 +198,7 @@ export async function waitForArtistRefresh(
     const active = cmds.some(c =>
       c.name === 'RefreshArtist'
       && (c.status === 'queued' || c.status === 'started')
-      && c.body?.artistId === artistId,
+      && (c.body?.artistId === artistId || (c.body?.artistIds?.includes(artistId) ?? false)),
     )
     if (!active)
       return { timedOut: false }
