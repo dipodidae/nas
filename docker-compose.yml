@@ -252,19 +252,18 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
       - autoheal=true
-    # Login-aware healthcheck. The web server (5030) can be up while the Soulseek
-    # connection is dead, so probe real login state via the API instead of just
-    # spidering the root. $$SLSKD_API_KEY is expanded by the container shell at
-    # runtime ($$ escapes Compose interpolation). Marked unhealthy only after 5
-    # consecutive failures (~5 min) so the brief Connected->LoggingIn transitions
-    # slskd makes during normal reconnects don't trip it. The `autoheal=true`
-    # label above lets the autoheal service restart it once it goes unhealthy.
+    # Liveness-only healthcheck — deliberately Soulseek-INDEPENDENT (just spiders
+    # the web UI). It must NOT probe isLoggedIn: slskd's Soulseek login drops
+    # transiently (ghost session on slsknet after a fast restart, VPN blip), and
+    # restarting on that is actively harmful — a restart re-collides with the
+    # stale server-side session and perpetuates the 5000ms login-timeout spiral
+    # (32->64->128s backoff). The only cure is to stay DOWN 15-30 min so slsknet
+    # reaps its ghost session; an autoheal restart is the opposite of the cure.
+    # So autoheal (label above) only restarts slskd if the web server itself is
+    # dead. Login state is watched separately, alert-only, by
+    # scripts/slskd_login_watch.py — which never restarts.
     healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          wget -qO- --header="X-API-Key: $$SLSKD_API_KEY"
-          http://localhost:5030/api/v0/server | grep -q '"isLoggedIn":true'
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
       interval: 60s
       timeout: 10s
       retries: 5

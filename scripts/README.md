@@ -394,6 +394,21 @@ Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localho
 
 Note: this script reaps confirmed duplicates only. Folders Lidarr *rejected* (peer mismatch, fingerprint below 80%) never get hardlinked into `/music/` and so look like orphans here — they are real orphans, but not duplicates, and need a separate decision (re-import via `process_soulseek_imports.py`, or manual triage). The sweeper deliberately leaves them alone.
 
+### `slskd_login_watch.py`
+
+Alerts when slskd has been logged out of Soulseek longer than a grace period — and **never restarts it**. slskd's web server stays up while the Soulseek login is dead, and restarting on a login drop is harmful: a fast restart re-collides with slsknet's stale session for the username and perpetuates the 5000ms login-timeout spiral. The only cure is to leave slskd down 15–30 min, then cold-start. So this is the alert-only counterpart to that rule — slskd's container healthcheck is deliberately Soulseek-independent (it must not drive autoheal off login state).
+
+Tracks how long slskd has been logged out across runs in a small JSON state file, so it can distinguish a brief reconnect blip from a genuine stuck session. Optionally POSTs to `SLSKD_ALERT_WEBHOOK` (e.g. an ntfy topic) so a drop reaches your phone.
+
+```bash
+python scripts/slskd_login_watch.py                  # check + print status
+python scripts/slskd_login_watch.py --grace-min 10 --state logs/slskd_login_watch.json
+```
+
+Exit codes: `0` logged in (or out but within grace), `1` logged out past the grace period (alert raised), `2` fatal (config missing / slskd API unreachable).
+
+Environment: `API_KEY_SLSKD` (required), `SLSKD_HOST` (default `http://localhost:5030`), `SLSKD_ALERT_WEBHOOK` (optional).
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. The full live crontab on this host:
@@ -420,6 +435,13 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 22 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_complete_sweep.py >> logs/slskd_complete_sweep.log 2>&1"
 # :37 — direct slskd sweep picks up anything Lidarr never tracked (errored/rejected/cancelled transfers)
 37 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_cleanup.py >> logs/slskd_cleanup.log 2>&1"
+
+# --- slskd login watchdog (alert-only, NOT on the cleanup flock) ---
+# */15 — alert if slskd has been logged out of Soulseek >10min. Never restarts:
+# the ghost-session cure is to stop slskd 15-30min then cold-start, and a restart
+# only re-collides with the stale session. Set SLSKD_ALERT_WEBHOOK (e.g. an ntfy
+# topic) in .env to get a push instead of just a log line.
+*/15 * * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_login_watch.py --grace-min 10 --state logs/slskd_login_watch.json >> logs/slskd_login_watch.log 2>&1"
 ```
 
 Pi-era host-tuning shell scripts and their docs live under `scripts/legacy/` — they are reference-only and not safe to run on the MS01 host (see `scripts/legacy/README.md`).
