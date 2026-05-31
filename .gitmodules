@@ -1,0 +1,3 @@
+[submodule "webapps/jellyfin-playlist-generator"]
+	path = webapps/jellyfin-playlist-generator
+	url = https://github.com/dipodidae/jellyfin-playlist-generator.git

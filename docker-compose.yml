@@ -863,6 +863,97 @@ services:
         max-size: 10m
         max-file: '2'
 
+  # PostgreSQL + pgvector backing store for playlist-generator. Internal only
+  # (no host publish) — the app reaches it over nas-network. Data is persisted
+  # under CONFIG_DIRECTORY like every other service. Left unlabeled for
+  # Watchtower: never auto-update a database engine out from under its data.
+  playlist-generator-db:
+    image: pgvector/pgvector:pg16
+    container_name: playlist-generator-db
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_USER=playlist
+      - POSTGRES_PASSWORD=${PLAYLIST_GENERATOR_DB_PASSWORD}
+      - POSTGRES_DB=playlist_generator
+    volumes:
+      - ${CONFIG_DIRECTORY}/playlist-generator-db:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U playlist -d playlist_generator']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # Jellyfin Playlist Generator — unified container (Nuxt static frontend +
+  # FastAPI + nginx basic-auth, all on :80). Source is a git submodule at
+  # webapps/jellyfin-playlist-generator (its own GitHub repo, pulled with
+  # `git submodule update --remote`); the build uses the repo-root Dockerfile.
+  # Locally-built: Watchtower can't pull, so it stays unlabeled. SWAG fronts it
+  # at playlist-generator.4eva.me via the hand-managed proxy-conf; the app does
+  # its own basic auth (AUTH_USER/AUTH_PASS -> htpasswd), so /health is the only
+  # unauthenticated path. The library starts empty — index it in-container via
+  # `docker exec playlist-generator python -m app.cli_v3 <step>`.
+  # JELLYFIN_* wire the "Push to Jellyfin" export: the app reaches Jellyfin over
+  # nas-network (jellyfin:8096) with API_KEY_JELLYFIN, and rewrites local track
+  # paths (/music/...) to the path Jellyfin reports (Jellyfin mounts
+  # ${SHARE_DIRECTORY} at /data/movies, so music lives at /data/movies/music).
+  playlist-generator:
+    build:
+      context: ./webapps/jellyfin-playlist-generator
+    image: nas/playlist-generator:latest
+    pull_policy: build
+    container_name: playlist-generator
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ:-UTC}
+      - DATABASE_URL=postgresql://playlist:${PLAYLIST_GENERATOR_DB_PASSWORD}@playlist-generator-db:5432/playlist_generator
+      - AUTH_USER=${PLAYLIST_GENERATOR_USERNAME:-admin}
+      - AUTH_PASS=${PLAYLIST_GENERATOR_PASSWORD}
+      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
+      - LASTFM_API_SECRET=${LASTFM_API_SECRET:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DISCOGS_TOKEN=${DISCOGS_TOKEN:-}
+      - MUSIC_DIRECTORIES=/music
+      - M3U_OUTPUT_DIR=/playlists
+      - SCAN_THREADS=${PLAYLIST_GENERATOR_SCAN_THREADS:-8}
+      - EMBEDDING_MODEL_VERSION=1
+      - JELLYFIN_URL=http://jellyfin:8096
+      - JELLYFIN_API_KEY=${API_KEY_JELLYFIN:-}
+      - JELLYFIN_USER_ID=${JELLYFIN_USER_ID:-}
+      - LOCAL_PATH_PREFIX=/music
+      - JELLYFIN_PATH_PREFIX=/data/movies/music
+    volumes:
+      - ${SHARE_DIRECTORY}/music:/music:ro
+      - ${SHARE_DIRECTORY}/playlists:/playlists
+    restart: unless-stopped
+    depends_on:
+      playlist-generator-db:
+        condition: service_healthy
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
   # Read-only Docker API proxy. Exposes only the endpoints Watchtower needs
   # (containers/images/networks/ping/version + POST/DELETE) so Watchtower never
   # touches /var/run/docker.sock directly. Only reachable inside nas-network.
