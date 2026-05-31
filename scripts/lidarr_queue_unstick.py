@@ -36,10 +36,12 @@ What this script does
 3. **Destructive pass.** For every remaining eligible ``importFailed`` record
    (genuine bad matches: ``Album match is not close enough``, ``Couldn't find
    similar album``, plus any reclaim that failed):
-   ``DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=false``
-   That removes the row, kills the slskd transfer record (Tubifarry), blocklists
-   the specific release so it isn't re-grabbed, and asks Lidarr to search for a
-   different release of the same album.
+   ``DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=true``
+   That removes the row, kills the slskd transfer record (Tubifarry), and
+   blocklists the specific release so it isn't re-grabbed. ``skipRedownload`` is
+   **true by default**: an immediate per-row replacement search adds to the
+   Soulseek search burst that triggers flood bans, so we leave re-finding to the
+   paced ``lidarr_backlog_drip``. Pass ``--redownload`` to search immediately.
 
 Safety rails
 ------------
@@ -440,9 +442,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help="Remove without blocklisting (NOT recommended — Tubifarry will re-grab the same junk).",
   )
   parser.add_argument(
-    "--skip-redownload",
+    "--redownload",
     action="store_true",
-    help="Block but do not auto-search for a different release.",
+    help=(
+      "After blocklisting a bad release, immediately fire a replacement search. "
+      "Off by default: an immediate per-row search burst contributes to Soulseek "
+      "flood bans, and the paced backlog drip re-finds these albums anyway."
+    ),
   )
   parser.add_argument(
     "--no-reclaim",
@@ -495,12 +501,13 @@ def main(argv: list[str] | None = None) -> int:
     reclaimable = [i for i in eligible if is_reclaimable(i)]
     to_delete = [i for i in eligible if not is_reclaimable(i)]
 
+  skip_redownload = not args.redownload
   print(
     f"plan: reclaim {len(reclaimable)} (release switch), "
     f"remove {len(to_delete)} importFailed item(s) "
     f"(skipping {len(skipped)} younger than {args.min_age_hours}h) "
     f"[blocklist={'no' if args.no_blocklist else 'yes'}, "
-    f"skipRedownload={'yes' if args.skip_redownload else 'no'}]"
+    f"skipRedownload={'yes' if skip_redownload else 'no'}]"
   )
 
   if args.dry_run:
@@ -540,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
       api_key,
       item,
       blocklist=not args.no_blocklist,
-      skip_redownload=args.skip_redownload,
+      skip_redownload=skip_redownload,
     ):
       deleted += 1
     else:

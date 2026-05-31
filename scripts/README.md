@@ -352,7 +352,7 @@ The script splits failures by **why** they failed, because they need opposite ha
 
 **Reclaim pass (default on).** `Album release not requested` is *not* a bad download — the peer sent a complete, valid album that maps to a different MusicBrainz release than the one Lidarr monitors. Lidarr's automatic import pipeline deliberately disables release switching (so a random peer can't flip your monitored edition) and there is **no global toggle** for it, so these sit wedged forever. For each such row the script re-imports the download via the manual-import API with `disableReleaseSwitching: false`: Lidarr re-points the monitored release to the edition on disk and imports the files already there. Success is verified against the album's `trackFile` count (a ManualImport that imports nothing still reports `completed`), and if the primary import is a no-op — files were already copied into the library by a prior `albumImportIncomplete` but never registered — it re-scans the artist folder and registers those orphans in place. Only when track files actually appear is the now-satisfied row dropped with `blocklist=false&skipRedownload=true` (no re-download, no blocklist). Disable with `--no-reclaim`.
 
-**Destructive pass.** Genuine bad matches (`Album match is not close enough: X% vs 80%`, `Couldn't find similar album`) and any reclaim that failed get `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=false`: drops the entry, kills the slskd transfer via Tubifarry, blocklists the specific release, and asks Lidarr to search for a different one.
+**Destructive pass.** Genuine bad matches (`Album match is not close enough: X% vs 80%`, `Couldn't find similar album`) and any reclaim that failed get `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=true`: drops the entry, kills the slskd transfer via Tubifarry, and blocklists the specific release. `skipRedownload` is **true by default** — an immediate per-row replacement search piles onto the Soulseek search burst that earns flood bans, so re-finding is left to the paced `lidarr_backlog_drip`. Pass `--redownload` to search immediately.
 
 Safety design:
 
@@ -367,7 +367,7 @@ python scripts/lidarr_queue_unstick.py --dry-run             # report the reclai
 python scripts/lidarr_queue_unstick.py --min-age-hours 0     # immediate (manual one-off)
 python scripts/lidarr_queue_unstick.py --no-reclaim          # legacy: delete+blocklist+redownload everything
 python scripts/lidarr_queue_unstick.py --import-mode move    # reclaim with move instead of copy
-python scripts/lidarr_queue_unstick.py --skip-redownload     # blocklist without auto re-search
+python scripts/lidarr_queue_unstick.py --redownload          # blocklist AND immediately search a replacement (default is skip — avoids flood bans)
 python scripts/lidarr_queue_unstick.py --no-blocklist        # remove only (not recommended — Tubifarry will re-grab the same junk)
 ```
 
@@ -426,6 +426,25 @@ Exit codes: `0` success / nothing to do, `1` partial (some calls failed), `2` fa
 
 Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localhost:8686`).
 
+### `lidarr_backlog_drip.py`
+
+Drip-feeds Lidarr's **missing-album backlog** (thousands of monitored-but-missing albums) into Soulseek without flooding it. Lidarr's built-in `MissingAlbumSearch` searches *everything* at once — hundreds of grabs hit slskd, peers queue them remotely, and they wedge at 0 bytes holding slots forever (the classic clog). This script is the controlled alternative: it searches a small batch **only when slskd has spare capacity**.
+
+The gate is slskd's *in-flight* download count (any file not in a `Completed` state). When in-flight is below `--threshold`, it searches the next `--batch` missing albums it hasn't touched within `--cooldown-hours`; otherwise it does nothing and the drip pauses itself. A rolling `--state` JSON records each album's last-searched epoch so successive runs **walk the whole backlog** instead of re-firing the same first page, and only retry an album after the cooldown. Self-throttling by design: when downloads back up, the drip stops; as they complete, it resumes.
+
+**Pacing (`--search-delay`, default 20s).** The batch is dispatched as one `AlbumSearch` *per album*, spaced `--search-delay` seconds apart, rather than a single command with all the IDs. A bulk command makes slskd fire the whole batch onto the Soulseek network at once, which the central server treats as flooding/"quickly repeating a search" and answers with a **30-minute account ban** (`server` chat: *"banned for 30 minutes… too many operations at once"*). Those bans were the true upstream cause of the importFailed clog: every ban is 30 min where no grab can complete. Pacing 20 searches over ~7 min keeps the rate well under the threshold while staying inside the 15-min cron window. A failed search leaves its album un-stamped so the next run retries it. `--search-delay 0` restores the legacy single-command burst.
+
+```bash
+python scripts/lidarr_backlog_drip.py                          # gated, paced drip (cron uses this)
+python scripts/lidarr_backlog_drip.py --dry-run                # report what it would search
+python scripts/lidarr_backlog_drip.py --threshold 40 --batch 20 --search-delay 20
+python scripts/lidarr_backlog_drip.py --state logs/lidarr_backlog_drip.json
+```
+
+Exit codes: `0` success / intentionally idle (queue busy or all of this page within cooldown), `1` partial (the `AlbumSearch` POST failed), `2` fatal (config / Lidarr or slskd unreachable).
+
+Environment: `API_KEY_LIDARR` + `API_KEY_SLSKD` (both required), `LIDARR_HOST` (default `http://localhost:8686`), `SLSKD_HOST` (default `http://localhost:5030`).
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. The full live crontab on this host:
@@ -467,6 +486,15 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 # watchdog so they don't run together. Self-limiting: a fixed artist gains
 # monitored albums and is skipped next run.
 5,20,35,50 * * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/lidarr_monitor_sweep.py --limit 5 >> logs/lidarr_monitor_sweep.log 2>&1"
+
+# --- lidarr backlog drip (self-throttling missing-album search) ---
+# 12,27,42,57 — search 20 missing albums per run, but ONLY when slskd has spare
+# capacity (<40 in-flight downloads). Drains the missing backlog steadily and
+# can never re-clog: when downloads back up the drip pauses itself. The rolling
+# --state file walks the whole backlog (12h per-album cooldown) instead of
+# re-firing the same first page. Own flock so it never overlaps itself; offset
+# from the monitor sweep (:05/:20/...) and hourly hygiene (:07/:22/:37).
+12,27,42,57 * * * * /usr/bin/flock -n /tmp/nas-lidarr-backlog-drip.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/lidarr_backlog_drip.py --threshold 40 --batch 20 --cooldown-hours 12 --search-delay 20 --state logs/lidarr_backlog_drip.json >> logs/lidarr_backlog_drip.log 2>&1"
 ```
 
 Pi-era host-tuning shell scripts and their docs live under `scripts/legacy/` — they are reference-only and not safe to run on the MS01 host (see `scripts/legacy/README.md`).

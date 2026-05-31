@@ -167,7 +167,7 @@ def test_main_delete_succeeds(monkeypatch, capsys):
   def _ok(host, key, item, blocklist=True, skip_redownload=False):
     deleted.append(item.queue_id)
     assert blocklist is True
-    assert skip_redownload is False
+    assert skip_redownload is True  # default no longer fires a replacement search
     return True
 
   monkeypatch.setattr(unstick, "delete_item", _ok)
@@ -369,8 +369,8 @@ def test_main_reclaim_failure_falls_through_to_delete(monkeypatch, capsys):
 
   monkeypatch.setattr(unstick, "delete_item", _del)
   assert unstick.main(["--min-age-hours", "1"]) == 0
-  # failed reclaim falls through to destructive delete (blocklist on)
-  assert deleted == [(1, True, False)]
+  # failed reclaim falls through to destructive delete (blocklist on, no re-search)
+  assert deleted == [(1, True, True)]
 
 
 def test_main_no_reclaim_skips_reclaim_pass(monkeypatch, capsys):
@@ -405,6 +405,29 @@ def test_main_no_reclaim_skips_reclaim_pass(monkeypatch, capsys):
   monkeypatch.setattr(unstick, "delete_item", lambda *a, **k: True)
   assert unstick.main(["--min-age-hours", "1", "--no-reclaim"]) == 0
   assert "reclaim 0" in capsys.readouterr().out
+
+
+def test_main_redownload_flag_restores_replacement_search(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: _records())
+  fixed_now = _dt.datetime(2026, 5, 25, 12, 0, 0)
+
+  class _FixedDateTime(_dt.datetime):
+    @classmethod
+    def now(cls, tz=None):  # type: ignore[override]
+      return fixed_now
+
+  monkeypatch.setattr(unstick._dt, "datetime", _FixedDateTime)
+  seen: list[bool] = []
+
+  def _del(host, key, item, blocklist=True, skip_redownload=False):
+    seen.append(skip_redownload)
+    return True
+
+  monkeypatch.setattr(unstick, "delete_item", _del)
+  assert unstick.main(["--min-age-hours", "1", "--redownload"]) == 0
+  # --redownload re-enables the immediate replacement search
+  assert seen == [False]
 
 
 def test_main_partial_failure_returns_1(monkeypatch, capsys):
