@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LidarrAlbumCandidate } from '~~/shared/types'
-import { addAlbum, addArtist, monitorAlbums, waitForArtistRefresh } from '../server/utils/lidarr'
+import type { Candidate, LidarrAlbumCandidate } from '~~/shared/types'
+import { addAlbum, addArtist, monitorAlbums, nudgeExisting, waitForArtistRefresh } from '../server/utils/lidarr'
 
 const opts = {
   rootFolderPath: '/music',
@@ -168,6 +168,161 @@ describe('waitForArtistRefresh — real Lidarr command body shape', () => {
     const r = await waitForArtistRefresh(7, { sleep, intervalMs: 5, timeoutMs: 5_000 })
     expect(r).toEqual({ timedOut: false })
     expect(sleep).toHaveBeenCalled() // it actually WAITED, didn't return early
+  })
+})
+
+describe('nudgeExisting — artist already in library', () => {
+  beforeEach(() => {
+    process.env.LIDARR_URL = 'http://lidarr.test'
+    process.env.LIDARR_API_KEY = 'test-key'
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const artistCandidate: Candidate = {
+    kind: 'artist',
+    value: { foreignArtistId: 'fid-artist-1', artistName: 'Test Artist' },
+  }
+
+  it('monitorMode=all: forces artist monitored, monitors whole discography, fires ArtistSearch', async () => {
+    const calls: { url: string, method: string, body: unknown }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(init.body as string) : undefined
+      calls.push({ url, method, body })
+      if (url.endsWith('/api/v1/artist') && method === 'GET') {
+        return new Response(JSON.stringify([
+          { id: 3, foreignArtistId: 'other', monitored: true },
+          { id: 5, foreignArtistId: 'fid-artist-1', monitored: false },
+        ]), { status: 200 })
+      }
+      if (url.includes('/api/v1/album?artistId=5'))
+        return new Response(JSON.stringify([{ id: 101 }, { id: 102 }]), { status: 200 })
+      return new Response(JSON.stringify({}), { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const summary = await nudgeExisting(artistCandidate, 'all')
+
+    const methods = calls.map(c => `${c.method} ${c.url.replace('http://lidarr.test', '')}`)
+    expect(methods).toEqual([
+      'GET /api/v1/artist',
+      'PUT /api/v1/artist/editor',
+      'GET /api/v1/album?artistId=5',
+      'PUT /api/v1/album/monitor',
+      'POST /api/v1/command',
+    ])
+    expect(calls[1].body).toEqual({ artistIds: [5], monitored: true })
+    expect(calls[3].body).toEqual({ albumIds: [101, 102], monitored: true })
+    expect(calls[4].body).toEqual({ name: 'ArtistSearch', artistId: 5 })
+    expect(summary).toMatch(/monitor/i)
+  })
+
+  it('monitorMode=future: forces artist monitored + ArtistSearch but does NOT touch album monitoring', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      calls.push(`${method} ${url.replace('http://lidarr.test', '')}`)
+      if (url.endsWith('/api/v1/artist') && method === 'GET')
+        return new Response(JSON.stringify([{ id: 9, foreignArtistId: 'fid-artist-1', monitored: false }]), { status: 200 })
+      return new Response(JSON.stringify({}), { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await nudgeExisting(artistCandidate, 'future')
+
+    expect(calls).toContain('PUT /api/v1/artist/editor')
+    expect(calls).toContain('POST /api/v1/command')
+    expect(calls).not.toContain('PUT /api/v1/album/monitor')
+    expect(calls.some(c => c.includes('/api/v1/album?artistId'))).toBe(false)
+  })
+
+  it('throws when the artist is not actually in the library', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      { id: 3, foreignArtistId: 'someone-else', monitored: true },
+    ]), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(nudgeExisting(artistCandidate, 'all')).rejects.toThrow()
+  })
+})
+
+describe('nudgeExisting — album already in library', () => {
+  beforeEach(() => {
+    process.env.LIDARR_URL = 'http://lidarr.test'
+    process.env.LIDARR_API_KEY = 'test-key'
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const albumCandidate: Candidate = {
+    kind: 'album',
+    value: {
+      foreignAlbumId: 'fid-album-1',
+      title: 'Test Album',
+      artist: { foreignArtistId: 'fid-artist-1', artistName: 'Test Artist' },
+    },
+  }
+
+  it('missing album (percentOfTracks < 100): re-monitors and fires AlbumSearch', async () => {
+    const calls: { url: string, method: string, body: unknown }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(init.body as string) : undefined
+      calls.push({ url, method, body })
+      if (url.includes('/api/v1/album?foreignAlbumId=')) {
+        return new Response(JSON.stringify([
+          { id: 42, foreignAlbumId: 'fid-album-1', monitored: false, statistics: { trackCount: 8, trackFileCount: 0, percentOfTracks: 0 } },
+        ]), { status: 200 })
+      }
+      return new Response(JSON.stringify({}), { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const summary = await nudgeExisting(albumCandidate, 'all')
+
+    const methods = calls.map(c => `${c.method} ${c.url.replace('http://lidarr.test', '')}`)
+    expect(methods).toEqual([
+      'GET /api/v1/album?foreignAlbumId=fid-album-1',
+      'PUT /api/v1/album/monitor',
+      'POST /api/v1/command',
+    ])
+    expect(calls[1].body).toEqual({ albumIds: [42], monitored: true })
+    expect(calls[2].body).toEqual({ name: 'AlbumSearch', albumIds: [42] })
+    expect(summary).toMatch(/missing|search/i)
+  })
+
+  it('complete album (percentOfTracks = 100): re-monitors but does NOT search', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      calls.push(`${method} ${url.replace('http://lidarr.test', '')}`)
+      if (url.includes('/api/v1/album?foreignAlbumId=')) {
+        return new Response(JSON.stringify([
+          { id: 42, foreignAlbumId: 'fid-album-1', monitored: true, statistics: { trackCount: 8, trackFileCount: 8, percentOfTracks: 100 } },
+        ]), { status: 200 })
+      }
+      return new Response(JSON.stringify({}), { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const summary = await nudgeExisting(albumCandidate, 'all')
+
+    expect(calls).toContain('PUT /api/v1/album/monitor')
+    expect(calls).not.toContain('POST /api/v1/command')
+    expect(summary).toMatch(/complete/i)
+  })
+
+  it('throws when the album is not actually in the library', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(nudgeExisting(albumCandidate, 'all')).rejects.toThrow()
   })
 })
 

@@ -18,6 +18,7 @@ import {
   lookupAlbum,
   lookupArtist,
   monitorAlbums,
+  nudgeExisting,
   waitForArtistRefresh,
 } from './lidarr'
 import { normKeyLoose, pickAutoMatch, rankCandidates, similarity } from './matching'
@@ -262,10 +263,22 @@ async function processAdd(j: JobInternal, item: JobItem, effective: AppSettings)
   }
   catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    if (/already been added/i.test(msg))
-      setStatus(j, item, { status: 'already-added' })
-    else
+    // Already in Lidarr is no longer a dead end: nudge the existing record
+    // (force it monitored, kick a search for what's missing) rather than just
+    // shrugging. A failure inside the nudge surfaces as an error so it's visible.
+    if (/already been added/i.test(msg) && item.chosen) {
+      try {
+        const summary = await nudgeExisting(item.chosen, j.monitorMode)
+        setStatus(j, item, { status: 'nudged', message: summary })
+      }
+      catch (nudgeErr: unknown) {
+        const nudgeMsg = nudgeErr instanceof Error ? nudgeErr.message : String(nudgeErr)
+        setStatus(j, item, { status: 'error', message: `already in lidarr but nudge failed: ${nudgeMsg}` })
+      }
+    }
+    else {
       setStatus(j, item, { status: 'error', message: msg })
+    }
   }
 }
 

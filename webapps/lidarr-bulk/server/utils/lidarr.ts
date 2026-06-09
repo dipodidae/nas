@@ -2,6 +2,7 @@
 // Lidarr 3.1.2-nightly instance (see ../../README.md "API reference").
 
 import type {
+  Candidate,
   LidarrAlbumCandidate,
   LidarrArtistCandidate,
   LidarrProfilesResponse,
@@ -214,6 +215,74 @@ export async function monitorAlbums(albumIds: number[], monitored: boolean): Pro
     method: 'PUT',
     body: JSON.stringify({ albumIds, monitored }),
   })
+}
+
+// --- Nudge: act on items that are already in Lidarr ---------------------------
+// A re-add of something already in the library throws "...already been added".
+// Instead of parking that as a dead end, we look the existing record up by its
+// foreign (MusicBrainz) id and give it a shove: force it monitored and kick a
+// search for whatever's still missing. Both helpers return a short summary the
+// job surfaces in the item's message.
+
+interface LidarrAlbumStatistics {
+  trackCount?: number
+  trackFileCount?: number
+  percentOfTracks?: number
+}
+
+// "Missing" = Lidarr doesn't have every track on disk. percentOfTracks is the
+// authoritative field when present; fall back to the raw counts otherwise. No
+// statistics block at all (freshly added, not yet refreshed) → treat as missing
+// so we search rather than silently skip.
+function albumIsMissing(stats: LidarrAlbumStatistics | undefined): boolean {
+  if (!stats)
+    return true
+  if (typeof stats.percentOfTracks === 'number')
+    return stats.percentOfTracks < 100
+  return (stats.trackFileCount ?? 0) < (stats.trackCount ?? 0)
+}
+
+async function nudgeArtist(foreignArtistId: string, monitorMode: 'all' | 'future'): Promise<string> {
+  const library = await call<Array<{ id: number, foreignArtistId: string }>>('/api/v1/artist')
+  const artist = library.find(a => a.foreignArtistId === foreignArtistId)
+  if (!artist)
+    throw new Error('artist reported as already-added but not found in library')
+  await call('/api/v1/artist/editor', {
+    method: 'PUT',
+    body: JSON.stringify({ artistIds: [artist.id], monitored: true }),
+  })
+  let monitored = 0
+  if (monitorMode === 'all') {
+    const albums = await call<Array<{ id: number }>>(`/api/v1/album?artistId=${artist.id}`).catch(() => [])
+    await monitorAlbums(albums.map(a => a.id), true)
+    monitored = albums.length
+  }
+  await commandSearchArtist(artist.id)
+  return monitorMode === 'all'
+    ? `already in lidarr — re-monitored ${monitored} album${monitored === 1 ? '' : 's'} + searching`
+    : 'already in lidarr — re-monitored artist + searching missing'
+}
+
+async function nudgeAlbum(foreignAlbumId: string): Promise<string> {
+  const matches = await call<Array<{ id: number, statistics?: LidarrAlbumStatistics }>>(
+    `/api/v1/album?foreignAlbumId=${encodeURIComponent(foreignAlbumId)}`,
+  )
+  const album = matches[0]
+  if (!album)
+    throw new Error('album reported as already-added but not found in library')
+  await monitorAlbums([album.id], true)
+  if (albumIsMissing(album.statistics)) {
+    await commandSearchAlbum([album.id])
+    return 'already in lidarr — re-monitored + searching (missing)'
+  }
+  return 'already in lidarr — re-monitored, already complete'
+}
+
+// Dispatch a nudge for a chosen candidate that Lidarr says is already added.
+export function nudgeExisting(chosen: Candidate, monitorMode: 'all' | 'future'): Promise<string> {
+  return chosen.kind === 'artist'
+    ? nudgeArtist(chosen.value.foreignArtistId, monitorMode)
+    : nudgeAlbum(chosen.value.foreignAlbumId)
 }
 
 // --- Health cache (60s TTL) used by /healthz so probes don't hammer Lidarr ---
