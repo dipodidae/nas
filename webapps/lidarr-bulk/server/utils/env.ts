@@ -11,6 +11,10 @@ const schema = z.object({
   CONFIG_DIR: z.string().default('/config'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
   BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(262144),
+  // Optional — enables the AI "Discover" tab. When unset, the endpoint 503s and
+  // the tab tells the user it's disabled.
+  OPENAI_API_KEY: z.string().optional().default(''),
+  OPENAI_MODEL: z.string().min(1).default('gpt-4o'),
 })
 
 export type Env = z.infer<typeof schema>

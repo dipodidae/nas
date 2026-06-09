@@ -1,8 +1,24 @@
 # lidarr-bulk
 
-Bulk-import artists and albums into Lidarr by pasting a blob of text. Single
-Nuxt 4 app served at `https://lidarr-bulk.${PUBLIC_DOMAIN}` (behind SWAG on
-this stack).
+Bulk-import artists and albums into Lidarr by pasting a blob of text — or, with
+the **Discover ✨** tab, by describing what you want and letting GPT propose a
+list of real albums. Single Nuxt 4 app served at
+`https://lidarr-bulk.${PUBLIC_DOMAIN}` (behind SWAG on this stack).
+
+## AI Discover tab
+
+Set `OPENAI_API_KEY` (the stack reuses the same key as the playlist-generator)
+to unlock a third tab. Type a prompt like *"The best 80s coldwave albums"*, pick
+a count (1–50), and GPT returns canonical `Artist - Album` lines into the album
+textarea. Review/trim the list, then **Add all** runs the normal album job —
+each album is added to Lidarr and immediately searched.
+
+Guardrails: a strict JSON-schema response (`{ albums: [...] }`), a system prompt
+that forbids inventing albums and pins titles to their MusicBrainz-canonical
+form, server-side dedupe + count clamp (never trusts the model's count), and
+prompt-length limits. The tab hides itself when no key is configured
+(`GET /api/ai/status`). Model is configurable via `OPENAI_MODEL` (default
+`gpt-4o`).
 
 ## Why Fastify-likeNuxt 4
 
@@ -25,7 +41,7 @@ lidarr-bulk/
 │   ├── components/CandidateRow.vue
 │   ├── composables/useJob.ts     # SSE consumer for /api/jobs/:id/stream
 │   └── pages/
-│       ├── index.vue             # two tabs: Artists / Albums
+│       ├── index.vue             # tabs: Artists / Albums / Discover ✨
 │       └── settings.vue          # root folder + profiles + monitor mode
 ├── server/                       # Nitro (Nuxt 4: still at root, not under app/)
 │   ├── routes/
@@ -33,6 +49,9 @@ lidarr-bulk/
 │   ├── api/
 │   │   ├── parse.post.ts
 │   │   ├── settings.get.ts / settings.put.ts
+│   │   ├── ai/
+│   │   │   ├── suggest.post.ts     # prompt -> GPT -> album ParsedItems
+│   │   │   └── status.get.ts       # { enabled, model } for the UI
 │   │   ├── lidarr/
 │   │   │   ├── profiles.get.ts
 │   │   │   ├── lookup-artist.get.ts
@@ -78,6 +97,16 @@ The "add specific album" path posts to `/api/v1/album` with `monitored: true`
 and an embedded `artist` object whose `addOptions.monitor = "none"` — that
 adds the artist (if not already present) without monitoring all its other
 albums, then monitors and searches just the requested one.
+
+**Already in Lidarr is a nudge, not a dead end.** When a POST fails because the
+item already exists, the worker looks the existing record up by its foreign
+(MusicBrainz) id and gives it a shove instead of just reporting it. For an
+artist: force it `monitored`, monitor the whole discography when the job's
+monitor mode is `all`, then fire `ArtistSearch` (which grabs every monitored
+but missing album). For an album: force it `monitored`, then fire `AlbumSearch`
+**only if it's actually missing** (`statistics.percentOfTracks < 100`) — a
+fully-downloaded album is just re-affirmed monitored. These items land in the
+`nudged` status with a message describing what happened.
 
 ## Running locally (without Docker)
 
