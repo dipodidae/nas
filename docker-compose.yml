@@ -539,6 +539,13 @@ services:
     volumes:
       - ${CONFIG_DIRECTORY}/qbittorrent:/config
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      # Self-heal: clears stale single-instance lockfiles at init so an
+      # ungraceful kill (gluetun recreate) can't trap qbit in an s6 crash loop.
+      - ./qbittorrent/custom-cont-init.d:/custom-cont-init.d:ro
+    # qbit shares gluetun's netns; on gluetun recreate it is force-restarted.
+    # Give it room to flush torrents.db + release its lock before SIGKILL so it
+    # cleans up its own lockfile (default 10s is too short for the ~6MB DB+WAL).
+    stop_grace_period: 120s
     restart: unless-stopped
     labels:
       - com.centurylinklabs.watchtower.enable=true
@@ -727,6 +734,10 @@ services:
       - APP_PASSWORD=${LIDARR_BULK_PASSWORD:-}
       # Optional bearer-token gate on /api/* (for programmatic clients).
       - APP_BEARER_TOKEN=${LIDARR_BULK_BEARER_TOKEN:-}
+      # Optional — enables the AI "Discover" tab (GPT-suggested albums). Reuses
+      # the same OPENAI_API_KEY as the playlist-generator. Tab hides if unset.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${LIDARR_BULK_OPENAI_MODEL:-gpt-4o}
       - RATE_LIMIT_PER_MINUTE=30
       - BODY_LIMIT_BYTES=262144
     volumes:

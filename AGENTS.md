@@ -198,7 +198,7 @@ if __name__ == "__main__":
 
 ### Operational gotchas
 
-- **qBittorrent crash-loop after compose recreate / forced restart:** qbit leaves `lockfile` in both `${CONFIG_DIRECTORY}/qbittorrent/qBittorrent/lockfile` and `${CONFIG_DIRECTORY}/qbittorrent/qBittorrent/config/lockfile` when killed ungracefully. On next start the container enters a tight start→"termination initiated"→exit loop with no error logged. Fix: `docker stop qbittorrent && rm -f ${CONFIG_DIRECTORY}/qbittorrent/qBittorrent{,/config}/lockfile && docker start qbittorrent`. Do this *before* investigating other causes when qbit logs show rapid PID churn.
+- **qBittorrent crash-loop after compose recreate / forced restart (self-healing as of now):** qbit shares gluetun's netns, so a gluetun recreate force-restarts it; if SIGKILLed before flushing `torrents.db` it leaves an orphaned `lockfile` (`${CONFIG_DIRECTORY}/qbittorrent/qBittorrent/lockfile`, plus a legacy nested `qBittorrent/config/lockfile`) and the next start spins in a tight s6 start→exit loop (rapid PID churn, container "Up (unhealthy)"). Not an ownership issue — config is correctly `${PUID}:${PGID}`. Durable fixes live in `docker-compose.yml`: `stop_grace_period: 120s` (clean shutdown) and a bind-mounted LSIO init script `qbittorrent/custom-cont-init.d/01-clear-stale-lockfile.sh` that clears stale lockfiles at container init, so qbit self-recovers on every restart. Manual fallback: `docker stop qbittorrent && rm -f ${CONFIG_DIRECTORY}/qbittorrent/qBittorrent{,/config}/lockfile && docker start qbittorrent`.
 
 ## Security & Secrets
 

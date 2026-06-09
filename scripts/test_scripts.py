@@ -119,6 +119,7 @@ def main():
     ("scripts/slskd_complete_sweep.py", "slskd-complete-sweep"),
     ("scripts/lidarr_queue_unstick.py", "lidarr-queue-unstick"),
     ("scripts/lidarr_purge_empty_artists.py", "lidarr-purge-empty-artists"),
+    ("scripts/lidarr_backlog_drip.py", "lidarr-backlog-drip"),
   ]
 
   for script_path, script_name in scripts:
