@@ -4,8 +4,12 @@ export default defineNuxtConfig({
     compatibilityVersion: 4,
   },
   compatibilityDate: '2025-01-01',
-  modules: ['nuxt-auth-utils'],
+  modules: ['@nuxt/ui', 'nuxt-auth-utils'],
   devtools: { enabled: true },
+  colorMode: {
+    preference: 'dark',
+    fallback: 'dark',
+  },
   typescript: {
     strict: true,
     typeCheck: false,
@@ -15,7 +19,6 @@ export default defineNuxtConfig({
       title: 'lidarr-bulk',
       meta: [
         { name: 'viewport', content: 'width=device-width,initial-scale=1' },
-        { name: 'color-scheme', content: 'dark light' },
       ],
     },
   },
