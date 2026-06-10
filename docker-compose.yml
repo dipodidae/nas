@@ -855,6 +855,10 @@ services:
       - ALL
     environment:
       - TZ=${TZ:-UTC}
+    volumes:
+      # Live media-ops status JSON (refreshed by scripts/media_ops_status.py cron),
+      # served at /ops-status.json for the /ops.html dashboard.
+      - ${CONFIG_DIRECTORY}/ops-status/ops-status.json:/usr/share/nginx/html/ops-status.json:ro
     ports:
       - '127.0.0.1:8088:8080'
     restart: unless-stopped
@@ -933,6 +937,12 @@ services:
       - LASTFM_API_SECRET=${LASTFM_API_SECRET:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DISCOGS_TOKEN=${DISCOGS_TOKEN:-}
+      - DISCOGS_CONSUMER_KEY=${DISCOGS_CONSUMER_KEY:-}
+      - DISCOGS_CONSUMER_SECRET=${DISCOGS_CONSUMER_SECRET:-}
+      - MUSICBRAINZ_CONTACT=${MUSICBRAINZ_CONTACT:-}
+      - RYM_SCRAPE_ENABLED=${RYM_SCRAPE_ENABLED:-false}
+      - RYM_SCRAPE_DELAY_MIN=${RYM_SCRAPE_DELAY_MIN:-2.0}
+      - RYM_SCRAPE_DELAY_MAX=${RYM_SCRAPE_DELAY_MAX:-5.0}
       - MUSIC_DIRECTORIES=/music
       - M3U_OUTPUT_DIR=/playlists
       - SCAN_THREADS=${PLAYLIST_GENERATOR_SCAN_THREADS:-8}
