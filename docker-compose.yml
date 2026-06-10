@@ -953,7 +953,11 @@ services:
       - LOCAL_PATH_PREFIX=/music
       - JELLYFIN_PATH_PREFIX=/data/movies/music
     volumes:
-      - ${SHARE_DIRECTORY}/music:/music:ro
+      # RW (was :ro) so the in-app "Fix Jellyfin release dates" button can write
+      # durable album.nfo sidecars (year + <lockdata>) into album folders. Only the
+      # date-fixer writes here. NOTE: this is the playlist-generator's music mount,
+      # NOT Jellyfin's ${SHARE_DIRECTORY}:/data/movies:ro (that stays read-only).
+      - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/playlists:/playlists
     restart: unless-stopped
     depends_on:
