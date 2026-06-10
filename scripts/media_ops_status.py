@@ -491,6 +491,13 @@ def gather_arr_service(
             health_issues=[], queue_total=None,
             error=str(exc),
         )
+    except ValueError as exc:
+        # Non-JSON body (e.g. an HTML error/login page) — reachable but unparseable.
+        return ArrStatus(
+            name=name, port=port, reachable=True,
+            health_issues=[], queue_total=None,
+            error=f"non-JSON response ({exc})",
+        )
 
     # --- queue ---
     queue_total: int | None = None
@@ -537,7 +544,9 @@ def gather_slskd(api_key: str | None) -> SlskdStatus:
         if status != 200:
             return SlskdStatus(reachable=False, error=f"HTTP {status}")
         data = json.loads(body) if body else {}
-        version = data.get("version")
+        # slskd reports version as a dict {full,current,latest,...}; older builds as a string.
+        raw_version = data.get("version")
+        version = raw_version.get("current") if isinstance(raw_version, dict) else raw_version
         # Transfer counts live under server.downloads / server.uploads
         server = data.get("server", {})
         dl = server.get("downloads", {})
