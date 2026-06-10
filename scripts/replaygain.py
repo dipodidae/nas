@@ -255,7 +255,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901  (acceptable compl
         config = _resolve_config(args)
 
         # --- prerequisite check ---
-        if shutil.which("rsgain") is None:
+        # rsgain is only needed to WRITE tags (--apply). A --dry-run is pure
+        # filesystem discovery, so it previews fine without rsgain installed.
+        rsgain_present = shutil.which("rsgain") is not None
+        if not config.dry_run and not rsgain_present:
             print(
                 "ERROR: 'rsgain' not found on PATH.\n"
                 "Install it with:  sudo apt install rsgain\n"
@@ -296,6 +299,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901  (acceptable compl
             print(
                 "\nDRY-RUN: no tags written.  Pass --apply to write ReplayGain 2.0 tags."
             )
+            if not rsgain_present:
+                print(
+                    "NOTE: 'rsgain' is not installed yet — install it before --apply:"
+                    "  sudo apt install rsgain"
+                )
             return 0
 
         # --- apply path ---
