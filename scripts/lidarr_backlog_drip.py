@@ -45,6 +45,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import sys
@@ -74,6 +75,12 @@ DEFAULT_COOLDOWN_HOURS = 12.0
 # under that threshold while preserving throughput. See the slskd-flood-ban
 # runbook. 0 disables pacing (fires the whole batch in one command — burst).
 DEFAULT_SEARCH_DELAY = 20.0
+# Remotely-queued grabs older than this with zero bytes are presumed dead (the
+# peer will never start uploading) and must not count toward the capacity gate
+# — otherwise dead cruft permanently parks the drip. Kept in lock-step with
+# lidarr_stuck_download_reaper.py's --stuck-hours, which actually removes them.
+DEFAULT_STALE_QUEUED_HOURS = 12.0
+_UTC = _dt.UTC
 
 
 def _lidarr(host: str, api_key: str, path: str, method: str = "GET", body: object = None) -> object:
@@ -99,22 +106,54 @@ def _slskd_downloads(host: str, api_key: str) -> object:
     return json.loads(raw) if raw else []
 
 
-def count_inflight(downloads: object) -> int:
-  """Count slskd download files not in a terminal (Completed) state.
+def _parse_iso(value: str | None) -> _dt.datetime | None:
+  """Parse slskd's naive-UTC ISO-8601 timestamps as tz-aware UTC."""
+  if not value:
+    return None
+  try:
+    cleaned = value.rstrip("Z")
+    if "." in cleaned:
+      head, frac = cleaned.split(".", 1)
+      frac = frac.split("+", 1)[0].split("-", 1)[0]
+      cleaned = f"{head}.{frac[:6]}"
+    dt = _dt.datetime.fromisoformat(cleaned)
+    return dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt.astimezone(_UTC)
+  except (TypeError, ValueError):
+    return None
 
-  Pure over the /transfers/downloads payload so it can be unit-tested. Anything
-  whose state does not start with 'Completed' is occupying a transfer slot
-  (Queued, Initializing, InProgress, Requested, …).
+
+def count_inflight(
+  downloads: object,
+  *,
+  stale_queued_hours: float = DEFAULT_STALE_QUEUED_HOURS,
+  now: _dt.datetime | None = None,
+) -> int:
+  """Count slskd download files that represent *live* transfer pressure.
+
+  Pure over the /transfers/downloads payload so it can be unit-tested. Counts
+  anything not in a Completed state EXCEPT a ``Queued, Remotely`` grab that has
+  transferred zero bytes and has been queued longer than ``stale_queued_hours``
+  — those are dead (the remote peer never started) and would otherwise pin the
+  count high forever, permanently parking the drip. Recently-queued grabs still
+  count, so the drip keeps self-throttling and never re-floods slskd. (A
+  missing/garbled timestamp counts conservatively, as live.)
   """
   if not isinstance(downloads, list):
     return 0
+  now = now or _dt.datetime.now(_UTC)
+  threshold = _dt.timedelta(hours=stale_queued_hours)
   n = 0
   for user in downloads:
     for d in user.get("directories", []):
       for f in d.get("files", []):
         state = str(f.get("state", ""))
-        if not state.startswith("Completed"):
-          n += 1
+        if state.startswith("Completed"):
+          continue
+        if state.startswith("Queued, Remotely") and (f.get("bytesTransferred") or 0) == 0:
+          enq = _parse_iso(f.get("enqueuedAt") or f.get("requestedAt"))
+          if enq is not None and (now - enq) >= threshold:
+            continue  # dead remote-queue entry — don't let it park the drip
+        n += 1
   return n
 
 
@@ -196,6 +235,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--stale-queued-hours", type=float, default=DEFAULT_STALE_QUEUED_HOURS,
+    help=(
+      "Zero-byte remotely-queued grabs older than this are treated as dead and "
+      f"excluded from the capacity gate (default {DEFAULT_STALE_QUEUED_HOURS}). "
+      "Keep in step with lidarr_stuck_download_reaper.py --stuck-hours."
+    ),
+  )
+  parser.add_argument(
     "--state", type=Path, default=None,
     help="JSON file tracking per-album last-searched epoch across runs.",
   )
@@ -221,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
   except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, OSError) as exc:
     print(f"ERROR: slskd unreachable at {slskd_host}: {exc}", file=sys.stderr)
     return 2
-  inflight = count_inflight(downloads)
+  inflight = count_inflight(downloads, stale_queued_hours=args.stale_queued_hours)
   if inflight >= args.threshold:
     print(f"idle: slskd in-flight {inflight} >= threshold {args.threshold} — holding off")
     return 0

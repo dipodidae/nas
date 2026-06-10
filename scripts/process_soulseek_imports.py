@@ -47,6 +47,7 @@ import csv
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -102,6 +103,10 @@ class FolderResult:
     tracks_imported: int = 0
     tracks_total: int = 0
     rejections: list[str] = field(default_factory=list)
+    # True only when the folder was skipped AND every audio file Lidarr saw was
+    # rejected solely as "not an upgrade" (Lidarr already has equal/better) —
+    # dead weight that can never import. Drives --purge-not-upgrade.
+    not_upgrade_only: bool = False
 
 
 @dataclass
@@ -352,6 +357,28 @@ def _evaluate_rejections(
     return (not dominated_by_blockers, reasons)
 
 
+def _is_not_upgrade_only(reasons: list[str]) -> bool:
+    """True iff `reasons` is non-empty and EVERY reason is "not an upgrade".
+
+    A file rejected solely because Lidarr already holds an equal/better copy
+    can never import — the folder is dead weight safe to purge. Mixed blockers
+    (e.g. also "couldn't find similar") are NOT purgeable: those might import
+    later once the artist/album lands in Lidarr.
+    """
+    if not reasons:
+        return False
+    return all("not an upgrade" in r.lower() for r in reasons)
+
+
+def _should_purge(result: FolderResult, *, purge_not_upgrade: bool) -> bool:
+    """Pure predicate: may this folder be deleted under --purge-not-upgrade?"""
+    return bool(
+        purge_not_upgrade
+        and result.status == "skipped"
+        and result.not_upgrade_only
+    )
+
+
 def _get_queue_paths(client: LidarrClient) -> set[str]:
     """Get the set of output paths currently tracked in the Lidarr queue."""
     queue = client.get_queue()
@@ -429,15 +456,20 @@ def process_folder(
     album_title = ""
     imported_by_release: dict[int, int] = {}
     tracks_by_release: dict[int, int] = {}
+    saw_audio_file = False
+    all_blockers_not_upgrade = True
 
     for file_info in items:
         if file_info.get("additionalFile"):
             continue
 
+        saw_audio_file = True
         should_import, reasons = _evaluate_rejections(
             file_info, accept_min_match=accept_min_match,
         )
         all_rejections.extend(reasons)
+        if not _is_not_upgrade_only(reasons):
+            all_blockers_not_upgrade = False
 
         if not should_import:
             continue
@@ -484,6 +516,7 @@ def process_folder(
             album=album_title,
             tracks_total=total_files,
             rejections=unique_reasons,
+            not_upgrade_only=saw_audio_file and all_blockers_not_upgrade,
         )
 
     log.info(
@@ -831,6 +864,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Default (80) preserves Lidarr's behaviour."
         ),
     )
+    parser.add_argument(
+        "--purge-not-upgrade",
+        action="store_true",
+        default=False,
+        help=(
+            "Delete a download folder when EVERY audio file Lidarr saw was "
+            "rejected solely as 'not an upgrade' (Lidarr already holds an "
+            "equal/better copy) — dead weight that can never import and that no "
+            "other hygiene job reaps. Only acts with --execute; dry-run reports."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -963,6 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
     start_mono = time.monotonic()
     stopped_for_budget = False
     processed_this_run = 0
+    purged_count = 0
 
     try:
         for i, folder_name in enumerate(folders, 1):
@@ -999,6 +1044,19 @@ def main(argv: list[str] | None = None) -> int:
             elif result.status == "error":
                 summary.errors += 1
 
+            if _should_purge(result, purge_not_upgrade=args.purge_not_upgrade):
+                target = host_downloads / folder_name
+                if args.execute:
+                    try:
+                        shutil.rmtree(target)
+                        purged_count += 1
+                        log.info("  PURGED not-an-upgrade folder: %s", folder_name)
+                    except OSError as exc:
+                        log.warning("  purge failed for %s: %s", folder_name, exc)
+                else:
+                    purged_count += 1
+                    log.info("  DRY-RUN: would purge not-an-upgrade folder: %s", folder_name)
+
             if state_writer is not None:
                 state_writer.writerow(_result_to_row(result))
                 state_fh.flush()
@@ -1019,6 +1077,12 @@ def main(argv: list[str] | None = None) -> int:
         elapsed,
         " (budget hit)" if stopped_for_budget else "",
     )
+    if args.purge_not_upgrade and purged_count:
+        log.info(
+            "%s %d not-an-upgrade folder(s)",
+            "Purged" if args.execute else "Would purge",
+            purged_count,
+        )
 
     # Print summary
     print_summary(summary, log=log)

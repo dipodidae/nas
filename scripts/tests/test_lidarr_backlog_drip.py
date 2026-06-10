@@ -39,6 +39,45 @@ def test_count_inflight_handles_empty_and_bad_shape():
   assert drip.count_inflight("nonsense") == 0
 
 
+import datetime as _dt  # noqa: E402
+
+_UTC = _dt.UTC
+_NOW = _dt.datetime(2026, 6, 9, 12, 0, 0, tzinfo=_UTC)
+
+
+def _ts(hours_ago):
+  return (_NOW - _dt.timedelta(hours=hours_ago)).isoformat().replace("+00:00", "")
+
+
+def _q(state, hours_ago, bytes_transferred=0):
+  return {"state": state, "enqueuedAt": _ts(hours_ago), "bytesTransferred": bytes_transferred}
+
+
+def test_count_inflight_excludes_dead_remote_queue_entries():
+  # 1 old dead remote-queue (excluded) + 1 recent remote-queue + 1 InProgress.
+  payload = [{"directories": [{"files": [
+    _q("Queued, Remotely", 30),                  # dead -> excluded
+    _q("Queued, Remotely", 2),                   # recent -> counts (anti-flood)
+    {"state": "InProgress"},                     # live -> counts
+  ]}]}]
+  assert drip.count_inflight(payload, stale_queued_hours=12, now=_NOW) == 2
+
+
+def test_count_inflight_counts_started_then_paused_remote_queue():
+  # bytes>0 means it actually started — alive even if old.
+  payload = [{"directories": [{"files": [_q("Queued, Remotely", 30, bytes_transferred=5)]}]}]
+  assert drip.count_inflight(payload, stale_queued_hours=12, now=_NOW) == 1
+
+
+def test_count_inflight_counts_old_local_queue_and_states_without_timestamps():
+  # "Queued, Locally" is never aged out, and a missing timestamp counts as live.
+  payload = [{"directories": [{"files": [
+    _q("Queued, Locally", 99),
+    {"state": "Queued, Remotely"},               # no timestamp -> conservative, counts
+  ]}]}]
+  assert drip.count_inflight(payload, stale_queued_hours=12, now=_NOW) == 2
+
+
 def test_select_albums_picks_batch_and_records_state():
   missing = [{"id": i} for i in range(1, 11)]
   ids, state = drip.select_albums(missing, {}, cooldown_hours=12, batch=3, now=1000.0)

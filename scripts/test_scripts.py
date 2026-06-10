@@ -120,6 +120,7 @@ def main():
     ("scripts/lidarr_queue_unstick.py", "lidarr-queue-unstick"),
     ("scripts/lidarr_purge_empty_artists.py", "lidarr-purge-empty-artists"),
     ("scripts/lidarr_backlog_drip.py", "lidarr-backlog-drip"),
+    ("scripts/lidarr_stuck_download_reaper.py", "lidarr-stuck-download-reaper"),
   ]
 
   for script_path, script_name in scripts:

@@ -375,6 +375,23 @@ Exit codes: `0` success or nothing to do, `1` partial (some deletes failed), `2`
 
 Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localhost:8686`).
 
+### `lidarr_stuck_download_reaper.py`
+
+Closes the gap `lidarr_queue_unstick.py` leaves: grabs wedged **forever at 0 bytes** in slskd. When a remote peer queues us (`Queued, Remotely`) but never starts uploading, the files never transfer, the matching Lidarr row stays in `downloading` indefinitely (it never reaches `importFailed`, so unstick ignores it), and slskd's transfer manager fills with dead entries that pin the in-flight count — permanently parking `lidarr_backlog_drip`. slskd has no timeout for remotely-queued downloads, so without this they accumulate without bound.
+
+The reaper reads slskd `/transfers/downloads`, flags every `Queued,*` file with `bytesTransferred == 0` whose `enqueuedAt` is older than `--stuck-hours` (default `12`; a started-then-paused transfer with bytes > 0 is treated as alive), maps each to its Lidarr queue row by dir basename, and `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=true` — Tubifarry cancels the slskd transfer, the dead release is blocklisted, and re-sourcing from a live peer is left to the paced `lidarr_monitor_sweep` / `lidarr_backlog_drip` (no flood-ban burst). Stuck transfers with no Lidarr match (orphaned grabs) are cancelled directly via slskd. `--max-actions` (default `40`) caps the blast radius per run so a backlog drains over several hourly runs. Stall detection uses slskd's own `enqueuedAt`/`bytesTransferred` — Lidarr's `size`/`sizeleft` is unreliable for slskd grabs.
+
+```bash
+python scripts/lidarr_stuck_download_reaper.py --dry-run                       # report the plan only
+python scripts/lidarr_stuck_download_reaper.py --stuck-hours 12 --max-actions 40   # default cron invocation
+python scripts/lidarr_stuck_download_reaper.py --stuck-hours 6                 # more aggressive turnover
+python scripts/lidarr_stuck_download_reaper.py --no-blocklist                  # remove without blocklisting (not recommended)
+```
+
+Exit codes: `0` success / nothing to do, `1` partial (some deletes failed), `2` fatal (config / slskd or Lidarr unreachable / HTTP error).
+
+Environment: `API_KEY_SLSKD` + `API_KEY_LIDARR` (required), `SLSKD_HOST` (default `http://localhost:5030`), `LIDARR_HOST` (default `http://localhost:8686`). Cron `:52`, shares `/tmp/nas-tubifarry-cleanup.lock` with the other hourly hygiene jobs. Kept in lock-step with `lidarr_backlog_drip --stale-queued-hours` (both 12h) so the drip's capacity gate ignores exactly the entries this reaper removes.
+
 ### `slskd_complete_sweep.py`
 
 Reaps `/downloads/complete/slskd/<dir>` subtrees that Lidarr has already imported into `/music/`. With Lidarr configured to use hardlinks (`copyUsingHardlinks=true`), the slskd download copy is never reaped by the import path itself; over weeks this accumulates GBs of duplicates of files that already live in the music library.
@@ -430,7 +447,7 @@ Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localho
 
 Drip-feeds Lidarr's **missing-album backlog** (thousands of monitored-but-missing albums) into Soulseek without flooding it. Lidarr's built-in `MissingAlbumSearch` searches *everything* at once — hundreds of grabs hit slskd, peers queue them remotely, and they wedge at 0 bytes holding slots forever (the classic clog). This script is the controlled alternative: it searches a small batch **only when slskd has spare capacity**.
 
-The gate is slskd's *in-flight* download count (any file not in a `Completed` state). When in-flight is below `--threshold`, it searches the next `--batch` missing albums it hasn't touched within `--cooldown-hours`; otherwise it does nothing and the drip pauses itself. A rolling `--state` JSON records each album's last-searched epoch so successive runs **walk the whole backlog** instead of re-firing the same first page, and only retry an album after the cooldown. Self-throttling by design: when downloads back up, the drip stops; as they complete, it resumes.
+The gate is slskd's *live in-flight* download count: any file not in a `Completed` state, **except** a zero-byte `Queued, Remotely` grab older than `--stale-queued-hours` (default `12`) — those are dead (the peer never started) and would otherwise pin the count high forever and permanently park the drip. (Recently-queued grabs still count, so the drip keeps self-throttling and never re-floods.) Keep `--stale-queued-hours` in step with `lidarr_stuck_download_reaper --stuck-hours`, which actually removes those dead entries. When in-flight is below `--threshold`, it searches the next `--batch` missing albums it hasn't touched within `--cooldown-hours`; otherwise it does nothing and the drip pauses itself. A rolling `--state` JSON records each album's last-searched epoch so successive runs **walk the whole backlog** instead of re-firing the same first page, and only retry an album after the cooldown. Self-throttling by design: when downloads back up, the drip stops; as they complete, it resumes.
 
 **Pacing (`--search-delay`, default 20s).** The batch is dispatched as one `AlbumSearch` *per album*, spaced `--search-delay` seconds apart, rather than a single command with all the IDs. A bulk command makes slskd fire the whole batch onto the Soulseek network at once, which the central server treats as flooding/"quickly repeating a search" and answers with a **30-minute account ban** (`server` chat: *"banned for 30 minutes… too many operations at once"*). Those bans were the true upstream cause of the importFailed clog: every ban is 30 min where no grab can complete. Pacing 20 searches over ~7 min keeps the rate well under the threshold while staying inside the 15-min cron window. A failed search leaves its album un-stamped so the next run retries it. `--search-delay 0` restores the legacy single-command burst.
 
@@ -457,8 +474,8 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 30 3 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
 # 04:30 — post-Watchtower health check (Watchtower fires at 04:00)
 30 4 * * * /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/post_update_verifier.log 2>&1"
-# 05:30 — re-import orphaned slskd download folders that lost their Lidarr queue row (the 4th hygiene job); shares the cleanup flock, 50min budget, rolling --state so only new folders are fingerprinted, stub guard at 0.5
-30 5 * * * /usr/bin/flock -w 600 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/process_soulseek_imports.py --execute --skip-queue-tracked --accept-min-match 70 --min-track-fraction 0.5 --state logs/slsk_import_state.tsv --max-seconds 3000 >> logs/process_soulseek_imports.log 2>&1"
+# 05:30 — re-import orphaned slskd download folders that lost their Lidarr queue row (the 4th hygiene job); shares the cleanup flock, 50min budget, rolling --state so only new folders are fingerprinted, stub guard at 0.5, --purge-not-upgrade deletes folders Lidarr can only reject as "not an upgrade"
+30 5 * * * /usr/bin/flock -w 600 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/process_soulseek_imports.py --execute --skip-queue-tracked --accept-min-match 70 --min-track-fraction 0.5 --purge-not-upgrade --state logs/slsk_import_state.tsv --max-seconds 3000 >> logs/process_soulseek_imports.log 2>&1"
 
 # --- weekly ---
 # Sunday 02:00 — compress / truncate oversize log files inside CONFIG_DIRECTORY
@@ -471,6 +488,8 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 22 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_complete_sweep.py >> logs/slskd_complete_sweep.log 2>&1"
 # :37 — direct slskd sweep picks up anything Lidarr never tracked (errored/rejected/cancelled transfers)
 37 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/slskd_cleanup.py >> logs/slskd_cleanup.log 2>&1"
+# :52 — reap grabs wedged >12h at 0 bytes in slskd (peer never started): blocklist the dead release + cancel the slskd transfer so monitor-sweep/drip re-source from a live peer. Frees the in-flight count that otherwise parks the backlog drip; --max-actions caps blast radius so a backlog drains over several runs.
+52 * * * * /usr/bin/flock -w 120 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/<username>/nas && . .venv/bin/activate && python scripts/lidarr_stuck_download_reaper.py --stuck-hours 12 --max-actions 40 >> logs/lidarr_stuck_download_reaper.log 2>&1"
 
 # --- slskd login watchdog (alert-only, NOT on the cleanup flock) ---
 # */15 — alert if slskd has been logged out of Soulseek >10min. Never restarts:
@@ -489,7 +508,9 @@ All new scripts are included in `test_scripts.py` for import validation. The ful
 
 # --- lidarr backlog drip (self-throttling missing-album search) ---
 # 12,27,42,57 — search 20 missing albums per run, but ONLY when slskd has spare
-# capacity (<40 in-flight downloads). Drains the missing backlog steadily and
+# *live* capacity (<40 in-flight; dead remotely-queued grabs >12h are excluded
+# from the count by --stale-queued-hours, in step with the :52 reaper, so they
+# no longer park the drip). Drains the missing backlog steadily and
 # can never re-clog: when downloads back up the drip pauses itself. The rolling
 # --state file walks the whole backlog (12h per-album cooldown) instead of
 # re-firing the same first page. Own flock so it never overlaps itself; offset

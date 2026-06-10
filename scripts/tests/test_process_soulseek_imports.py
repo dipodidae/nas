@@ -1,4 +1,5 @@
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 
@@ -82,3 +83,65 @@ def test_stub_coverage_dominant_release_chosen():
 
 def test_stub_coverage_empty():
   assert psi.stub_coverage({}, {}) == (0, 0, 0.0)
+
+
+# ---- --purge-not-upgrade restoration -------------------------------------
+
+
+def test_is_not_upgrade_only_true_for_pure_not_upgrade():
+  assert psi._is_not_upgrade_only(["Not an upgrade for existing file."]) is True
+
+
+def test_is_not_upgrade_only_false_for_empty():
+  assert psi._is_not_upgrade_only([]) is False
+
+
+def test_is_not_upgrade_only_false_when_other_blocker_present():
+  assert psi._is_not_upgrade_only(
+    ["Not an upgrade for existing file.", "Couldn't find similar album"]
+  ) is False
+
+
+def test_should_purge_only_when_flag_and_skipped_and_not_upgrade():
+  skipped_nu = psi.FolderResult(folder="a", status="skipped", not_upgrade_only=True)
+  assert psi._should_purge(skipped_nu, purge_not_upgrade=True) is True
+  # disabled flag -> never purge
+  assert psi._should_purge(skipped_nu, purge_not_upgrade=False) is False
+  # imported / failed rows are never purged even if flagged
+  imported_nu = psi.FolderResult(folder="a", status="imported", not_upgrade_only=True)
+  assert psi._should_purge(imported_nu, purge_not_upgrade=True) is False
+  # skipped for some other reason -> not purged
+  skipped_other = psi.FolderResult(folder="a", status="skipped", not_upgrade_only=False)
+  assert psi._should_purge(skipped_other, purge_not_upgrade=True) is False
+
+
+class _FakeClient:
+  def __init__(self, items):
+    self._items = items
+
+  def get_manual_import(self, path):
+    return self._items
+
+
+def _reject(reason):
+  return {"rejections": [{"reason": reason}]}
+
+
+def test_process_folder_flags_pure_not_upgrade():
+  items = [_reject("Not an upgrade for existing file."),
+           _reject("Not an upgrade for existing file.")]
+  res = psi.process_folder(
+    _FakeClient(items), "/c", "Album", execute=False, log=logging.getLogger("t"),
+  )
+  assert res.status == "skipped"
+  assert res.not_upgrade_only is True
+
+
+def test_process_folder_not_flagged_when_mixed_blockers():
+  items = [_reject("Not an upgrade for existing file."),
+           _reject("Couldn't find similar album")]
+  res = psi.process_folder(
+    _FakeClient(items), "/c", "Album", execute=False, log=logging.getLogger("t"),
+  )
+  assert res.status == "skipped"
+  assert res.not_upgrade_only is False
