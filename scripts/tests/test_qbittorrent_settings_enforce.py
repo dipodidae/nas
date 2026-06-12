@@ -44,3 +44,21 @@ def test_plan_pref_changes_returns_only_differing_keys():
 def test_plan_pref_changes_empty_when_already_correct():
   current = dict(qbt.DESIRED_PREFS)
   assert qbt.plan_pref_changes(current, qbt.DESIRED_PREFS) == {}
+
+
+# ---- collect_unmanaged_hashes --------------------------------------------
+
+
+def test_collect_unmanaged_hashes_picks_non_auto_tmm():
+  torrents = [
+    {"hash": "a", "auto_tmm": False},
+    {"hash": "b", "auto_tmm": True},
+    {"hash": "c", "auto_tmm": False},
+    {"hash": "d"},  # missing -> treated as unmanaged
+  ]
+  assert qbt.collect_unmanaged_hashes(torrents) == ["a", "c", "d"]
+
+
+def test_collect_unmanaged_hashes_empty():
+  assert qbt.collect_unmanaged_hashes([]) == []
+  assert qbt.collect_unmanaged_hashes([{"hash": "x", "auto_tmm": True}]) == []

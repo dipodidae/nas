@@ -70,6 +70,14 @@ def plan_pref_changes(current: dict, desired: dict) -> dict:
   return {k: v for k, v in desired.items() if current.get(k) != v}
 
 
+def collect_unmanaged_hashes(torrents: list[dict]) -> list[str]:
+  """Hashes of torrents not already auto-managed (TMM off / missing).
+
+  Pure over ``GET /api/v2/torrents/info``. Order preserved.
+  """
+  return [t["hash"] for t in torrents if t.get("hash") and not t.get("auto_tmm", False)]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Enable qBittorrent Auto TMM and relocate existing torrents into category folders."
