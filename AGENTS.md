@@ -254,6 +254,10 @@ Scripts in `scripts/` that run on-demand (not cron) against the live stack:
 - `slskd_lidarr_nuke.py` — on-demand clean-slate: nukes the whole Lidarr queue
   (remove+blocklist+skipRedownload), wipes all slskd transfers, and sweeps the
   slskd completed folder. Acts by default; `--dry-run` to preview.
+- `slskd_incomplete_sweep.py` — deletes orphaned dirs from the slskd-owned zones
+  of `/downloads/incomplete` (legacy flat root + `incomplete/slskd`), gated on
+  live slskd transfers + qBittorrent torrents + an age gate; never touches
+  `incomplete/qbittorrent`. Acts by default; `--dry-run` to preview.
 - `qbittorrent_settings_enforce.py` — enables qBittorrent Auto TMM and flips
   existing torrents to auto-managed so categories drive save paths (relocating
   out of `complete/manual/`). Acts by default; `--dry-run` to preview. Uses

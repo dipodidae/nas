@@ -60,7 +60,9 @@
     "nuke": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py'",
     "nuke:dry": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py --dry-run'",
     "qbt:tidy": "bash -c '. .venv/bin/activate && python scripts/qbittorrent_settings_enforce.py'",
-    "qbt:tidy:dry": "bash -c '. .venv/bin/activate && python scripts/qbittorrent_settings_enforce.py --dry-run'"
+    "qbt:tidy:dry": "bash -c '. .venv/bin/activate && python scripts/qbittorrent_settings_enforce.py --dry-run'",
+    "sweep:incomplete": "bash -c '. .venv/bin/activate && python scripts/slskd_incomplete_sweep.py'",
+    "sweep:incomplete:dry": "bash -c '. .venv/bin/activate && python scripts/slskd_incomplete_sweep.py --dry-run'"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",
