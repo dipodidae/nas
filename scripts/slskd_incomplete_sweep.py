@@ -46,6 +46,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import os
 import sys
 from pathlib import Path
@@ -86,6 +87,32 @@ def _trailing_segment(path: str) -> str:
   if "\\" not in normalized:
     return normalized
   return normalized.rsplit("\\", 1)[-1]
+
+
+def plan_incomplete_sweep(
+  candidates: list[tuple[Path, float]],
+  slskd_refs: set[str],
+  qbt_refs: set[str],
+  *,
+  now: _dt.datetime,
+  min_age_hours: float,
+) -> list[Path]:
+  """Return candidate dirs to delete: orphaned by both ref sets AND old enough.
+
+  Pure. ``candidates`` are (dir, mtime_epoch) pairs already restricted to the
+  sweep zones by the caller. A dir is deleted only if its basename is in
+  neither ``slskd_refs`` nor ``qbt_refs`` and its mtime is older than
+  ``min_age_hours``. Order preserved.
+  """
+  cutoff = (now - _dt.timedelta(hours=min_age_hours)).timestamp()
+  out: list[Path] = []
+  for path, mtime in candidates:
+    if path.name in slskd_refs or path.name in qbt_refs:
+      continue
+    if mtime >= cutoff:
+      continue
+    out.append(path)
+  return out
 
 
 def main(argv: list[str] | None = None) -> int:

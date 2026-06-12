@@ -29,3 +29,33 @@ def test_trailing_segment_handles_separators():
   assert sweep._trailing_segment("music/Artist/Album/") == "Album"
   assert sweep._trailing_segment("BareName") == "BareName"
   assert sweep._trailing_segment("") == ""
+
+
+# ---- plan_incomplete_sweep -----------------------------------------------
+
+
+NOW = _dt.datetime(2026, 6, 12, 12, 0, 0)
+
+
+def _cand(name, hours_old):
+  mtime = (NOW - _dt.timedelta(hours=hours_old)).timestamp()
+  return (Path(f"/mnt/drive/downloads/incomplete/{name}"), mtime)
+
+
+def test_plan_skips_protected_and_recent_selects_orphans():
+  candidates = [
+    _cand("Old Orphan Album", 100),       # eligible
+    _cand("Active Slskd Album", 100),      # protected by slskd ref
+    _cand("Seeding Torrent Dir", 100),     # protected by qbt ref
+    _cand("Fresh Download", 2),            # too recent (age gate)
+  ]
+  slskd_refs = {"Active Slskd Album"}
+  qbt_refs = {"Seeding Torrent Dir"}
+  out = sweep.plan_incomplete_sweep(
+    candidates, slskd_refs, qbt_refs, now=NOW, min_age_hours=24
+  )
+  assert [p.name for p in out] == ["Old Orphan Album"]
+
+
+def test_plan_empty_candidates():
+  assert sweep.plan_incomplete_sweep([], set(), set(), now=NOW, min_age_hours=24) == []
