@@ -78,6 +78,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return parser.parse_args(argv)
 
 
+def _trailing_segment(path: str) -> str:
+  """Last path component, normalizing both `\\` and `/` separators."""
+  if not path:
+    return ""
+  normalized = path.replace("/", "\\").rstrip("\\")
+  if "\\" not in normalized:
+    return normalized
+  return normalized.rsplit("\\", 1)[-1]
+
+
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
   slskd_host = os.environ.get("SLSKD_HOST", DEFAULT_SLSKD_HOST).rstrip("/")
