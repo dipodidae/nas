@@ -1,0 +1,137 @@
+<script setup lang="ts">
+import type { ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyStatus } from '~~/shared/types'
+
+const emit = defineEmits<{ queue: [items: ParsedItem[]] }>()
+const toast = useToast()
+
+const connected = ref(false)
+const playlists = ref<SpotifyPlaylist[]>([])
+const loading = ref(false)
+const resolvingId = ref<string | null>(null)
+
+function describeError(err: unknown): string {
+  const e = err as { statusMessage?: string, data?: { statusMessage?: string }, message?: string }
+  return e.data?.statusMessage ?? e.statusMessage ?? e.message ?? 'Spotify request failed.'
+}
+
+async function loadPlaylists(): Promise<void> {
+  loading.value = true
+  try {
+    const res = await $fetch<{ playlists: SpotifyPlaylist[] }>('/api/spotify/playlists')
+    playlists.value = res.playlists
+  }
+  catch (err: unknown) {
+    // 401 → token revoked/expired; fall back to the connect prompt.
+    connected.value = false
+    toast.add({ title: 'Spotify', description: describeError(err), color: 'warning' })
+  }
+  finally {
+    loading.value = false
+  }
+}
+
+onMounted(async () => {
+  try {
+    const s = await $fetch<SpotifyStatus>('/api/spotify/status')
+    connected.value = s.connected
+  }
+  catch {
+    connected.value = false
+  }
+  // Surface the OAuth callback outcome carried back as a query flag.
+  const flag = useRoute().query.spotify
+  if (flag === 'connected') {
+    connected.value = true
+    toast.add({ title: 'Spotify connected', color: 'success' })
+  }
+  else if (flag === 'error') {
+    toast.add({ title: 'Spotify connection failed', description: 'Authorization was cancelled or failed.', color: 'error' })
+  }
+  if (connected.value)
+    await loadPlaylists()
+})
+
+async function disconnect(): Promise<void> {
+  await $fetch('/api/spotify/disconnect', { method: 'POST' })
+  connected.value = false
+  playlists.value = []
+  toast.add({ title: 'Spotify disconnected', color: 'neutral' })
+}
+
+async function pick(playlist: SpotifyPlaylist): Promise<void> {
+  if (resolvingId.value)
+    return
+  resolvingId.value = playlist.id
+  try {
+    const res = await $fetch<SpotifyResolveResult>('/api/spotify/resolve', {
+      method: 'POST',
+      body: { playlistId: playlist.id },
+    })
+    if (res.items.length === 0) {
+      toast.add({ title: 'No albums', description: 'This playlist has no resolvable albums (local files / episodes only).', color: 'warning' })
+      return
+    }
+    toast.add({
+      title: `Queuing ${res.items.length} album${res.items.length === 1 ? '' : 's'}`,
+      description: `from ${res.stats.tracks} tracks in “${playlist.name}”`,
+      color: 'success',
+    })
+    emit('queue', res.items)
+  }
+  catch (err: unknown) {
+    toast.add({ title: 'Resolve failed', description: describeError(err), color: 'error' })
+  }
+  finally {
+    resolvingId.value = null
+  }
+}
+</script>
+
+<template>
+  <UCard>
+    <template v-if="!connected">
+      <p class="text-muted mt-0 text-sm">
+        Connect your Spotify account, then click a playlist to queue every unique album behind its tracks into Lidarr.
+      </p>
+      <UButton class="mt-3" icon="i-lucide-music" label="Connect Spotify" to="/api/spotify/login" external />
+    </template>
+
+    <template v-else>
+      <div class="flex items-center justify-between gap-4 flex-wrap">
+        <p class="text-muted m-0 text-sm">
+          Click a playlist to queue its unique albums using your saved default profiles and monitor mode.
+        </p>
+        <UButton size="xs" color="neutral" variant="link" label="Disconnect" @click="disconnect" />
+      </div>
+
+      <div v-if="loading" class="mt-4 text-sm text-muted">
+        Loading playlists…
+      </div>
+      <div v-else-if="playlists.length === 0" class="mt-4 text-sm text-muted">
+        No playlists found on your account.
+      </div>
+      <div v-else class="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <button
+          v-for="p in playlists"
+          :key="p.id"
+          type="button"
+          :disabled="resolvingId !== null"
+          class="text-left rounded-lg border border-default p-2 hover:bg-elevated transition disabled:opacity-50"
+          @click="pick(p)"
+        >
+          <img v-if="p.imageUrl" :src="p.imageUrl" :alt="p.name" class="w-full aspect-square object-cover rounded-md mb-2">
+          <div v-else class="w-full aspect-square rounded-md mb-2 bg-elevated flex items-center justify-center">
+            <UIcon name="i-lucide-music" class="text-2xl text-muted" />
+          </div>
+          <div class="text-sm font-medium truncate">
+            {{ p.name }}
+          </div>
+          <div class="text-xs text-muted">
+            <template v-if="resolvingId === p.id">resolving…</template>
+            <template v-else>{{ p.trackCount }} track{{ p.trackCount === 1 ? '' : 's' }}</template>
+          </div>
+        </button>
+      </div>
+    </template>
+  </UCard>
+</template>
