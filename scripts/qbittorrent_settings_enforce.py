@@ -62,6 +62,14 @@ DESIRED_PREFS = {
 }
 
 
+def plan_pref_changes(current: dict, desired: dict) -> dict:
+  """Return the subset of ``desired`` whose value differs from ``current``.
+
+  Pure. Keys absent from ``current`` count as differing (will be set).
+  """
+  return {k: v for k, v in desired.items() if current.get(k) != v}
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Enable qBittorrent Auto TMM and relocate existing torrents into category folders."
