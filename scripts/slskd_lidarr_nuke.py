@@ -43,12 +43,12 @@ Usage
 from __future__ import annotations
 
 import argparse
-import json  # noqa: F401
+import json
 import os
 import shutil  # noqa: F401
 import sys
 import urllib.error
-import urllib.parse  # noqa: F401
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,6 +171,64 @@ def plan_folder_sweep(complete_dir: Path, spare: set[str]) -> list[Path]:
       continue
     targets.append(child)
   return targets
+
+
+def fetch_lidarr_queue(host: str, api_key: str) -> list[dict]:
+  url = f"{host}/api/v1/queue?pageSize=1000&includeUnknownArtistItems=true"
+  status, body = _request("GET", url, api_key, header="X-Api-Key")
+  if status >= 400:
+    raise RuntimeError(f"GET /api/v1/queue returned HTTP {status}")
+  return json.loads(body).get("records", []) if body else []
+
+
+def bulk_delete_lidarr(host: str, api_key: str, ids: list[int]) -> bool:
+  """DELETE /api/v1/queue/bulk with the graceful teardown params.
+
+  removeFromClient cancels the slskd transfer via Tubifarry; blocklist marks
+  the dead release (album stays monitored); skipRedownload suppresses auto
+  re-search. Returns True on 200/204.
+  """
+  params = urllib.parse.urlencode(
+    {"removeFromClient": "true", "blocklist": "true", "skipRedownload": "true"}
+  )
+  url = f"{host}/api/v1/queue/bulk?{params}"
+  payload = json.dumps({"ids": ids}).encode()
+  status, _ = _request("DELETE", url, api_key, header="X-Api-Key", data=payload)
+  return status in (200, 204)
+
+
+def delete_lidarr_item(host: str, api_key: str, queue_id: int) -> bool:
+  params = urllib.parse.urlencode(
+    {"removeFromClient": "true", "blocklist": "true", "skipRedownload": "true"}
+  )
+  url = f"{host}/api/v1/queue/{queue_id}?{params}"
+  status, _ = _request("DELETE", url, api_key, header="X-Api-Key")
+  return status in (200, 204)
+
+
+def fetch_slskd_downloads(host: str, api_key: str) -> list[dict]:
+  status, body = _request("GET", f"{host}/api/v0/transfers/downloads", api_key)
+  if status >= 400:
+    raise RuntimeError(f"GET /api/v0/transfers/downloads returned HTTP {status}")
+  return json.loads(body) if body else []
+
+
+def cancel_slskd_transfer(host: str, api_key: str, t: SlskdTransfer) -> bool:
+  user = urllib.parse.quote(t.username, safe="")
+  url = f"{host}/api/v0/transfers/downloads/{user}/{t.transfer_id}?remove=true"
+  status, _ = _request("DELETE", url, api_key)
+  return status in (200, 204, 404)  # 404 == already gone
+
+
+def clear_slskd_completed(host: str, api_key: str) -> bool:
+  """Bulk-clear all terminal slskd download records.
+
+  Returns True on 200/204. Returns False if the endpoint is unavailable (404 /
+  405 / >=400) so main() can fall back to per-transfer cleanup.
+  """
+  url = f"{host}/api/v0/transfers/downloads/all/completed"
+  status, _ = _request("DELETE", url, api_key)
+  return status in (200, 204)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
