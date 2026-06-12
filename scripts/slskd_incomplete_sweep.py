@@ -50,6 +50,7 @@ import datetime as _dt
 import http.cookiejar
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -227,9 +228,78 @@ def main(argv: list[str] | None = None) -> int:
   if not qbt_user or not qbt_pass:
     print("ERROR: QBITTORRENT_USER / QBITTORRENT_PASS not set (check .env)", file=sys.stderr)
     return 2
-  # Wired in later tasks.
-  _ = args, slskd_host, qbt_host, incomplete_dir
-  return 0
+
+  if not incomplete_dir.is_dir():
+    print(f"ERROR: incomplete dir {incomplete_dir} not found", file=sys.stderr)
+    return 2
+
+  # Build protection sets first -- abort if either fetch fails (degraded safety).
+  try:
+    slskd_refs = fetch_slskd_refs(slskd_host, slskd_key)
+  except (urllib.error.URLError, RuntimeError) as exc:
+    print(f"ERROR: cannot reach slskd: {exc}", file=sys.stderr)
+    return 2
+  try:
+    qbt_refs = fetch_qbt_refs(qbt_host, qbt_user, qbt_pass)
+  except (urllib.error.URLError, RuntimeError) as exc:
+    print(f"ERROR: cannot reach qBittorrent: {exc}", file=sys.stderr)
+    return 2
+
+  candidates = collect_candidates(incomplete_dir)
+  now = _dt.datetime.now()
+  targets = plan_incomplete_sweep(
+    candidates, slskd_refs, qbt_refs, now=now, min_age_hours=args.min_age_hours
+  )
+
+  # Containment: every target must resolve inside incomplete_dir and never BE a
+  # managed subdir root.
+  root_resolved = incomplete_dir.resolve()
+  managed_roots = {(incomplete_dir / m).resolve() for m in MANAGED_SUBDIRS}
+  for t in targets:
+    rt = t.resolve()
+    if root_resolved not in rt.parents:
+      print(f"ERROR: refusing to act on {t} -- escapes {incomplete_dir}", file=sys.stderr)
+      return 2
+    if rt in managed_roots:
+      print(f"ERROR: refusing to delete managed subdir {t}", file=sys.stderr)
+      return 2
+
+  if args.limit and len(targets) > args.limit:
+    print(f"limiting to first {args.limit} of {len(targets)} eligible dirs")
+    targets = targets[: args.limit]
+
+  bytes_to_free = 0
+  for t in targets:
+    for dp, _dirs, files in os.walk(t):
+      for f in files:
+        try:
+          bytes_to_free += os.path.getsize(os.path.join(dp, f))
+        except OSError:
+          continue
+
+  print(
+    f"plan: delete {len(targets)} orphan dir(s) (~{bytes_to_free / 1e9:.2f} GB); "
+    f"scanned {len(candidates)} candidate(s); "
+    f"protected by slskd={len(slskd_refs)}, qbt={len(qbt_refs)}"
+    + ("  [DRY RUN]" if args.dry_run else "")
+  )
+
+  if args.dry_run:
+    for t in targets[:15]:
+      print(f"  DRY rmtree {t.relative_to(incomplete_dir)}")
+    if len(targets) > 15:
+      print(f"  ... and {len(targets) - 15} more")
+    return 0
+
+  failed = 0
+  for t in targets:
+    try:
+      shutil.rmtree(t)
+    except OSError as exc:
+      print(f"WARNING: rmtree {t}: {exc}", file=sys.stderr)
+      failed += 1
+  print(f"deleted {len(targets) - failed}/{len(targets)} dir(s) (~{bytes_to_free / 1e9:.2f} GB if all succeeded)")
+  return 1 if failed else 0
 
 
 if __name__ == "__main__":
