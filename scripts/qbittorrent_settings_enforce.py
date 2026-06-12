@@ -154,15 +154,61 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-  _args = parse_args(argv)
-  _host = os.environ.get("QBITTORRENT_HOST", DEFAULT_QBT_HOST).rstrip("/")
+  args = parse_args(argv)
+  host = os.environ.get("QBITTORRENT_HOST", DEFAULT_QBT_HOST).rstrip("/")
   user = os.environ.get("QBITTORRENT_USER")
   pw = os.environ.get("QBITTORRENT_PASS")
   if not user or not pw:
     print("ERROR: QBITTORRENT_USER / QBITTORRENT_PASS not set (check .env)", file=sys.stderr)
     return 2
-  # Wired in later tasks.
-  return 0
+
+  client = QbtClient(host)
+  if not client.login(user, pw):
+    print(f"ERROR: qBittorrent auth failed at {host}", file=sys.stderr)
+    return 2
+  try:
+    prefs = client.get_preferences()
+    torrents = client.get_torrents()
+    categories = client.get_categories()
+  except (urllib.error.URLError, json.JSONDecodeError) as exc:
+    print(f"ERROR: cannot read qBittorrent state: {exc}", file=sys.stderr)
+    return 2
+
+  pref_changes = plan_pref_changes(prefs, DESIRED_PREFS)
+  unmanaged = collect_unmanaged_hashes(torrents)
+  targets = summarize_targets([t for t in torrents if t.get("hash") in set(unmanaged)], categories)
+
+  print("=== qBittorrent settings enforce ===" + ("  [DRY RUN]" if args.dry_run else ""))
+  print(f"pref changes: {pref_changes or 'none'}")
+  print(f"torrents to auto-manage: {len(unmanaged)} of {len(torrents)}")
+  for path, n in sorted(targets.items()):
+    print(f"  -> {path}: {n}")
+
+  if args.dry_run:
+    return 0
+
+  failures = 0
+  if pref_changes:
+    if client.set_preferences(pref_changes):
+      print(f"applied {len(pref_changes)} pref change(s)")
+    else:
+      failures += 1
+      print("WARNING: setPreferences failed", file=sys.stderr)
+
+  if unmanaged:
+    # Chunk to keep the request body sane on large libraries.
+    chunk = 200
+    done = 0
+    for i in range(0, len(unmanaged), chunk):
+      batch = unmanaged[i : i + chunk]
+      if client.set_auto_management(batch, enable=True):
+        done += len(batch)
+      else:
+        failures += 1
+        print(f"WARNING: setAutoManagement failed for {len(batch)} torrents", file=sys.stderr)
+    print(f"auto-managed {done}/{len(unmanaged)} torrent(s) (relocating into category folders)")
+
+  return 1 if failures else 0
 
 
 if __name__ == "__main__":
