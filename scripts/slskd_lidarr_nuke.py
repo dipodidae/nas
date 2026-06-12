@@ -87,6 +87,15 @@ def _request(
     return exc.code, exc.read()
 
 
+def plan_lidarr_nuke(records: list[dict]) -> list[int]:
+  """Return every Lidarr queue id to delete (the whole queue).
+
+  Pure over a ``/api/v1/queue`` records list. Rows without an integer ``id``
+  are skipped defensively. Order is preserved; ids are unique within a queue.
+  """
+  return [r["id"] for r in records if isinstance(r.get("id"), int)]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Clean-slate the slskd<->Lidarr pipeline (nuke queue + transfers + folder)."

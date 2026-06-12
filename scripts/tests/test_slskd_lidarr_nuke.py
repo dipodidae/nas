@@ -1,0 +1,44 @@
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+
+def _load_module():
+  root = Path(__file__).resolve().parents[2]
+  scripts_dir = root / "scripts"
+  if str(scripts_dir) not in sys.path:
+    sys.path.insert(0, str(scripts_dir))
+  script_path = scripts_dir / "slskd_lidarr_nuke.py"
+  spec = importlib.util.spec_from_file_location("slskd_lidarr_nuke", script_path)
+  module = importlib.util.module_from_spec(spec)
+  assert spec.loader is not None
+  sys.modules[spec.name] = module
+  spec.loader.exec_module(module)
+  return module
+
+
+nuke = _load_module()
+
+
+# ---- plan_lidarr_nuke ----------------------------------------------------
+
+
+def test_plan_lidarr_nuke_empty_queue():
+  assert nuke.plan_lidarr_nuke([]) == []
+
+
+def test_plan_lidarr_nuke_selects_all_states():
+  records = [
+    {"id": 1, "status": "downloading"},
+    {"id": 2, "status": "importPending"},
+    {"id": 3, "status": "completed"},
+    {"id": 4, "status": "warning"},
+  ]
+  assert nuke.plan_lidarr_nuke(records) == [1, 2, 3, 4]
+
+
+def test_plan_lidarr_nuke_skips_rows_without_int_id():
+  records = [{"id": 1}, {"id": None}, {"title": "no id"}, {"id": "x"}]
+  assert nuke.plan_lidarr_nuke(records) == [1]
