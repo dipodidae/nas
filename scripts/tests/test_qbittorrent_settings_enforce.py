@@ -62,3 +62,25 @@ def test_collect_unmanaged_hashes_picks_non_auto_tmm():
 def test_collect_unmanaged_hashes_empty():
   assert qbt.collect_unmanaged_hashes([]) == []
   assert qbt.collect_unmanaged_hashes([{"hash": "x", "auto_tmm": True}]) == []
+
+
+# ---- summarize_targets ---------------------------------------------------
+
+
+def test_summarize_targets_counts_by_target_path():
+  torrents = [
+    {"hash": "a", "category": "arr-sonarr"},
+    {"hash": "b", "category": "arr-sonarr"},
+    {"hash": "c", "category": "arr-radarr"},
+    {"hash": "d", "category": ""},  # uncategorized -> default/manual
+  ]
+  categories = {
+    "arr-sonarr": {"savePath": "/downloads/complete/sonarr"},
+    "arr-radarr": {"savePath": "/downloads/complete/radarr"},
+  }
+  out = qbt.summarize_targets(torrents, categories)
+  assert out == {
+    "/downloads/complete/sonarr": 2,
+    "/downloads/complete/radarr": 1,
+    "(default save path)": 1,
+  }

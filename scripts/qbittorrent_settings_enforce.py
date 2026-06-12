@@ -78,6 +78,22 @@ def collect_unmanaged_hashes(torrents: list[dict]) -> list[str]:
   return [t["hash"] for t in torrents if t.get("hash") and not t.get("auto_tmm", False)]
 
 
+def summarize_targets(torrents: list[dict], categories: dict) -> dict[str, int]:
+  """Count where each torrent will land once auto-managed.
+
+  Pure. A torrent's target is its category's ``savePath``; an empty/missing
+  category or empty savePath falls back to the qBittorrent default save path
+  (reported as the literal ``"(default save path)"``).
+  """
+  out: dict[str, int] = {}
+  for t in torrents:
+    cat = t.get("category") or ""
+    save = categories.get(cat, {}).get("savePath") or ""
+    key = save if save else "(default save path)"
+    out[key] = out.get(key, 0) + 1
+  return out
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Enable qBittorrent Auto TMM and relocate existing torrents into category folders."
