@@ -36,13 +36,13 @@ Usage
 from __future__ import annotations
 
 import argparse
-import http.cookiejar  # noqa: F401 – used by QbtClient (Task 5)
-import json  # noqa: F401 – used by QbtClient (Task 5)
+import http.cookiejar
+import json
 import os
 import sys
-import urllib.error  # noqa: F401 – used by QbtClient (Task 5)
-import urllib.parse  # noqa: F401 – used by QbtClient (Task 5)
-import urllib.request  # noqa: F401 – used by QbtClient (Task 5)
+import urllib.error
+import urllib.parse
+import urllib.request
 
 if "QBITTORRENT_USER" not in os.environ:
   try:
@@ -92,6 +92,57 @@ def summarize_targets(torrents: list[dict], categories: dict) -> dict[str, int]:
     key = save if save else "(default save path)"
     out[key] = out.get(key, 0) + 1
   return out
+
+
+class QbtClient:
+  """Minimal qBittorrent WebUI API v2 client (cookie-jar session)."""
+
+  def __init__(self, host: str):
+    self.host = host
+    self._opener = urllib.request.build_opener(
+      urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+
+  def _post(self, path: str, data: dict, timeout: int = 30) -> tuple[int, bytes]:
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(
+      f"{self.host}{path}", data=body, headers={"Referer": self.host}
+    )
+    try:
+      with self._opener.open(req, timeout=timeout) as resp:  # noqa: S310 - localhost
+        return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+      return exc.code, exc.read()
+
+  def _get_json(self, path: str, timeout: int = 30):
+    req = urllib.request.Request(f"{self.host}{path}", headers={"Referer": self.host})
+    with self._opener.open(req, timeout=timeout) as resp:  # noqa: S310 - localhost
+      return json.loads(resp.read())
+
+  def login(self, user: str, pw: str) -> bool:
+    status, body = self._post("/api/v2/auth/login", {"username": user, "password": pw})
+    # qBittorrent returns 200 + "Ok." on success; localhost auth-bypass returns 200/empty.
+    return status == 200 and b"Fails" not in body
+
+  def get_preferences(self) -> dict:
+    return self._get_json("/api/v2/app/preferences")
+
+  def set_preferences(self, changes: dict) -> bool:
+    status, _ = self._post("/api/v2/app/setPreferences", {"json": json.dumps(changes)})
+    return status == 200
+
+  def get_torrents(self) -> list[dict]:
+    return self._get_json("/api/v2/torrents/info")
+
+  def get_categories(self) -> dict:
+    return self._get_json("/api/v2/torrents/categories")
+
+  def set_auto_management(self, hashes: list[str], enable: bool = True) -> bool:
+    status, _ = self._post(
+      "/api/v2/torrents/setAutoManagement",
+      {"hashes": "|".join(hashes), "enable": "true" if enable else "false"},
+    )
+    return status == 200
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
