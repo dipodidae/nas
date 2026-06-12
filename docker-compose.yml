@@ -237,6 +237,7 @@ services:
     environment:
       - SLSKD_REMOTE_CONFIGURATION=true
       - SLSKD_DOWNLOADS_DIR=/downloads/complete/slskd
+      - SLSKD_INCOMPLETE_DIR=/downloads/incomplete/slskd
       - SLSKD_SHARED_DIR=/music
       - SLSKD_SLSK_USERNAME=${SLSKD_SLSK_USERNAME}
       - SLSKD_SLSK_PASSWORD=${SLSKD_SLSK_PASSWORD}
@@ -897,7 +898,7 @@ services:
     networks:
       - nas-network
     healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U playlist -d playlist_generator']
+      test: [CMD-SHELL, pg_isready -U playlist -d playlist_generator]
       interval: 10s
       timeout: 5s
       retries: 5
