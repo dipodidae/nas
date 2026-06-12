@@ -99,3 +99,27 @@ export interface LidarrProfilesResponse {
   qualityProfiles: { id: number, name: string }[]
   metadataProfiles: { id: number, name: string }[]
 }
+
+export interface SpotifyStatus {
+  enabled: boolean
+  connected: boolean
+}
+
+export interface SpotifyPlaylist {
+  id: string
+  name: string
+  trackCount: number
+  imageUrl?: string
+  owner?: string
+}
+
+export interface SpotifyResolveStats {
+  tracks: number
+  skipped: number
+  uniqueAlbums: number
+}
+
+export interface SpotifyResolveResult {
+  items: ParsedItem[]
+  stats: SpotifyResolveStats
+}

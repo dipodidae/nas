@@ -15,6 +15,13 @@ const schema = z.object({
   // the tab tells the user it's disabled.
   OPENAI_API_KEY: z.string().optional().default(''),
   OPENAI_MODEL: z.string().min(1).default('gpt-4o'),
+  // Optional — enables the Spotify "Spotify" tab. All three required to enable;
+  // when any is unset the tab is hidden and the endpoints report disabled.
+  SPOTIFY_API_CLIENT_ID: z.string().optional().default(''),
+  SPOTIFY_API_CLIENT_SECRET: z.string().optional().default(''),
+  // Must exactly match a Redirect URI registered in the Spotify dashboard, e.g.
+  // https://lidarr-bulk.example.com/api/spotify/callback
+  SPOTIFY_REDIRECT_URI: z.string().optional().default(''),
 })
 
 export type Env = z.infer<typeof schema>

@@ -8,7 +8,7 @@ list of real albums. Single Nuxt 4 app served at
 ## AI Discover tab
 
 Set `OPENAI_API_KEY` (the stack reuses the same key as the playlist-generator)
-to unlock a third tab. Type a prompt like *"The best 80s coldwave albums"*, pick
+to unlock a third tab. Type a prompt like _"The best 80s coldwave albums"_, pick
 a count (1–50), and GPT returns canonical `Artist - Album` lines into the album
 textarea. Review/trim the list, then **Add all** runs the normal album job —
 each album is added to Lidarr and immediately searched.
@@ -19,6 +19,16 @@ form, server-side dedupe + count clamp (never trusts the model's count), and
 prompt-length limits. The tab hides itself when no key is configured
 (`GET /api/ai/status`). Model is configurable via `OPENAI_MODEL` (default
 `gpt-4o`).
+
+## Spotify playlists
+
+Set `SPOTIFY_API_CLIENT_ID`, `SPOTIFY_API_CLIENT_SECRET`, and
+`SPOTIFY_REDIRECT_URI` to enable the **Spotify** tab. Register the redirect URI
+(`https://<your-host>/api/spotify/callback`) in your Spotify app dashboard so it
+matches `SPOTIFY_REDIRECT_URI` exactly. Click **Connect Spotify** once to
+authorize; the refresh token is stored in `CONFIG_DIR/spotify-token.json`. Then
+click any playlist to queue every unique album behind its tracks into Lidarr
+using your saved default profiles and monitor mode.
 
 ## Why Fastify-likeNuxt 4
 
