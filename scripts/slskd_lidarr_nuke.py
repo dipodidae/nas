@@ -178,7 +178,12 @@ def fetch_lidarr_queue(host: str, api_key: str) -> list[dict]:
   status, body = _request("GET", url, api_key, header="X-Api-Key")
   if status >= 400:
     raise RuntimeError(f"GET /api/v1/queue returned HTTP {status}")
-  return json.loads(body).get("records", []) if body else []
+  if not body:
+    return []
+  try:
+    return json.loads(body).get("records", [])
+  except json.JSONDecodeError as exc:
+    raise RuntimeError(f"GET /api/v1/queue returned malformed JSON: {exc}") from exc
 
 
 def bulk_delete_lidarr(host: str, api_key: str, ids: list[int]) -> bool:
@@ -210,7 +215,14 @@ def fetch_slskd_downloads(host: str, api_key: str) -> list[dict]:
   status, body = _request("GET", f"{host}/api/v0/transfers/downloads", api_key)
   if status >= 400:
     raise RuntimeError(f"GET /api/v0/transfers/downloads returned HTTP {status}")
-  return json.loads(body) if body else []
+  if not body:
+    return []
+  try:
+    return json.loads(body)
+  except json.JSONDecodeError as exc:
+    raise RuntimeError(
+      f"GET /api/v0/transfers/downloads returned malformed JSON: {exc}"
+    ) from exc
 
 
 def cancel_slskd_transfer(host: str, api_key: str, t: SlskdTransfer) -> bool:
@@ -312,7 +324,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  cancelled {cancelled}/{len(active)} active transfer(s)")
       if not clear_slskd_completed(slskd_host, slskd_key):
         # Endpoint unavailable: re-fetch and remove terminal records per-transfer.
-        leftovers = fetch_slskd_downloads(slskd_host, slskd_key)
+        try:
+          leftovers = fetch_slskd_downloads(slskd_host, slskd_key)
+        except (urllib.error.URLError, RuntimeError) as exc:
+          print(f"WARNING: per-transfer fallback re-fetch failed: {exc}", file=sys.stderr)
+          leftovers = []
+          failures += 1
         for user in leftovers if isinstance(leftovers, list) else []:
           for directory in user.get("directories", []):
             for file in directory.get("files", []):
