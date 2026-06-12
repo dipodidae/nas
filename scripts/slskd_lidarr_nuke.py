@@ -132,6 +132,47 @@ def collect_slskd_transfers(downloads: object) -> tuple[list[SlskdTransfer], int
   return active, terminal
 
 
+def spare_basenames(records: list[dict]) -> set[str]:
+  """Path basenames any active Lidarr import still references.
+
+  Mirrors slskd_complete_sweep.active_queue_paths: reduces each path-like field
+  to its basename so it can be matched against a completed-dir name.
+  Handles both POSIX (``/``) and Windows (``\\``) path separators.
+  """
+  out: set[str] = set()
+  for r in records:
+    for key in ("outputPath", "downloadForcedClientPath", "title"):
+      val = r.get(key)
+      if isinstance(val, str) and val:
+        # Normalise to forward-slashes first so os.path.basename works on both
+        # POSIX paths (/data/.../Album) and Windows-style paths (music\\Artist\\Album\\)
+        normalized = val.replace("\\", "/").rstrip("/")
+        name = os.path.basename(normalized)
+        if name:
+          out.add(name)
+  return out
+
+
+def plan_folder_sweep(complete_dir: Path, spare: set[str]) -> list[Path]:
+  """Direct-child dirs under ``complete_dir`` to delete (not in ``spare``).
+
+  Containment guard: every candidate's resolved parent must equal the resolved
+  ``complete_dir``; a child that escapes (e.g. a symlink to elsewhere) raises
+  ``ValueError`` so the caller aborts rather than deleting outside the folder.
+  """
+  resolved_root = complete_dir.resolve()
+  targets: list[Path] = []
+  for child in sorted(complete_dir.iterdir()):
+    if not child.is_dir():
+      continue
+    if child.resolve().parent != resolved_root:
+      raise ValueError(f"{child} escapes {complete_dir} — refusing to sweep")
+    if child.name in spare:
+      continue
+    targets.append(child)
+  return targets
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Clean-slate the slskd<->Lidarr pipeline (nuke queue + transfers + folder)."

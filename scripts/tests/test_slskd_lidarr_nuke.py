@@ -68,3 +68,41 @@ def test_collect_slskd_transfers_partitions_active_and_terminal():
 def test_collect_slskd_transfers_empty():
   assert nuke.collect_slskd_transfers([]) == ([], 0)
   assert nuke.collect_slskd_transfers("not a list") == ([], 0)
+
+
+# ---- spare_basenames -----------------------------------------------------
+
+
+def test_spare_basenames_extracts_path_basenames():
+  records = [
+    {"outputPath": "/data/downloads/complete/slskd/Album One"},
+    {"downloadForcedClientPath": "music\\Artist\\Album Two\\"},
+    {"title": "Album Three"},
+    {"outputPath": ""},
+  ]
+  assert nuke.spare_basenames(records) == {"Album One", "Album Two", "Album Three"}
+
+
+# ---- plan_folder_sweep ---------------------------------------------------
+
+
+def test_plan_folder_sweep_selects_unspared_children(tmp_path):
+  root = tmp_path / "slskd"
+  root.mkdir()
+  keep = root / "Importing Now"
+  drop = root / "Orphan Album"
+  keep.mkdir()
+  drop.mkdir()
+  (root / "loose.txt").write_text("not a dir")  # files ignored
+  targets = nuke.plan_folder_sweep(root, {"Importing Now"})
+  assert targets == [drop]
+
+
+def test_plan_folder_sweep_containment_rejects_escape(tmp_path):
+  root = tmp_path / "slskd"
+  root.mkdir()
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  (root / "link").symlink_to(outside, target_is_directory=True)
+  with pytest.raises(ValueError):
+    nuke.plan_folder_sweep(root, set())
