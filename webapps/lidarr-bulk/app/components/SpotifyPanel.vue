@@ -4,9 +4,14 @@ import type { ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyStatus }
 const emit = defineEmits<{ queue: [items: ParsedItem[]] }>()
 const toast = useToast()
 
+// `connected` tracks whether the server holds a token — independent of whether
+// the playlist fetch succeeds. A 403 (account not on the app's allowlist) leaves
+// a valid token in place, so we keep `connected` true and surface `loadError`
+// instead, which keeps Disconnect / "different account" reachable.
 const connected = ref(false)
 const playlists = ref<SpotifyPlaylist[]>([])
 const loading = ref(false)
+const loadError = ref<string | null>(null)
 const resolvingId = ref<string | null>(null)
 
 function describeError(err: unknown): string {
@@ -16,14 +21,15 @@ function describeError(err: unknown): string {
 
 async function loadPlaylists(): Promise<void> {
   loading.value = true
+  loadError.value = null
   try {
     const res = await $fetch<{ playlists: SpotifyPlaylist[] }>('/api/spotify/playlists')
     playlists.value = res.playlists
   }
   catch (err: unknown) {
-    // 401 → token revoked/expired; fall back to the connect prompt.
-    connected.value = false
-    toast.add({ title: 'Spotify', description: describeError(err), color: 'warning' })
+    // Keep `connected` as-is — a token still exists server-side. Surface the
+    // error so the user can disconnect or reconnect with a different account.
+    loadError.value = describeError(err)
   }
   finally {
     loading.value = false
@@ -55,6 +61,7 @@ async function disconnect(): Promise<void> {
   await $fetch('/api/spotify/disconnect', { method: 'POST' })
   connected.value = false
   playlists.value = []
+  loadError.value = null
   toast.add({ title: 'Spotify disconnected', color: 'neutral' })
 }
 
@@ -101,10 +108,22 @@ async function pick(playlist: SpotifyPlaylist): Promise<void> {
         <p class="text-muted m-0 text-sm">
           Click a playlist to queue its unique albums using your saved default profiles and monitor mode.
         </p>
-        <UButton size="xs" color="neutral" variant="link" label="Disconnect" @click="disconnect" />
+        <div class="flex items-center gap-2">
+          <UButton size="xs" color="neutral" variant="soft" icon="i-lucide-repeat" label="Use a different account" to="/api/spotify/login" external />
+          <UButton size="xs" color="neutral" variant="link" label="Disconnect" @click="disconnect" />
+        </div>
       </div>
 
-      <div v-if="loading" class="mt-4 text-sm text-muted">
+      <UAlert
+        v-if="loadError"
+        class="mt-4"
+        color="warning"
+        variant="soft"
+        icon="i-lucide-triangle-alert"
+        title="Couldn’t load your playlists"
+        :description="`${loadError} — if this is a 403, the account must be added under User Management in your Spotify app (apps in Development Mode only allow allowlisted accounts), or disconnect and connect a different account above.`"
+      />
+      <div v-else-if="loading" class="mt-4 text-sm text-muted">
         Loading playlists…
       </div>
       <div v-else-if="playlists.length === 0" class="mt-4 text-sm text-muted">

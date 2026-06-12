@@ -29,6 +29,7 @@ describe('buildAuthorizeUrl', () => {
     expect(url.searchParams.get('redirect_uri')).toBe('https://app.example/api/spotify/callback')
     expect(url.searchParams.get('state')).toBe('xyz')
     expect(url.searchParams.get('scope')).toContain('playlist-read-private')
+    expect(url.searchParams.get('show_dialog')).toBe('true')
   })
 })
 

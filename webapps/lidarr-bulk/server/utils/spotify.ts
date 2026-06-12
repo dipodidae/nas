@@ -30,6 +30,9 @@ export function buildAuthorizeUrl(env: Env, state: string): string {
     redirect_uri: env.SPOTIFY_REDIRECT_URI,
     scope: SCOPES,
     state,
+    // Force the account/consent screen every time so the user can switch
+    // accounts instead of being silently re-authorized as the last one.
+    show_dialog: 'true',
   })
   return `${SPOTIFY_ACCOUNTS}/authorize?${params.toString()}`
 }
