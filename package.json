@@ -56,7 +56,9 @@
     "audit:perms:fix:dry": "bash -c '. .venv/bin/activate && python scripts/permissions_auditor.py --fix --dry-run'",
     "verify:update": "bash -c '. .venv/bin/activate && python scripts/post_update_verifier.py'",
     "logs:prune": "bash -c '. .venv/bin/activate && python scripts/log_pruner.py'",
-    "logs:prune:dry": "bash -c '. .venv/bin/activate && python scripts/log_pruner.py --dry-run'"
+    "logs:prune:dry": "bash -c '. .venv/bin/activate && python scripts/log_pruner.py --dry-run'",
+    "nuke": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py'",
+    "nuke:dry": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py --dry-run'"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",
