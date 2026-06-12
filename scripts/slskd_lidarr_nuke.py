@@ -45,7 +45,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil  # noqa: F401
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -249,10 +249,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-  args = parse_args(argv)  # noqa: F841
-  lidarr_host = os.environ.get("LIDARR_HOST", DEFAULT_LIDARR_HOST).rstrip("/")  # noqa: F841
+  args = parse_args(argv)
+  lidarr_host = os.environ.get("LIDARR_HOST", DEFAULT_LIDARR_HOST).rstrip("/")
   lidarr_key = os.environ.get("API_KEY_LIDARR")
-  slskd_host = os.environ.get("SLSKD_HOST", DEFAULT_SLSKD_HOST).rstrip("/")  # noqa: F841
+  slskd_host = os.environ.get("SLSKD_HOST", DEFAULT_SLSKD_HOST).rstrip("/")
   slskd_key = os.environ.get("API_KEY_SLSKD")
   if not lidarr_key:
     print("ERROR: API_KEY_LIDARR not set (check .env)", file=sys.stderr)
@@ -260,8 +260,115 @@ def main(argv: list[str] | None = None) -> int:
   if not slskd_key:
     print("ERROR: API_KEY_SLSKD not set (check .env)", file=sys.stderr)
     return 2
-  # Phases wired in later tasks.
-  return 0
+
+  complete_dir = args.slskd_complete_dir or Path(
+    os.environ.get("SLSKD_COMPLETE_DIR", DEFAULT_SLSKD_COMPLETE_DIR)
+  )
+
+  print("=== slskd<->Lidarr CLEAN SLATE ===" + ("  [DRY RUN]" if args.dry_run else ""))
+  failures = 0
+
+  # --- Phase 1: Lidarr queue teardown (graceful, first) ---
+  if not args.skip_lidarr:
+    try:
+      records = fetch_lidarr_queue(lidarr_host, lidarr_key)
+    except (urllib.error.URLError, RuntimeError) as exc:
+      print(f"ERROR: cannot reach Lidarr: {exc}", file=sys.stderr)
+      return 2
+    ids = plan_lidarr_nuke(records)
+    print(f"Phase 1 (Lidarr): {len(ids)} queue row(s) -> remove+blocklist+skipRedownload")
+    if ids and not args.dry_run:
+      if not bulk_delete_lidarr(lidarr_host, lidarr_key, ids):
+        # Fall back to per-id deletes if the bulk endpoint failed.
+        ok = 0
+        for qid in ids:
+          if delete_lidarr_item(lidarr_host, lidarr_key, qid):
+            ok += 1
+          else:
+            failures += 1
+            print(f"WARNING: failed to delete Lidarr queue/{qid}", file=sys.stderr)
+        print(f"  deleted {ok}/{len(ids)} row(s) (per-id fallback)")
+      else:
+        print(f"  deleted {len(ids)} row(s) (bulk)")
+
+  # --- Phase 2: slskd full wipe (mop-up) ---
+  if not args.skip_slskd:
+    try:
+      downloads = fetch_slskd_downloads(slskd_host, slskd_key)
+    except (urllib.error.URLError, RuntimeError) as exc:
+      print(f"ERROR: cannot reach slskd: {exc}", file=sys.stderr)
+      return 2
+    active, terminal = collect_slskd_transfers(downloads)
+    print(f"Phase 2 (slskd): cancel {len(active)} active transfer(s), clear {terminal} record(s)")
+    if not args.dry_run:
+      cancelled = 0
+      for t in active:
+        if cancel_slskd_transfer(slskd_host, slskd_key, t):
+          cancelled += 1
+        else:
+          failures += 1
+          print(f"WARNING: failed to cancel slskd {t.username}/{t.transfer_id}", file=sys.stderr)
+      if active:
+        print(f"  cancelled {cancelled}/{len(active)} active transfer(s)")
+      if not clear_slskd_completed(slskd_host, slskd_key):
+        # Endpoint unavailable: re-fetch and remove terminal records per-transfer.
+        leftovers = fetch_slskd_downloads(slskd_host, slskd_key)
+        for user in leftovers if isinstance(leftovers, list) else []:
+          for directory in user.get("directories", []):
+            for file in directory.get("files", []):
+              if str(file.get("state", "")).startswith(TERMINAL_PREFIX):
+                t = SlskdTransfer(user.get("username", ""), file.get("id", ""), file.get("state", ""))
+                if not cancel_slskd_transfer(slskd_host, slskd_key, t):
+                  failures += 1
+        print("  cleared terminal records (per-transfer fallback)")
+      else:
+        print("  cleared all terminal records (bulk)")
+
+  # --- Phase 3: completed-folder sweep (disk, last) ---
+  if not args.skip_folder_sweep:
+    if not complete_dir.is_dir():
+      print(f"Phase 3 (folder): {complete_dir} not found — skipping", file=sys.stderr)
+    else:
+      spare: set[str] = set()
+      if not args.skip_lidarr:
+        try:
+          spare = spare_basenames(fetch_lidarr_queue(lidarr_host, lidarr_key))
+        except (urllib.error.URLError, RuntimeError):
+          spare = set()  # queue already drained / unreachable -> nothing to spare
+      try:
+        targets = plan_folder_sweep(complete_dir, spare)
+      except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+      bytes_to_free = 0
+      for d in targets:
+        for dp, _dirs, files in os.walk(d):
+          for f in files:
+            try:
+              bytes_to_free += os.path.getsize(os.path.join(dp, f))
+            except OSError:
+              continue
+      print(
+        f"Phase 3 (folder): delete {len(targets)} dir(s) (~{bytes_to_free / 1e9:.2f} GB), "
+        f"sparing {len(spare)} active import(s)"
+      )
+      if args.dry_run:
+        for d in targets[:15]:
+          print(f"  DRY rmtree {d.name}")
+        if len(targets) > 15:
+          print(f"  ... and {len(targets) - 15} more")
+      else:
+        for d in targets:
+          try:
+            shutil.rmtree(d)
+          except OSError as exc:
+            print(f"WARNING: rmtree {d}: {exc}", file=sys.stderr)
+            failures += 1
+        print(f"  deleted {len(targets)} dir(s) (~{bytes_to_free / 1e9:.2f} GB if all succeeded)")
+
+  if args.dry_run:
+    return 0
+  return 1 if failures else 0
 
 
 if __name__ == "__main__":
