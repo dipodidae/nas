@@ -739,6 +739,12 @@ services:
       # the same OPENAI_API_KEY as the playlist-generator. Tab hides if unset.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${LIDARR_BULK_OPENAI_MODEL:-gpt-4o}
+      # Optional — enables the "Spotify" tab (queue albums from your playlists).
+      # All three required; tab hides if any unset. Redirect URI is derived from
+      # PUBLIC_DOMAIN and must be registered in the Spotify app dashboard.
+      - SPOTIFY_API_CLIENT_ID=${SPOTIFY_API_CLIENT_ID:-}
+      - SPOTIFY_API_CLIENT_SECRET=${SPOTIFY_API_CLIENT_SECRET:-}
+      - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-https://lidarr-bulk.${PUBLIC_DOMAIN}/api/spotify/callback}
       - RATE_LIMIT_PER_MINUTE=30
       - BODY_LIMIT_BYTES=262144
     volumes:
