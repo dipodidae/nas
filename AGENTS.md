@@ -247,6 +247,14 @@ Required in `.env`:
 - Never alter existing code style/formatting without good reason
 - Run linting and tests before committing changes
 
+## Operational Scripts (on-demand)
+
+Scripts in `scripts/` that run on-demand (not cron) against the live stack:
+
+- `slskd_lidarr_nuke.py` — on-demand clean-slate: nukes the whole Lidarr queue
+  (remove+blocklist+skipRedownload), wipes all slskd transfers, and sweeps the
+  slskd completed folder. Acts by default; `--dry-run` to preview.
+
 ## Exit Codes (Python Scripts)
 
 - `0` - Success
