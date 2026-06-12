@@ -58,7 +58,9 @@
     "logs:prune": "bash -c '. .venv/bin/activate && python scripts/log_pruner.py'",
     "logs:prune:dry": "bash -c '. .venv/bin/activate && python scripts/log_pruner.py --dry-run'",
     "nuke": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py'",
-    "nuke:dry": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py --dry-run'"
+    "nuke:dry": "bash -c '. .venv/bin/activate && python scripts/slskd_lidarr_nuke.py --dry-run'",
+    "qbt:tidy": "bash -c '. .venv/bin/activate && python scripts/qbittorrent_settings_enforce.py'",
+    "qbt:tidy:dry": "bash -c '. .venv/bin/activate && python scripts/qbittorrent_settings_enforce.py --dry-run'"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",

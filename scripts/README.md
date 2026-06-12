@@ -327,7 +327,7 @@ Clears stale slskd `Completed, *` transfer rows that Tubifarry (Lidarr's slskd p
 
 Safety design — does **not** conflict with the Lidarr/Tubifarry flow:
 
-1. **Lidarr-quiet gate (per-transfer)** — build the set of dir basenames referenced by *active* Lidarr queue items (`downloading` / `importPending` / `importing` / `importBlocked` / `importFailed`). A `Completed, Succeeded` slskd record is deferred only if its trailing-segment basename appears in that set. Succeeded records that no Lidarr item references are cleaned in the same run, so the slskd transfer manager doesn't accumulate indefinitely just because *some other* import is in flight. Terminal-failure states (`Completed, Errored / Rejected / Cancelled / TimedOut`) are always cleaned — they will never trigger a Tubifarry callback.
+1. **Lidarr-quiet gate (per-transfer)** — build the set of dir basenames referenced by _active_ Lidarr queue items (`downloading` / `importPending` / `importing` / `importBlocked` / `importFailed`). A `Completed, Succeeded` slskd record is deferred only if its trailing-segment basename appears in that set. Succeeded records that no Lidarr item references are cleaned in the same run, so the slskd transfer manager doesn't accumulate indefinitely just because _some other_ import is in flight. Terminal-failure states (`Completed, Errored / Rejected / Cancelled / TimedOut`) are always cleaned — they will never trigger a Tubifarry callback.
 2. **Per-record age gate** — only deletes records whose `endedAt` is older than `--min-age-hours` (default `1`). Records without `endedAt` are skipped conservatively.
 3. **Per-dir age gate** — only removes `/downloads/incomplete/<name>` whose mtime is older than the same threshold.
 4. **Name allowlist on disk** — only ever deletes incomplete dirs that slskd itself listed in the transfer it just removed. qBittorrent shares `/downloads/incomplete` with slskd (as its `Session\TempPath`), so this is critical: indiscriminate sweeps would destroy in-progress torrents.
@@ -350,7 +350,7 @@ Clears Lidarr queue items wedged in `completed / importFailed` state. These accu
 
 The script splits failures by **why** they failed, because they need opposite handling:
 
-**Reclaim pass (default on).** `Album release not requested` is *not* a bad download — the peer sent a complete, valid album that maps to a different MusicBrainz release than the one Lidarr monitors. Lidarr's automatic import pipeline deliberately disables release switching (so a random peer can't flip your monitored edition) and there is **no global toggle** for it, so these sit wedged forever. For each such row the script re-imports the download via the manual-import API with `disableReleaseSwitching: false`: Lidarr re-points the monitored release to the edition on disk and imports the files already there. Success is verified against the album's `trackFile` count (a ManualImport that imports nothing still reports `completed`), and if the primary import is a no-op — files were already copied into the library by a prior `albumImportIncomplete` but never registered — it re-scans the artist folder and registers those orphans in place. Only when track files actually appear is the now-satisfied row dropped with `blocklist=false&skipRedownload=true` (no re-download, no blocklist). Disable with `--no-reclaim`.
+**Reclaim pass (default on).** `Album release not requested` is _not_ a bad download — the peer sent a complete, valid album that maps to a different MusicBrainz release than the one Lidarr monitors. Lidarr's automatic import pipeline deliberately disables release switching (so a random peer can't flip your monitored edition) and there is **no global toggle** for it, so these sit wedged forever. For each such row the script re-imports the download via the manual-import API with `disableReleaseSwitching: false`: Lidarr re-points the monitored release to the edition on disk and imports the files already there. Success is verified against the album's `trackFile` count (a ManualImport that imports nothing still reports `completed`), and if the primary import is a no-op — files were already copied into the library by a prior `albumImportIncomplete` but never registered — it re-scans the artist folder and registers those orphans in place. Only when track files actually appear is the now-satisfied row dropped with `blocklist=false&skipRedownload=true` (no re-download, no blocklist). Disable with `--no-reclaim`.
 
 **Destructive pass.** Genuine bad matches (`Album match is not close enough: X% vs 80%`, `Couldn't find similar album`) and any reclaim that failed get `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=true`: drops the entry, kills the slskd transfer via Tubifarry, and blocklists the specific release. `skipRedownload` is **true by default** — an immediate per-row replacement search piles onto the Soulseek search burst that earns flood bans, so re-finding is left to the paced `lidarr_backlog_drip`. Pass `--redownload` to search immediately.
 
@@ -358,7 +358,7 @@ Safety design:
 
 1. **State gate** — only rows with `trackedDownloadState == importFailed` are touched. Downloading / importing rows are left strictly alone.
 2. **Age gate** — only acts on rows whose `added` timestamp is older than `--min-age-hours` (default `1`). Rows missing `added` are skipped conservatively.
-3. **Reclaim is conservative** — a row is only reclaimed when `Album release not requested` is present *and* no hard blocker (`not close enough`, `couldn't find similar`, `destination already exists`) is, so fuzzy matches never get force-imported.
+3. **Reclaim is conservative** — a row is only reclaimed when `Album release not requested` is present _and_ no hard blocker (`not close enough`, `couldn't find similar`, `destination already exists`) is, so fuzzy matches never get force-imported.
 4. **Effect-verified** — reclaim never clears a queue row unless the album's track-file count actually increased.
 
 ```bash
@@ -419,11 +419,32 @@ python scripts/slskd_lidarr_nuke.py             # ACT: full clean slate
 Env: `API_KEY_LIDARR`, `API_KEY_SLSKD`, `LIDARR_HOST`, `SLSKD_HOST`,
 `SLSKD_COMPLETE_DIR`. Exit: `0` ok/dry-run/noop, `1` partial, `2` fatal.
 
+### `qbittorrent_settings_enforce.py`
+
+Enforces qBittorrent **Auto Torrent Management** so category tags actually drive
+save paths. Sets `auto_tmm_enabled` / `category_changed_tmm_enabled` /
+`save_path_changed_tmm_enabled` and points the temp path at
+`/downloads/incomplete/qbittorrent`, then flips existing torrents to
+auto-managed so qBittorrent relocates them from `complete/manual/` into their
+category folders (`complete/sonarr`, `complete/radarr`, …). Same-filesystem
+rename — instant, hardlinks preserved, seeding uninterrupted. Idempotent.
+
+Acts by default; `--dry-run` previews the pref diff and relocate plan.
+
+```bash
+python scripts/qbittorrent_settings_enforce.py --dry-run
+python scripts/qbittorrent_settings_enforce.py
+```
+
+Env: `QBITTORRENT_USER`, `QBITTORRENT_PASS`, `QBITTORRENT_HOST`
+(default `http://localhost:8080`). Exit: `0` ok/dry-run/no-op, `1` partial,
+`2` fatal.
+
 ### `slskd_complete_sweep.py`
 
 Reaps `/downloads/complete/slskd/<dir>` subtrees that Lidarr has already imported into `/music/`. With Lidarr configured to use hardlinks (`copyUsingHardlinks=true`), the slskd download copy is never reaped by the import path itself; over weeks this accumulates GBs of duplicates of files that already live in the music library.
 
-Match strategy is size-based against a one-shot walk of `/music/`. By default `--threshold 1.0` requires that *every* audio file in the slskd dir has a matching size in the library — false-positive risk is essentially zero. Dirs the Lidarr queue still references are skipped (mid-flight protection), and an age gate keeps freshly downloaded folders alone for the first hour.
+Match strategy is size-based against a one-shot walk of `/music/`. By default `--threshold 1.0` requires that _every_ audio file in the slskd dir has a matching size in the library — false-positive risk is essentially zero. Dirs the Lidarr queue still references are skipped (mid-flight protection), and an age gate keeps freshly downloaded folders alone for the first hour.
 
 ```bash
 python scripts/slskd_complete_sweep.py                    # delete confirmed dups
@@ -436,7 +457,7 @@ Exit codes: `0` success / nothing to do, `1` partial (some rmtree failed), `2` f
 
 Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localhost:8686`), `MUSIC_DIR` (default `/mnt/drive/music`), `SLSKD_COMPLETE_DIR` (default `/mnt/drive/downloads/complete/slskd`).
 
-Note: this script reaps confirmed duplicates only. Folders Lidarr *rejected* (peer mismatch, fingerprint below 80%) never get hardlinked into `/music/` and so look like orphans here — they are real orphans, but not duplicates, and need a separate decision (re-import via `process_soulseek_imports.py`, or manual triage). The sweeper deliberately leaves them alone.
+Note: this script reaps confirmed duplicates only. Folders Lidarr _rejected_ (peer mismatch, fingerprint below 80%) never get hardlinked into `/music/` and so look like orphans here — they are real orphans, but not duplicates, and need a separate decision (re-import via `process_soulseek_imports.py`, or manual triage). The sweeper deliberately leaves them alone.
 
 ### `slskd_login_watch.py`
 
@@ -472,11 +493,11 @@ Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localho
 
 ### `lidarr_backlog_drip.py`
 
-Drip-feeds Lidarr's **missing-album backlog** (thousands of monitored-but-missing albums) into Soulseek without flooding it. Lidarr's built-in `MissingAlbumSearch` searches *everything* at once — hundreds of grabs hit slskd, peers queue them remotely, and they wedge at 0 bytes holding slots forever (the classic clog). This script is the controlled alternative: it searches a small batch **only when slskd has spare capacity**.
+Drip-feeds Lidarr's **missing-album backlog** (thousands of monitored-but-missing albums) into Soulseek without flooding it. Lidarr's built-in `MissingAlbumSearch` searches _everything_ at once — hundreds of grabs hit slskd, peers queue them remotely, and they wedge at 0 bytes holding slots forever (the classic clog). This script is the controlled alternative: it searches a small batch **only when slskd has spare capacity**.
 
-The gate is slskd's *live in-flight* download count: any file not in a `Completed` state, **except** a zero-byte `Queued, Remotely` grab older than `--stale-queued-hours` (default `12`) — those are dead (the peer never started) and would otherwise pin the count high forever and permanently park the drip. (Recently-queued grabs still count, so the drip keeps self-throttling and never re-floods.) Keep `--stale-queued-hours` in step with `lidarr_stuck_download_reaper --stuck-hours`, which actually removes those dead entries. When in-flight is below `--threshold`, it searches the next `--batch` missing albums it hasn't touched within `--cooldown-hours`; otherwise it does nothing and the drip pauses itself. A rolling `--state` JSON records each album's last-searched epoch so successive runs **walk the whole backlog** instead of re-firing the same first page, and only retry an album after the cooldown. Self-throttling by design: when downloads back up, the drip stops; as they complete, it resumes.
+The gate is slskd's _live in-flight_ download count: any file not in a `Completed` state, **except** a zero-byte `Queued, Remotely` grab older than `--stale-queued-hours` (default `12`) — those are dead (the peer never started) and would otherwise pin the count high forever and permanently park the drip. (Recently-queued grabs still count, so the drip keeps self-throttling and never re-floods.) Keep `--stale-queued-hours` in step with `lidarr_stuck_download_reaper --stuck-hours`, which actually removes those dead entries. When in-flight is below `--threshold`, it searches the next `--batch` missing albums it hasn't touched within `--cooldown-hours`; otherwise it does nothing and the drip pauses itself. A rolling `--state` JSON records each album's last-searched epoch so successive runs **walk the whole backlog** instead of re-firing the same first page, and only retry an album after the cooldown. Self-throttling by design: when downloads back up, the drip stops; as they complete, it resumes.
 
-**Pacing (`--search-delay`, default 20s).** The batch is dispatched as one `AlbumSearch` *per album*, spaced `--search-delay` seconds apart, rather than a single command with all the IDs. A bulk command makes slskd fire the whole batch onto the Soulseek network at once, which the central server treats as flooding/"quickly repeating a search" and answers with a **30-minute account ban** (`server` chat: *"banned for 30 minutes… too many operations at once"*). Those bans were the true upstream cause of the importFailed clog: every ban is 30 min where no grab can complete. Pacing 20 searches over ~7 min keeps the rate well under the threshold while staying inside the 15-min cron window. A failed search leaves its album un-stamped so the next run retries it. `--search-delay 0` restores the legacy single-command burst.
+**Pacing (`--search-delay`, default 20s).** The batch is dispatched as one `AlbumSearch` _per album_, spaced `--search-delay` seconds apart, rather than a single command with all the IDs. A bulk command makes slskd fire the whole batch onto the Soulseek network at once, which the central server treats as flooding/"quickly repeating a search" and answers with a **30-minute account ban** (`server` chat: _"banned for 30 minutes… too many operations at once"_). Those bans were the true upstream cause of the importFailed clog: every ban is 30 min where no grab can complete. Pacing 20 searches over ~7 min keeps the rate well under the threshold while staying inside the 15-min cron window. A failed search leaves its album un-stamped so the next run retries it. `--search-delay 0` restores the legacy single-command burst.
 
 ```bash
 python scripts/lidarr_backlog_drip.py                          # gated, paced drip (cron uses this)
@@ -551,9 +572,9 @@ Pi-era host-tuning shell scripts and their docs live under `scripts/legacy/` —
 
 The two cleanup scripts target overlapping state (a Lidarr `importFailed` queue item is backed by a `Completed, Succeeded` slskd transfer) and could in principle fight each other or fight Tubifarry's own import flow. They are designed not to:
 
-1. **Mutex via `flock`** — both cron entries share `/tmp/nas-tubifarry-cleanup.lock` with `flock -n`, so a second invocation while the first is running exits immediately (next hour will pick it up). This covers cron overrun *and* manual one-offs that fire during a scheduled run.
+1. **Mutex via `flock`** — both cron entries share `/tmp/nas-tubifarry-cleanup.lock` with `flock -n`, so a second invocation while the first is running exits immediately (next hour will pick it up). This covers cron overrun _and_ manual one-offs that fire during a scheduled run.
 2. **Schedule ordering** — `lidarr_queue_unstick` runs first (`:07`), `slskd_cleanup` second (`:37`). Within each hour the Lidarr→Tubifarry→slskd path drains first, then the direct slskd sweep mops up what was never tied to Lidarr (errored peer transfers, rejected handshakes, cancelled grabs).
-3. **Per-transfer deferrals in `slskd_cleanup`** — a `Completed, Succeeded` row is deferred only if its dir basename matches one referenced by an active Lidarr queue item (`downloading / importPending / importing / importBlocked / importFailed`). Tubifarry's own import flow owns the first four; `lidarr_queue_unstick` owns the fifth. Either way `slskd_cleanup` declines to race a Lidarr-side actor for *that specific* transfer's path. Unmatched Succeeded rows (Lidarr already imported and dropped them) are cleaned in the same run. Terminal-failure slskd states (`Completed, Errored / Rejected / Cancelled`) have no Lidarr-side actor and are always safe to clean.
+3. **Per-transfer deferrals in `slskd_cleanup`** — a `Completed, Succeeded` row is deferred only if its dir basename matches one referenced by an active Lidarr queue item (`downloading / importPending / importing / importBlocked / importFailed`). Tubifarry's own import flow owns the first four; `lidarr_queue_unstick` owns the fifth. Either way `slskd_cleanup` declines to race a Lidarr-side actor for _that specific_ transfer's path. Unmatched Succeeded rows (Lidarr already imported and dropped them) are cleaned in the same run. Terminal-failure slskd states (`Completed, Errored / Rejected / Cancelled`) have no Lidarr-side actor and are always safe to clean.
 4. **Strict state filters in `lidarr_queue_unstick`** — only `trackedDownloadState == 'importFailed'` rows are touched. `importPending` / `importing` rows (mid-flight in Tubifarry's import pipeline) are never targeted, so the script cannot pull a queue item out from under an active import.
 5. **Age gates on both sides** — `slskd_cleanup` requires `endedAt` older than `--min-age-hours` (default 1h); `lidarr_queue_unstick` requires `added` older than the same threshold. Rows without timestamps are conservatively skipped. This means in-progress workflows (which are sub-hour) are structurally excluded from cleanup.
 
