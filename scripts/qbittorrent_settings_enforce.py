@@ -121,8 +121,9 @@ class QbtClient:
 
   def login(self, user: str, pw: str) -> bool:
     status, body = self._post("/api/v2/auth/login", {"username": user, "password": pw})
-    # qBittorrent returns 200 + "Ok." on success; localhost auth-bypass returns 200/empty.
-    return status == 200 and b"Fails" not in body
+    # Success is 200 + "Ok." (older qBit) or 204 No Content (v5.x); bad creds give
+    # 200 + "Fails."; localhost auth-bypass returns 200/empty. 403 == temporarily banned.
+    return status in (200, 204) and b"Fails" not in body
 
   def get_preferences(self) -> dict:
     return self._get_json("/api/v2/app/preferences")
