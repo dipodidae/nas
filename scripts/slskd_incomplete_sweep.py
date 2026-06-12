@@ -47,8 +47,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import http.cookiejar
+import json
 import os
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 if "API_KEY_SLSKD" not in os.environ:
@@ -113,6 +118,67 @@ def plan_incomplete_sweep(
       continue
     out.append(path)
   return out
+
+
+def _request(method: str, url: str, api_key: str, *, timeout: int = 15) -> tuple[int, bytes]:
+  req = urllib.request.Request(url, method=method, headers={"X-API-Key": api_key})
+  try:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost
+      return resp.status, resp.read()
+  except urllib.error.HTTPError as exc:
+    return exc.code, exc.read()
+
+
+def fetch_slskd_refs(host: str, api_key: str) -> set[str]:
+  """Basenames of dirs referenced by ANY current slskd transfer (all states).
+
+  Raises RuntimeError on HTTP/JSON failure so main() aborts rather than sweeping
+  with an incomplete protection set.
+  """
+  status, body = _request("GET", f"{host}/api/v0/transfers/downloads", api_key)
+  if status >= 400:
+    raise RuntimeError(f"slskd transfers returned HTTP {status}")
+  try:
+    data = json.loads(body) if body else []
+  except json.JSONDecodeError as exc:
+    raise RuntimeError(f"slskd transfers returned malformed JSON: {exc}") from exc
+  refs: set[str] = set()
+  for user in data if isinstance(data, list) else []:
+    for directory in user.get("directories", []):
+      seg = _trailing_segment(directory.get("directory", ""))
+      if seg:
+        refs.add(seg)
+  return refs
+
+
+def fetch_qbt_refs(host: str, user: str, pw: str) -> set[str]:
+  """Basenames referenced by live qBittorrent torrents (save_path/content_path/name).
+
+  Raises RuntimeError on auth/HTTP/JSON failure (main() aborts on a partial set).
+  """
+  opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+  )
+  login = urllib.parse.urlencode({"username": user, "password": pw}).encode()
+  try:
+    req = urllib.request.Request(f"{host}/api/v2/auth/login", data=login, headers={"Referer": host})
+    with opener.open(req, timeout=15) as resp:  # noqa: S310 - localhost
+      if resp.status not in (200, 204):  # v5.2.1 returns 204
+        raise RuntimeError(f"qBittorrent login HTTP {resp.status}")
+    req2 = urllib.request.Request(f"{host}/api/v2/torrents/info", headers={"Referer": host})
+    with opener.open(req2, timeout=15) as resp:  # noqa: S310 - localhost
+      torrents = json.loads(resp.read())
+  except (urllib.error.URLError, json.JSONDecodeError) as exc:
+    raise RuntimeError(f"qBittorrent query failed: {exc}") from exc
+  refs: set[str] = set()
+  for t in torrents:
+    for key in ("save_path", "content_path", "name"):
+      val = t.get(key)
+      if isinstance(val, str) and val:
+        base = os.path.basename(val.rstrip("/").rstrip("\\"))
+        if base:
+          refs.add(base)
+  return refs
 
 
 def main(argv: list[str] | None = None) -> int:
