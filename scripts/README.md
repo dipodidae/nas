@@ -459,6 +459,26 @@ Environment: `API_KEY_LIDARR` (required), `LIDARR_HOST` (default `http://localho
 
 Note: this script reaps confirmed duplicates only. Folders Lidarr _rejected_ (peer mismatch, fingerprint below 80%) never get hardlinked into `/music/` and so look like orphans here — they are real orphans, but not duplicates, and need a separate decision (re-import via `process_soulseek_imports.py`, or manual triage). The sweeper deliberately leaves them alone.
 
+### `slskd_incomplete_sweep.py`
+
+Reusable **gated sweeper** for orphaned dirs in the slskd-owned zones of
+`/downloads/incomplete` — the legacy flat dirs at the root and orphans under
+`incomplete/slskd`. Never enters `incomplete/qbittorrent` (qBit-owned). A dir is
+deleted only if it clears all three gates: not referenced by an active slskd
+transfer, not referenced by a live qBittorrent torrent, and older than
+`--min-age-hours` (default 24). Aborts (exit 2) if either reference fetch fails.
+
+Acts by default; `--dry-run` previews.
+
+```bash
+python scripts/slskd_incomplete_sweep.py --dry-run
+python scripts/slskd_incomplete_sweep.py --min-age-hours 24 --limit 50
+```
+
+Env: `API_KEY_SLSKD`, `SLSKD_HOST`, `QBITTORRENT_USER`, `QBITTORRENT_PASS`,
+`QBITTORRENT_HOST`, `INCOMPLETE_DIR`. Exit: `0` ok/dry-run/no-op, `1` partial,
+`2` fatal.
+
 ### `slskd_login_watch.py`
 
 Alerts when slskd has been logged out of Soulseek longer than a grace period — and **never restarts it**. slskd's web server stays up while the Soulseek login is dead, and restarting on a login drop is harmful: a fast restart re-collides with slsknet's stale session for the username and perpetuates the 5000ms login-timeout spiral. The only cure is to leave slskd down 15–30 min, then cold-start. So this is the alert-only counterpart to that rule — slskd's container healthcheck is deliberately Soulseek-independent (it must not drive autoheal off login state).
