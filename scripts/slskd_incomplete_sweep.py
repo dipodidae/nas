@@ -181,6 +181,38 @@ def fetch_qbt_refs(host: str, user: str, pw: str) -> set[str]:
   return refs
 
 
+def collect_candidates(incomplete_dir: Path) -> list[tuple[Path, float]]:
+  """(dir, mtime) pairs for the two slskd-owned sweep zones.
+
+  Zone A: direct children of incomplete_dir EXCEPT the managed subdirs
+          (qbittorrent, slskd).
+  Zone B: direct children of incomplete_dir/slskd.
+  qBittorrent's own temp (incomplete_dir/qbittorrent) is never entered.
+  """
+  out: list[tuple[Path, float]] = []
+
+  def _children(root: Path) -> None:
+    if not root.is_dir():
+      return
+    for child in sorted(root.iterdir()):
+      if not child.is_dir():
+        continue
+      try:
+        out.append((child, child.stat().st_mtime))
+      except OSError:
+        continue
+
+  if incomplete_dir.is_dir():
+    for child in sorted(incomplete_dir.iterdir()):
+      if child.is_dir() and child.name not in MANAGED_SUBDIRS:
+        try:
+          out.append((child, child.stat().st_mtime))
+        except OSError:
+          continue
+  _children(incomplete_dir / "slskd")
+  return out
+
+
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
   slskd_host = os.environ.get("SLSKD_HOST", DEFAULT_SLSKD_HOST).rstrip("/")
