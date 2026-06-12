@@ -42,3 +42,29 @@ def test_plan_lidarr_nuke_selects_all_states():
 def test_plan_lidarr_nuke_skips_rows_without_int_id():
   records = [{"id": 1}, {"id": None}, {"title": "no id"}, {"id": "x"}]
   assert nuke.plan_lidarr_nuke(records) == [1]
+
+
+# ---- collect_slskd_transfers ---------------------------------------------
+
+
+def _dl(username, directory, files):
+  return {"username": username, "directories": [{"directory": directory, "files": files}]}
+
+
+def test_collect_slskd_transfers_partitions_active_and_terminal():
+  payload = [
+    _dl("alice", "music\\A\\X", [
+      {"id": "t1", "state": "Queued, Remotely"},
+      {"id": "t2", "state": "InProgress"},
+      {"id": "t3", "state": "Completed, Succeeded"},
+      {"id": "t4", "state": "Completed, Errored"},
+    ]),
+  ]
+  active, terminal = nuke.collect_slskd_transfers(payload)
+  assert {(t.username, t.transfer_id) for t in active} == {("alice", "t1"), ("alice", "t2")}
+  assert terminal == 2
+
+
+def test_collect_slskd_transfers_empty():
+  assert nuke.collect_slskd_transfers([]) == ([], 0)
+  assert nuke.collect_slskd_transfers("not a list") == ([], 0)

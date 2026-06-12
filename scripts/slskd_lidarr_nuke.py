@@ -50,7 +50,7 @@ import sys
 import urllib.error
 import urllib.parse  # noqa: F401
 import urllib.request
-from dataclasses import dataclass  # noqa: F401
+from dataclasses import dataclass
 from pathlib import Path
 
 if "API_KEY_SLSKD" not in os.environ:
@@ -65,6 +65,13 @@ DEFAULT_LIDARR_HOST = "http://localhost:8686"
 DEFAULT_SLSKD_HOST = "http://localhost:5030"
 DEFAULT_SLSKD_COMPLETE_DIR = "/mnt/drive/downloads/complete/slskd"
 TERMINAL_PREFIX = "Completed"
+
+
+@dataclass(frozen=True)
+class SlskdTransfer:
+  username: str
+  transfer_id: str
+  state: str
 
 
 def _request(
@@ -94,6 +101,35 @@ def plan_lidarr_nuke(records: list[dict]) -> list[int]:
   are skipped defensively. Order is preserved; ids are unique within a queue.
   """
   return [r["id"] for r in records if isinstance(r.get("id"), int)]
+
+
+def collect_slskd_transfers(downloads: object) -> tuple[list[SlskdTransfer], int]:
+  """Partition slskd downloads into (active-to-cancel, terminal_record_count).
+
+  Pure over the ``/api/v0/transfers/downloads`` payload. Any transfer whose
+  state does NOT start with ``Completed`` is "active" and must be cancelled;
+  terminal ``Completed,*`` rows are counted (they are cleared in bulk).
+  """
+  if not isinstance(downloads, list):
+    return [], 0
+  active: list[SlskdTransfer] = []
+  terminal = 0
+  for user in downloads:
+    username = user.get("username", "")
+    for directory in user.get("directories", []):
+      for file in directory.get("files", []):
+        state = str(file.get("state", ""))
+        if state.startswith(TERMINAL_PREFIX):
+          terminal += 1
+        else:
+          active.append(
+            SlskdTransfer(
+              username=username,
+              transfer_id=file.get("id", ""),
+              state=state,
+            )
+          )
+  return active, terminal
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
