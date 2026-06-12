@@ -194,7 +194,7 @@ if __name__ == "__main__":
 - **Prowlarr is NOT tunneled** (tried; reverted): Cloudflare drops indexer fetches from AirVPN IPs with `blocked by CloudFlare Protection`. Prowlarr stays on `nas-network` directly with its own `127.0.0.1:9696:9696` mapping; CF-protected indexers (1337x, EZTV) carry the `cloudflare` tag so Prowlarr proxies their requests through `byparr` (FlareSolverr implementation at `http://byparr:8191/`). Do not re-add prowlarr to the gluetun block without re-litigating this — it will silently break those indexers.
 - When adding a new inbound P2P port for one of these services: forward it via AirVPN's client area, publish it on `gluetun` (e.g. `'37022:37022/tcp'`), and add it to `FIREWALL_INPUT_PORTS` on gluetun (comma-separated). Set the listening port inside the service's own config — qbit uses `Session\Port` in `qBittorrent.conf`; slskd uses `soulseek.listen_port` in `slskd.yml`. Disable any in-app UPnP/NAT-PMP/auto-port-mapping ("PortForwardingEnabled" in qbit) — these are dangerous inside a VPN.
 - WireGuard secrets live in `.env` as `WIREGUARD_PRIVATE_KEY` / `WIREGUARD_PRESHARED_KEY` / `WIREGUARD_PUBLIC_KEY` / `WIREGUARD_ENDPOINT_IP` / `WIREGUARD_ENDPOINT_PORT` / `WIREGUARD_ADDRESSES` / `WIREGUARD_MTU`. Raw `.conf` files in `vpn-configs/` are gitignored — never commit them.
-- **Recreating gluetun cascades.** `network_mode: service:gluetun` resolves to a literal container ID, not a service name — so when gluetun is recreated (port change, env edit, image bump), `slskd` / `qbittorrent` keep their stale reference to the *old* gluetun container. Symptom: they appear "healthy" individually (their own loopback check works) but other containers on `nas-network` get `Connection refused` when hitting their service alias. Use `docker compose up -d --force-recreate gluetun slskd qbittorrent` (all three together) whenever you touch gluetun, or recreate the tunneled services right after.
+- **Recreating gluetun cascades.** `network_mode: service:gluetun` resolves to a literal container ID, not a service name — so when gluetun is recreated (port change, env edit, image bump), `slskd` / `qbittorrent` keep their stale reference to the _old_ gluetun container. Symptom: they appear "healthy" individually (their own loopback check works) but other containers on `nas-network` get `Connection refused` when hitting their service alias. Use `docker compose up -d --force-recreate gluetun slskd qbittorrent` (all three together) whenever you touch gluetun, or recreate the tunneled services right after.
 
 ### Operational gotchas
 
@@ -254,6 +254,10 @@ Scripts in `scripts/` that run on-demand (not cron) against the live stack:
 - `slskd_lidarr_nuke.py` — on-demand clean-slate: nukes the whole Lidarr queue
   (remove+blocklist+skipRedownload), wipes all slskd transfers, and sweeps the
   slskd completed folder. Acts by default; `--dry-run` to preview.
+- `qbittorrent_settings_enforce.py` — enables qBittorrent Auto TMM and flips
+  existing torrents to auto-managed so categories drive save paths (relocating
+  out of `complete/manual/`). Acts by default; `--dry-run` to preview. Uses
+  `QBITTORRENT_USER` / `QBITTORRENT_PASS` / `QBITTORRENT_HOST`.
 
 ## Exit Codes (Python Scripts)
 
