@@ -176,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
 
   pref_changes = plan_pref_changes(prefs, DESIRED_PREFS)
   unmanaged = collect_unmanaged_hashes(torrents)
-  targets = summarize_targets([t for t in torrents if t.get("hash") in set(unmanaged)], categories)
+  unmanaged_set = set(unmanaged)
+  targets = summarize_targets([t for t in torrents if t.get("hash") in unmanaged_set], categories)
 
   print("=== qBittorrent settings enforce ===" + ("  [DRY RUN]" if args.dry_run else ""))
   print(f"pref changes: {pref_changes or 'none'}")
