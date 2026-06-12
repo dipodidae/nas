@@ -392,6 +392,33 @@ Exit codes: `0` success / nothing to do, `1` partial (some deletes failed), `2` 
 
 Environment: `API_KEY_SLSKD` + `API_KEY_LIDARR` (required), `SLSKD_HOST` (default `http://localhost:5030`), `LIDARR_HOST` (default `http://localhost:8686`). Cron `:52`, shares `/tmp/nas-tubifarry-cleanup.lock` with the other hourly hygiene jobs. Kept in lock-step with `lidarr_backlog_drip --stale-queued-hours` (both 12h) so the drip's capacity gate ignores exactly the entries this reaper removes.
 
+### `slskd_lidarr_nuke.py`
+
+**Clean-slate button** for the slskd↔Lidarr pipeline — aggressive, on-demand,
+idempotent. The opposite of the gated reapers: it resets everything to zero.
+
+1. **Lidarr queue teardown** — deletes every queue row with
+   `removeFromClient=true&blocklist=true&skipRedownload=true`. Lidarr cancels
+   the slskd transfer via Tubifarry (nothing orphaned), blocklists the dead
+   release (album stays monitored/missing), and does **not** auto re-search —
+   re-kick searches yourself (e.g. lidarr-bulk) to re-grab fresh copies.
+2. **slskd full wipe** — cancels every active/queued transfer and clears all
+   terminal records (`DELETE .../downloads/all/completed`, per-transfer
+   fallback).
+3. **Completed-folder sweep** — `rmtree`s every dir under
+   `SLSKD_COMPLETE_DIR` except those an active Lidarr import references.
+
+Acts by default; `--dry-run` previews. Phase toggles: `--skip-lidarr`,
+`--skip-slskd`, `--skip-folder-sweep`.
+
+```bash
+python scripts/slskd_lidarr_nuke.py --dry-run   # preview
+python scripts/slskd_lidarr_nuke.py             # ACT: full clean slate
+```
+
+Env: `API_KEY_LIDARR`, `API_KEY_SLSKD`, `LIDARR_HOST`, `SLSKD_HOST`,
+`SLSKD_COMPLETE_DIR`. Exit: `0` ok/dry-run/noop, `1` partial, `2` fatal.
+
 ### `slskd_complete_sweep.py`
 
 Reaps `/downloads/complete/slskd/<dir>` subtrees that Lidarr has already imported into `/music/`. With Lidarr configured to use hardlinks (`copyUsingHardlinks=true`), the slskd download copy is never reaped by the import path itself; over weeks this accumulates GBs of duplicates of files that already live in the music library.
