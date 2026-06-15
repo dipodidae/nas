@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyStatus } from '~~/shared/types'
+import type { JellyfinPushResult, ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyStatus } from '~~/shared/types'
 
 const emit = defineEmits<{ queue: [items: ParsedItem[]] }>()
 const toast = useToast()
@@ -13,6 +13,10 @@ const playlists = ref<SpotifyPlaylist[]>([])
 const loading = ref(false)
 const loadError = ref<string | null>(null)
 const resolvingId = ref<string | null>(null)
+const jellyfinEnabled = ref(false)
+const recreatingId = ref<string | null>(null)
+const result = ref<JellyfinPushResult | null>(null)
+const showResult = ref(false)
 
 function describeError(err: unknown): string {
   const e = err as { statusMessage?: string, data?: { statusMessage?: string }, message?: string }
@@ -40,6 +44,7 @@ onMounted(async () => {
   try {
     const s = await $fetch<SpotifyStatus>('/api/spotify/status')
     connected.value = s.connected
+    jellyfinEnabled.value = s.jellyfin
   }
   catch {
     connected.value = false
@@ -92,6 +97,26 @@ async function pick(playlist: SpotifyPlaylist): Promise<void> {
     resolvingId.value = null
   }
 }
+
+async function recreate(playlist: SpotifyPlaylist): Promise<void> {
+  if (recreatingId.value)
+    return
+  recreatingId.value = playlist.id
+  try {
+    const res = await $fetch<JellyfinPushResult>('/api/spotify/to-jellyfin', {
+      method: 'POST',
+      body: { playlistId: playlist.id, playlistName: playlist.name },
+    })
+    result.value = res
+    showResult.value = true
+  }
+  catch (err: unknown) {
+    toast.add({ title: 'Recreate failed', description: describeError(err), color: 'error' })
+  }
+  finally {
+    recreatingId.value = null
+  }
+}
 </script>
 
 <template>
@@ -130,27 +155,69 @@ async function pick(playlist: SpotifyPlaylist): Promise<void> {
         No playlists found on your account.
       </div>
       <div v-else class="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-        <button
+        <div
           v-for="p in playlists"
           :key="p.id"
-          type="button"
-          :disabled="resolvingId !== null"
-          class="text-left rounded-lg border border-default p-2 hover:bg-elevated transition disabled:opacity-50"
-          @click="pick(p)"
+          class="text-left rounded-lg border border-default p-2 transition"
+          :class="{ 'opacity-50': resolvingId !== null || recreatingId !== null }"
         >
-          <img v-if="p.imageUrl" :src="p.imageUrl" :alt="p.name" class="w-full aspect-square object-cover rounded-md mb-2">
-          <div v-else class="w-full aspect-square rounded-md mb-2 bg-elevated flex items-center justify-center">
-            <UIcon name="i-lucide-music" class="text-2xl text-muted" />
-          </div>
-          <div class="text-sm font-medium truncate">
-            {{ p.name }}
-          </div>
-          <div class="text-xs text-muted">
-            <template v-if="resolvingId === p.id">resolving…</template>
-            <template v-else>{{ p.trackCount }} track{{ p.trackCount === 1 ? '' : 's' }}</template>
-          </div>
-        </button>
+          <button
+            type="button"
+            :disabled="resolvingId !== null || recreatingId !== null"
+            class="block w-full text-left hover:opacity-90"
+            @click="pick(p)"
+          >
+            <img v-if="p.imageUrl" :src="p.imageUrl" :alt="p.name" class="w-full aspect-square object-cover rounded-md mb-2">
+            <div v-else class="w-full aspect-square rounded-md mb-2 bg-elevated flex items-center justify-center">
+              <UIcon name="i-lucide-music" class="text-2xl text-muted" />
+            </div>
+            <div class="text-sm font-medium truncate">
+              {{ p.name }}
+            </div>
+            <div class="text-xs text-muted">
+              <template v-if="resolvingId === p.id">resolving…</template>
+              <template v-else>{{ p.trackCount }} track{{ p.trackCount === 1 ? '' : 's' }}</template>
+            </div>
+          </button>
+          <UButton
+            v-if="jellyfinEnabled"
+            class="mt-2 w-full justify-center"
+            size="xs"
+            color="neutral"
+            variant="soft"
+            icon="i-lucide-list-music"
+            :loading="recreatingId === p.id"
+            :disabled="resolvingId !== null || recreatingId !== null"
+            :label="recreatingId === p.id ? 'Recreating…' : 'Recreate in Jellyfin'"
+            @click="recreate(p)"
+          />
+        </div>
       </div>
     </template>
+
+    <UModal v-model:open="showResult" title="Recreate in Jellyfin">
+      <template #body>
+        <div v-if="result">
+          <p class="text-sm">
+            <span class="font-medium">{{ result.matched }}</span> of
+            <span class="font-medium">{{ result.total }}</span> tracks matched in
+            “{{ result.playlistName }}”.
+          </p>
+          <p v-if="result.matched === 0" class="text-sm text-muted mt-1">
+            No tracks were found in your Jellyfin library — nothing was created.
+          </p>
+          <div v-if="result.skipped.length" class="mt-3">
+            <p class="text-xs uppercase tracking-wide text-muted mb-1">
+              Skipped ({{ result.skipped.length }})
+            </p>
+            <ul class="max-h-64 overflow-y-auto text-sm space-y-0.5">
+              <li v-for="(s, i) in result.skipped" :key="i" class="truncate">
+                {{ s.artist }} — {{ s.title }}
+              </li>
+            </ul>
+          </div>
+        </div>
+      </template>
+    </UModal>
   </UCard>
 </template>

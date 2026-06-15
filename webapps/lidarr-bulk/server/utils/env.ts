@@ -22,6 +22,12 @@ const schema = z.object({
   // Must exactly match a Redirect URI registered in the Spotify dashboard, e.g.
   // https://lidarr-bulk.example.com/api/spotify/callback
   SPOTIFY_REDIRECT_URI: z.string().optional().default(''),
+  // Optional — enables the Spotify "Recreate in Jellyfin" action. All three
+  // required to enable; when any is unset the button is hidden and the endpoint
+  // reports disabled. Reuses the nas stack's existing Jellyfin API key + user id.
+  JELLYFIN_URL: z.string().optional().default(''),
+  JELLYFIN_API_KEY: z.string().optional().default(''),
+  JELLYFIN_USER_ID: z.string().optional().default(''),
 })
 
 export type Env = z.infer<typeof schema>

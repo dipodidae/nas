@@ -103,6 +103,7 @@ export interface LidarrProfilesResponse {
 export interface SpotifyStatus {
   enabled: boolean
   connected: boolean
+  jellyfin: boolean
 }
 
 export interface SpotifyPlaylist {
@@ -122,4 +123,18 @@ export interface SpotifyResolveStats {
 export interface SpotifyResolveResult {
   items: ParsedItem[]
   stats: SpotifyResolveStats
+}
+
+export interface SpotifyTrack {
+  title: string
+  artist: string
+  album?: string
+}
+
+export interface JellyfinPushResult {
+  playlistName: string
+  total: number // tracks considered after local/episode filtering
+  matched: number // unique Jellyfin items added
+  skipped: { title: string, artist: string }[]
+  jellyfinPlaylistId: string | null // null when zero matches (nothing created)
 }

@@ -4,7 +4,7 @@
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Env } from './env'
-import type { ParsedItem, SpotifyPlaylist, SpotifyResolveResult } from '~~/shared/types'
+import type { ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyTrack } from '~~/shared/types'
 import { loadEnv } from './env'
 
 export const SPOTIFY_ACCOUNTS = 'https://accounts.spotify.com'
@@ -45,7 +45,7 @@ export function needsRefresh(token: StoredToken, now: number): boolean {
 // `unknown`-guarded because we never trust the upstream payload.
 interface ApiArtist { name?: unknown }
 interface ApiAlbum { id?: unknown, name?: unknown, artists?: ApiArtist[] }
-interface ApiTrack { type?: unknown, album?: ApiAlbum | null }
+interface ApiTrack { type?: unknown, name?: unknown, artists?: ApiArtist[], album?: ApiAlbum | null }
 export interface PlaylistTrackItem { is_local?: unknown, track?: ApiTrack | null }
 
 function cleanString(v: unknown): string {
@@ -77,6 +77,36 @@ export function albumItemsFromTracks(items: PlaylistTrackItem[]): SpotifyResolve
     out.push({ raw: `${artist} - ${title}`, kind: 'album', artist, title })
   }
   return { items: out, stats: { tracks: items.length, skipped, uniqueAlbums: out.length } }
+}
+
+// Track-level view of a playlist: ordered title + primary artist + album, for
+// matching against an external library. Skips local files, podcast episodes,
+// and rows missing a title or primary artist. Order is preserved and duplicates
+// are kept — a playlist may legitimately list a track twice; dedupe happens
+// downstream by matched library id.
+export function trackDetailsFromItems(items: PlaylistTrackItem[]): SpotifyTrack[] {
+  const out: SpotifyTrack[] = []
+  for (const it of items) {
+    const tr = it?.track
+    const title = cleanString(tr?.name)
+    const artist = Array.isArray(tr?.artists) ? cleanString(tr?.artists[0]?.name) : ''
+    const album = cleanString(tr?.album?.name)
+    const isLocal = it?.is_local === true
+    const isEpisode = tr?.type === 'episode'
+    if (isLocal || isEpisode || !title || !artist)
+      continue
+    out.push({ title, artist, album: album || undefined })
+  }
+  return out
+}
+
+export async function fetchPlaylistTrackDetails(accessToken: string, playlistId: string): Promise<SpotifyTrack[]> {
+  const encoded = encodeURIComponent(playlistId)
+  const items = await fetchAllPages<PlaylistTrackItem>(
+    accessToken,
+    `/playlists/${encoded}/tracks?limit=100&fields=next,items(is_local,track(type,name,artists(name),album(name)))`,
+  )
+  return trackDetailsFromItems(items)
 }
 
 function tokenPath(): string {

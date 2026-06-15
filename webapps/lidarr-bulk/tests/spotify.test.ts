@@ -4,6 +4,7 @@ import {
   buildAuthorizeUrl,
   needsRefresh,
   spotifyEnabled,
+  trackDetailsFromItems,
 } from '../server/utils/spotify'
 
 const ENV = {
@@ -77,5 +78,36 @@ describe('albumItemsFromTracks', () => {
 
   it('returns empty result for an empty playlist', () => {
     expect(albumItemsFromTracks([])).toEqual({ items: [], stats: { tracks: 0, skipped: 0, uniqueAlbums: 0 } })
+  })
+})
+
+describe('trackDetailsFromItems', () => {
+  const t = (name: string, artist: string, album = 'Some Album', extra = {}) => ({
+    is_local: false,
+    track: { type: 'track', name, artists: [{ name: artist }], album: { name: album }, ...extra },
+  })
+
+  it('maps name + primary artist + album, preserving order and duplicates', () => {
+    const out = trackDetailsFromItems([
+      t('A Forest', 'The Cure'),
+      t('A Forest', 'The Cure'), // duplicate kept — dedupe happens later by Jellyfin id
+      t('Stranger', 'Clan of Xymox', 'Medusa'),
+    ])
+    expect(out).toEqual([
+      { title: 'A Forest', artist: 'The Cure', album: 'Some Album' },
+      { title: 'A Forest', artist: 'The Cure', album: 'Some Album' },
+      { title: 'Stranger', artist: 'Clan of Xymox', album: 'Medusa' },
+    ])
+  })
+
+  it('skips local files, episodes, and rows missing a title or artist', () => {
+    const out = trackDetailsFromItems([
+      { is_local: true, track: { type: 'track', name: 'Local', artists: [{ name: 'X' }], album: { name: 'Y' } } },
+      { is_local: false, track: { type: 'episode', name: 'Pod', artists: [{ name: 'X' }], album: { name: 'Y' } } },
+      { is_local: false, track: { type: 'track', name: '', artists: [{ name: 'X' }], album: { name: 'Y' } } },
+      { is_local: false, track: { type: 'track', name: 'NoArtist', artists: [], album: { name: 'Y' } } },
+      t('Keep', 'Keeper'),
+    ])
+    expect(out).toEqual([{ title: 'Keep', artist: 'Keeper', album: 'Some Album' }])
   })
 })
