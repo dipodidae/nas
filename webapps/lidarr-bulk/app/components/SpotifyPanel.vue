@@ -105,7 +105,7 @@ async function recreate(playlist: SpotifyPlaylist): Promise<void> {
   try {
     const res = await $fetch<JellyfinPushResult>('/api/spotify/to-jellyfin', {
       method: 'POST',
-      body: { playlistId: playlist.id, playlistName: playlist.name },
+      body: { playlistId: playlist.id, playlistName: playlist.name, imageUrl: playlist.imageUrl },
     })
     result.value = res
     showResult.value = true

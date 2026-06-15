@@ -8,6 +8,7 @@ import { fetchPlaylistTrackDetails, getValidAccessToken, spotifyEnabled } from '
 const schema = z.object({
   playlistId: z.string().min(1),
   playlistName: z.string().min(1),
+  imageUrl: z.string().url().optional(),
 })
 
 export default defineEventHandler(async (event): Promise<JellyfinPushResult> => {
@@ -33,7 +34,7 @@ export default defineEventHandler(async (event): Promise<JellyfinPushResult> => 
 
   try {
     const tracks = await fetchPlaylistTrackDetails(token, parsed.data.playlistId)
-    return await recreatePlaylistInJellyfin(env, parsed.data.playlistName, tracks)
+    return await recreatePlaylistInJellyfin(env, parsed.data.playlistName, tracks, parsed.data.imageUrl)
   }
   catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)

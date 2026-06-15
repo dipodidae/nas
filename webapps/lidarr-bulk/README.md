@@ -36,7 +36,8 @@ Additionally set `JELLYFIN_URL`, `JELLYFIN_API_KEY`, and `JELLYFIN_USER_ID` to
 add a **Recreate in Jellyfin** button on each playlist card. It matches every
 track against your Jellyfin music library by title + primary artist (fuzzy,
 tolerant of `feat.`/remaster/punctuation differences), then replaces any
-existing same-name Jellyfin playlist with the matched tracks in playlist order.
+existing same-name Jellyfin playlist with the matched tracks in playlist order,
+and sets the Spotify cover as the Jellyfin playlist image (best-effort).
 Tracks not in your library are skipped; a summary shows how many matched and
 lists what was skipped. If nothing matches, no playlist is created. The button
 is hidden when the three vars are unset.

@@ -122,6 +122,23 @@ export async function createPlaylist(env: Env, name: string, itemIds: string[]):
   return body.Id ?? ''
 }
 
+// Best-effort: fetch the remote cover and set it as the playlist's primary
+// image. Jellyfin's image endpoint wants the bytes base64-encoded in the body
+// with the image MIME as Content-Type. Any failure is swallowed by the caller —
+// a missing cover must never fail the recreate.
+export async function setPlaylistImage(env: Env, playlistId: string, imageUrl: string): Promise<void> {
+  const img = await fetch(imageUrl)
+  if (!img.ok)
+    throw new Error(`cover fetch failed (${img.status})`)
+  const contentType = img.headers.get('content-type') ?? 'image/jpeg'
+  const base64 = Buffer.from(await img.arrayBuffer()).toString('base64')
+  await jf(env, `/Items/${encodeURIComponent(playlistId)}/Images/Primary`, {
+    method: 'POST',
+    headers: { 'Content-Type': contentType },
+    body: base64,
+  })
+}
+
 // Match each track against the library (order-preserving, deduped by item id),
 // then replace any same-name playlist with a fresh one. Per-track search errors
 // are swallowed (track is skipped); only connection/auth-level errors propagate.
@@ -130,6 +147,7 @@ export async function recreatePlaylistInJellyfin(
   env: Env,
   name: string,
   tracks: SpotifyTrack[],
+  imageUrl?: string,
 ): Promise<JellyfinPushResult> {
   const matchedIds: string[] = []
   const seen = new Set<string>()
@@ -159,6 +177,15 @@ export async function recreatePlaylistInJellyfin(
   if (existing)
     await deletePlaylist(env, existing.Id)
   const jellyfinPlaylistId = await createPlaylist(env, name, matchedIds)
+
+  if (imageUrl && jellyfinPlaylistId) {
+    try {
+      await setPlaylistImage(env, jellyfinPlaylistId, imageUrl)
+    }
+    catch {
+      // best-effort cover — playlist creation already succeeded, so ignore.
+    }
+  }
 
   return { playlistName: name, total: tracks.length, matched: matchedIds.length, skipped, jellyfinPlaylistId }
 }
