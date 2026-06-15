@@ -745,6 +745,11 @@ services:
       - SPOTIFY_API_CLIENT_ID=${SPOTIFY_API_CLIENT_ID:-}
       - SPOTIFY_API_CLIENT_SECRET=${SPOTIFY_API_CLIENT_SECRET:-}
       - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-https://lidarr-bulk.${PUBLIC_DOMAIN}/api/spotify/callback}
+      # Optional — enables the per-playlist "Recreate in Jellyfin" button. Reuses
+      # the stack's Jellyfin API key + user id; reachable in-network at :8096.
+      - JELLYFIN_URL=http://jellyfin:8096
+      - JELLYFIN_API_KEY=${API_KEY_JELLYFIN}
+      - JELLYFIN_USER_ID=${JELLYFIN_USER_ID}
       - RATE_LIMIT_PER_MINUTE=30
       - BODY_LIMIT_BYTES=262144
     volumes:
@@ -1039,7 +1044,7 @@ services:
       - WATCHTOWER_LABEL_ENABLE=true
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_INCLUDE_RESTARTING=true
-      - WATCHTOWER_ROLLING_RESTART=true
+      - WATCHTOWER_ROLLING_RESTART=false
       - WATCHTOWER_REMOVE_VOLUMES=false
     depends_on:
       dockerproxy:
