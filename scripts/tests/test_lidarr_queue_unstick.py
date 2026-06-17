@@ -234,6 +234,46 @@ def test_is_reclaimable_no_signal():
   assert unstick.is_reclaimable(item) is False
 
 
+def test_is_salvageable_edition_mismatch():
+  item = _wedged(1, output_path="/x", messages=["Album release not requested"])
+  assert unstick.is_salvageable(item) is True
+
+
+def test_is_salvageable_unmatched_tracks():
+  # broader than is_reclaimable: extra tracks alone are salvageable
+  item = _wedged(1, output_path="/x", messages=["Has unmatched tracks"])
+  assert unstick.is_salvageable(item) is True
+  assert unstick.is_reclaimable(item) is False
+
+
+def test_is_salvageable_close_match_above_floor():
+  item = _wedged(
+    1,
+    output_path="/x",
+    messages=["Album match is not close enough: 75.0 % vs 80 %"],
+  )
+  assert unstick.is_salvageable(item, accept_min_match=70.0) is True
+
+
+def test_is_salvageable_close_match_below_floor_rejected():
+  item = _wedged(
+    1,
+    output_path="/x",
+    messages=["Album match is not close enough: 64.6 % vs 80 %"],
+  )
+  assert unstick.is_salvageable(item, accept_min_match=70.0) is False
+
+
+def test_is_salvageable_missing_tracks_rejected():
+  item = _wedged(1, output_path="/x", messages=["Has missing tracks"])
+  assert unstick.is_salvageable(item) is False
+
+
+def test_is_salvageable_requires_output_path_and_messages():
+  assert unstick.is_salvageable(_wedged(1, output_path="", messages=["x"])) is False
+  assert unstick.is_salvageable(_wedged(1, output_path="/x", messages=[])) is False
+
+
 def test_reclaim_item_success_on_trackfile_increase(monkeypatch):
   item = _wedged(1, output_path="/downloads/x", messages=["Album release not requested"])
   monkeypatch.setattr(
@@ -254,7 +294,7 @@ def test_reclaim_item_success_on_trackfile_increase(monkeypatch):
 def test_reclaim_item_falls_back_to_in_place(monkeypatch):
   item = _wedged(1, output_path="/downloads/x", messages=["Album release not requested"])
 
-  def _scan(host, key, folder):
+  def _scan(host, key, folder, **kwargs):
     return [{"albumId": 9, "artistId": 4, "path": f"{folder}/a.mp3"}]
 
   monkeypatch.setattr(unstick, "_scan_for_import", _scan)
@@ -333,7 +373,7 @@ def test_main_reclaim_then_clear(monkeypatch, capsys):
   # cleanup delete must be non-destructive: no blocklist, no re-search
   assert cleared == [(1, False, True)]
   out = capsys.readouterr().out
-  assert "reclaimed 1/1" in out
+  assert "salvaged 1/1" in out
 
 
 def test_main_reclaim_failure_falls_through_to_delete(monkeypatch, capsys):
@@ -399,12 +439,12 @@ def test_main_no_reclaim_skips_reclaim_pass(monkeypatch, capsys):
   monkeypatch.setattr(unstick._dt, "datetime", _FixedDateTime)
 
   def _boom(*a, **k):
-    raise AssertionError("reclaim_item must not be called with --no-reclaim")
+    raise AssertionError("reclaim_item must not be called with --no-salvage")
 
   monkeypatch.setattr(unstick, "reclaim_item", _boom)
   monkeypatch.setattr(unstick, "delete_item", lambda *a, **k: True)
   assert unstick.main(["--min-age-hours", "1", "--no-reclaim"]) == 0
-  assert "reclaim 0" in capsys.readouterr().out
+  assert "salvage 0" in capsys.readouterr().out
 
 
 def test_main_redownload_flag_restores_replacement_search(monkeypatch, capsys):

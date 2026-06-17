@@ -46,7 +46,6 @@ import argparse
 import csv
 import logging
 import os
-import re
 import shutil
 import sys
 import time
@@ -56,6 +55,13 @@ from typing import Any
 
 import requests
 from dotenv import load_dotenv
+
+from lidarr_import_lib import (
+    build_import_item as _lib_build_import_item,
+    classify_reasons as _lib_classify_reasons,
+    release_track_count as _lib_release_track_count,
+    stub_coverage as _lib_stub_coverage,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -247,66 +253,22 @@ def _has_audio_files(host_path: Path) -> bool:
 def _build_import_item(file_info: dict[str, Any]) -> dict[str, Any] | None:
     """Convert a manual-import GET response item into a POST payload item.
 
-    Returns None if essential data is missing.
+    Thin wrapper over the shared policy module (lidarr_import_lib).
     """
-    artist = file_info.get("artist")
-    album = file_info.get("album")
-    tracks = file_info.get("tracks", [])
-
-    if not artist or not artist.get("id"):
-        return None
-    if not album or not album.get("id"):
-        return None
-    if not tracks:
-        return None
-
-    return {
-        "path": file_info["path"],
-        "artistId": artist["id"],
-        "albumId": album["id"],
-        "albumReleaseId": file_info.get("albumReleaseId", 0),
-        "trackIds": [t["id"] for t in tracks if t.get("id")],
-        "quality": file_info.get("quality", {}),
-        "replaceExistingFiles": False,
-        "disableReleaseSwitching": False,
-    }
+    return _lib_build_import_item(file_info)
 
 
 def _release_track_count(file_info: dict[str, Any]) -> int:
-    """Track count of the release this file matched, from album.releases.
-
-    Returns 0 when the matched release can't be resolved (caller treats 0 as
-    "unknown" and does not block the import).
-    """
-    album = file_info.get("album") or {}
-    release_id = file_info.get("albumReleaseId")
-    for rel in album.get("releases") or []:
-        if rel.get("id") == release_id:
-            return int(rel.get("trackCount") or 0)
-    return 0
+    """Track count of the matched release (shared with lidarr_import_lib)."""
+    return _lib_release_track_count(file_info)
 
 
 def stub_coverage(
     imported_by_release: dict[int, int],
     tracks_by_release: dict[int, int],
 ) -> tuple[int, int, float]:
-    """Coverage of the dominant matched release: (imported, total, fraction).
-
-    The "dominant" release is the one the most importable files mapped to.
-    An unknown release size (0) yields a fraction of 1.0 so it never blocks —
-    we only skip when we can prove the import would be a small fraction of a
-    known-larger release (the incomplete-download stub case).
-    """
-    if not imported_by_release:
-        return (0, 0, 0.0)
-    dominant = max(imported_by_release, key=lambda r: imported_by_release[r])
-    imported = imported_by_release[dominant]
-    total = tracks_by_release.get(dominant, 0)
-    fraction = imported / total if total > 0 else 1.0
-    return imported, total, fraction
-
-
-_NOT_CLOSE_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+    """Coverage of the dominant matched release (shared with lidarr_import_lib)."""
+    return _lib_stub_coverage(imported_by_release, tracks_by_release)
 
 
 def _evaluate_rejections(
@@ -316,45 +278,20 @@ def _evaluate_rejections(
 ) -> tuple[bool, list[str]]:
     """Evaluate whether rejections are acceptable for import.
 
-    Returns (should_import, list_of_rejection_reasons).
-
-    We accept:
-      - "Has missing tracks" (partial album is still useful)
-      - "Has unmatched tracks" (extra tracks are ok)
-      - "Album match is not close enough: X % vs 80 %" when X >= accept_min_match
-
-    We reject:
-      - "Not an upgrade" (already have it)
-      - "Couldn't find similar album" (no match at all)
-      - "Destination already exists"
+    Returns (should_import, list_of_rejection_reasons). Delegates the decision
+    to the shared ``classify_reasons`` with the orphan-importer policy:
+    partial albums (``Has missing tracks``) are acceptable here — the stub
+    guard in ``process_folder`` is what blocks genuinely-incomplete downloads —
+    and ``Has fewer tracks than existing`` is not treated as a hard blocker.
     """
-    rejections = file_info.get("rejections", [])
-    reasons = []
-    dominated_by_blockers = False
-
-    for rej in rejections:
-        reason = rej.get("reason", "")
-        reasons.append(reason)
-        lower = reason.lower()
-
-        if "not close enough" in lower:
-            match = _NOT_CLOSE_PCT_RE.search(reason)
-            actual_pct = float(match.group(1)) if match else 0.0
-            if actual_pct < accept_min_match:
-                dominated_by_blockers = True
-            continue
-
-        if any(
-            phrase in lower
-            for phrase in (
-                "not an upgrade",
-                "couldn't find similar",
-                "destination already exists",
-            )
-        ):
-            dominated_by_blockers = True
-
-    return (not dominated_by_blockers, reasons)
+    reasons = [rej.get("reason", "") for rej in file_info.get("rejections", [])]
+    acceptable, _blockers = _lib_classify_reasons(
+        reasons,
+        accept_min_match=accept_min_match,
+        accept_missing_tracks=True,
+        block_fewer_tracks=False,
+    )
+    return (acceptable, reasons)
 
 
 def _is_not_upgrade_only(reasons: list[str]) -> bool:

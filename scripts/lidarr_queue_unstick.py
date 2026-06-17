@@ -90,6 +90,12 @@ if "API_KEY_LIDARR" not in os.environ:
   except ImportError:
     pass
 
+from lidarr_import_lib import (  # noqa: E402
+  DEFAULT_ACCEPT_MIN_MATCH,
+  build_import_item,
+  classify_reasons,
+  select_importable_items,
+)
 
 DEFAULT_HOST = "http://localhost:8686"
 DEFAULT_MIN_AGE_HOURS = 1.0
@@ -217,6 +223,30 @@ def is_reclaimable(item: WedgedItem) -> bool:
   return not any(any(b in m for b in HARD_BLOCKERS) for m in lowered)
 
 
+def is_salvageable(
+  item: WedgedItem, *, accept_min_match: float = DEFAULT_ACCEPT_MIN_MATCH
+) -> bool:
+  """True when the row is worth attempting a manual-import salvage.
+
+  Broader than :func:`is_reclaimable`: a cheap pre-filter on the queue
+  *messages* (so we skip a slow ``/manualimport`` fingerprint scan for rows we
+  already know are unsalvageable). Accepts edition mismatches, extra/unmatched
+  tracks, and "not close enough" at or above ``accept_min_match``; rejects
+  sub-floor matches, missing/fewer tracks, and the hard blockers. The
+  authoritative per-file decision still happens against the scan in
+  :func:`reclaim_item`.
+  """
+  if not item.output_path or not item.messages:
+    return False
+  acceptable, _blockers = classify_reasons(
+    list(item.messages),
+    accept_min_match=accept_min_match,
+    accept_missing_tracks=False,
+    block_fewer_tracks=True,
+  )
+  return acceptable
+
+
 def filter_old_enough(
   items: list[WedgedItem],
   min_age_hours: float,
@@ -262,50 +292,50 @@ def delete_item(
 
 
 def _build_import_item(file_info: dict) -> dict | None:
-  """Turn a /manualimport scan entry into a /command import payload item.
-
-  Returns None when the entry lacks the artist/album/track ids needed to
-  import. ``disableReleaseSwitching: false`` is the whole point — it lets
-  Lidarr re-point the monitored release to the edition on disk.
-  """
-  artist = file_info.get("artist") or {}
-  album = file_info.get("album") or {}
-  tracks = file_info.get("tracks") or []
-  if not artist.get("id") or not album.get("id") or not tracks:
-    return None
-  track_ids = [t["id"] for t in tracks if t.get("id")]
-  if not track_ids:
-    return None
-  return {
-    "path": file_info["path"],
-    "artistId": artist["id"],
-    "albumId": album["id"],
-    "albumReleaseId": file_info.get("albumReleaseId", 0),
-    "trackIds": track_ids,
-    "quality": file_info.get("quality", {}),
-    "replaceExistingFiles": False,
-    "disableReleaseSwitching": False,
-  }
+  """Thin wrapper over the shared payload builder (lidarr_import_lib)."""
+  return build_import_item(file_info)
 
 
-def _scan_for_import(host: str, api_key: str, folder: str) -> list[dict]:
-  """GET /manualimport for a folder; returns importable payload items."""
+def _fetch_manualimport(host: str, api_key: str, folder: str) -> list[dict]:
+  """GET /manualimport for a folder; returns the raw scan entries."""
   params = urllib.parse.urlencode({"folder": folder, "filterExistingFiles": "false"})
   url = f"{host}/api/v1/manualimport?{params}"
   status, body = _request("GET", url, api_key, timeout=MANUAL_IMPORT_TIMEOUT)
   if not (200 <= status < 300):
     raise RuntimeError(f"GET /api/v1/manualimport returned HTTP {status}")
   try:
-    entries = json.loads(body)
+    return json.loads(body)
   except (TypeError, ValueError, json.JSONDecodeError) as exc:
     raise RuntimeError(f"manualimport response was not JSON: {exc}") from exc
-  items: list[dict] = []
-  for entry in entries:
-    if entry.get("additionalFile"):
-      continue
-    built = _build_import_item(entry)
-    if built:
-      items.append(built)
+
+
+def _scan_for_import(
+  host: str, api_key: str, folder: str, *, accept_min_match: float | None = None
+) -> list[dict]:
+  """GET /manualimport for a folder; return importable payload items.
+
+  With ``accept_min_match`` set, only files whose rejections pass the strict
+  queue-salvage policy are returned, and an incomplete-release stub yields an
+  empty list (re-grab, don't import a partial album). With ``accept_min_match``
+  None (the orphan in-place re-register path) every audio entry is built
+  unfiltered.
+  """
+  entries = _fetch_manualimport(host, api_key, folder)
+  if accept_min_match is None:
+    items: list[dict] = []
+    for entry in entries:
+      if entry.get("additionalFile"):
+        continue
+      built = build_import_item(entry)
+      if built:
+        items.append(built)
+    return items
+  items, _stub_reason = select_importable_items(
+    entries,
+    accept_min_match=accept_min_match,
+    accept_missing_tracks=False,
+    block_fewer_tracks=True,
+  )
   return items
 
 
@@ -374,6 +404,7 @@ def reclaim_item(
   item: WedgedItem,
   *,
   import_mode: str = DEFAULT_IMPORT_MODE,
+  accept_min_match: float = DEFAULT_ACCEPT_MIN_MATCH,
 ) -> bool:
   """Re-import a wedged download with release switching enabled.
 
@@ -392,7 +423,9 @@ def reclaim_item(
   clears a queue row for an import that didn't happen.
   """
   try:
-    items = _scan_for_import(host, api_key, item.output_path)
+    items = _scan_for_import(
+      host, api_key, item.output_path, accept_min_match=accept_min_match
+    )
   except (urllib.error.URLError, RuntimeError) as exc:
     print(f"  reclaim scan failed for #{item.queue_id}: {exc}", file=sys.stderr)
     return False
@@ -451,18 +484,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--no-salvage",
     "--no-reclaim",
+    dest="no_reclaim",
     action="store_true",
     help=(
-      "Disable the release-switch reclaim pass; send every importFailed row "
+      "Disable the manual-import salvage pass; send every importFailed row "
       "straight to delete+blocklist+redownload (legacy behaviour)."
+    ),
+  )
+  parser.add_argument(
+    "--accept-min-match",
+    type=float,
+    default=DEFAULT_ACCEPT_MIN_MATCH,
+    help=(
+      "Confidence floor for salvaging an 'Album match is not close enough' row "
+      f"(default {DEFAULT_ACCEPT_MIN_MATCH}; Lidarr's own bar is 80). Rows below "
+      "this, or with missing/fewer tracks, are blocklisted and re-grabbed."
     ),
   )
   parser.add_argument(
     "--import-mode",
     default=DEFAULT_IMPORT_MODE,
     choices=("copy", "move"),
-    help=f"Manual-import mode for reclaimed rows (default {DEFAULT_IMPORT_MODE}).",
+    help=f"Manual-import mode for salvaged rows (default {DEFAULT_IMPORT_MODE}).",
   )
   return parser.parse_args(argv)
 
@@ -495,48 +540,62 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
   if args.no_reclaim:
-    reclaimable: list[WedgedItem] = []
+    salvageable: list[WedgedItem] = []
     to_delete = list(eligible)
   else:
-    reclaimable = [i for i in eligible if is_reclaimable(i)]
-    to_delete = [i for i in eligible if not is_reclaimable(i)]
+    salvageable = [
+      i for i in eligible if is_salvageable(i, accept_min_match=args.accept_min_match)
+    ]
+    to_delete = [
+      i
+      for i in eligible
+      if not is_salvageable(i, accept_min_match=args.accept_min_match)
+    ]
 
   skip_redownload = not args.redownload
   print(
-    f"plan: reclaim {len(reclaimable)} (release switch), "
+    f"plan: salvage {len(salvageable)} (manual import), "
     f"remove {len(to_delete)} importFailed item(s) "
     f"(skipping {len(skipped)} younger than {args.min_age_hours}h) "
     f"[blocklist={'no' if args.no_blocklist else 'yes'}, "
-    f"skipRedownload={'yes' if skip_redownload else 'no'}]"
+    f"skipRedownload={'yes' if skip_redownload else 'no'}, "
+    f"min-match={args.accept_min_match}]"
   )
 
   if args.dry_run:
-    for item in reclaimable[:10]:
-      print(f"  DRY reclaim #{item.queue_id} [release switch] {item.title[:80]}")
+    for item in salvageable[:10]:
+      print(f"  DRY salvage #{item.queue_id} [manual import] {item.title[:80]}")
     for item in to_delete[:10]:
       print(f"  DRY remove #{item.queue_id} [{item.tracked_state}] {item.title[:80]}")
-    extra = len(reclaimable[10:]) + len(to_delete[10:])
+    extra = len(salvageable[10:]) + len(to_delete[10:])
     if extra:
       print(f"  ... and {extra} more")
     return 0
 
-  # Reclaim pass: re-import valid albums that just need a release switch.
-  reclaimed = 0
-  for item in reclaimable:
-    if reclaim_item(host, api_key, item, import_mode=args.import_mode):
-      reclaimed += 1
+  # Salvage pass: re-import what we already fetched (release switching on,
+  # good-enough matches accepted) instead of blocklisting and re-grabbing.
+  salvaged = 0
+  for item in salvageable:
+    if reclaim_item(
+      host,
+      api_key,
+      item,
+      import_mode=args.import_mode,
+      accept_min_match=args.accept_min_match,
+    ):
+      salvaged += 1
       # Album is satisfied — drop the row without blocklist or re-search.
       if not delete_item(host, api_key, item, blocklist=False, skip_redownload=True):
         print(
-          f"  reclaimed #{item.queue_id} but row cleanup failed "
+          f"  salvaged #{item.queue_id} but row cleanup failed "
           "(Lidarr will clear it next cycle)",
           file=sys.stderr,
         )
     else:
-      print(f"  reclaim failed for #{item.queue_id}; falling through to delete")
+      print(f"  salvage failed for #{item.queue_id}; falling through to delete")
       to_delete.append(item)
-  if reclaimable:
-    print(f"reclaimed {reclaimed}/{len(reclaimable)} via release switch")
+  if salvageable:
+    print(f"salvaged {salvaged}/{len(salvageable)} via manual import")
 
   # Destructive pass: genuine bad matches + failed reclaims.
   deleted = 0
