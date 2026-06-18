@@ -183,12 +183,16 @@ export function isVariousArtists(name: string | undefined): boolean {
   return VA_TOKENS.has(k)
 }
 
+function stripParens(s: string): string {
+  return s.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 // Trailing "edition" appendices that make a lookup miss when present. Anchored to
 // the end so an album literally named "Remaster" isn't mangled mid-title.
 const EDITION_SUFFIX = /\s*[-–—]?\s*(?:deluxe|expanded|special|extended|anniversary|legacy|collector'?s|bonus[\s-]?track|remaster(?:ed)?)(?:\s+(?:edition|version|reissue))?\s*$/i
 
 export function stripEditionAppendix(title: string): string {
-  const noParens = title.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
+  const noParens = stripParens(title)
   const noEdition = noParens.replace(EDITION_SUFFIX, '').trim()
   return noEdition || noParens || title
 }
@@ -200,7 +204,7 @@ export function albumQueryVariations(parsed: ParsedItem): string[] {
   const title = parsed.title ?? parsed.raw
   const artist = parsed.artist ?? ''
   const term = (t: string): string => (artist ? `${artist} ${t}` : t).trim()
-  const parenStripped = title.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
+  const parenStripped = stripParens(title)
   const editionStripped = stripEditionAppendix(title)
   return [...new Set([term(title), term(parenStripped), term(editionStripped)].filter(Boolean))]
 }

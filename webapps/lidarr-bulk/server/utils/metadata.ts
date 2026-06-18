@@ -32,7 +32,7 @@ export function rankVaAlbums(entries: MetaSearchEntry[], title: string, want?: n
       const yearPenalty = want !== undefined && y !== undefined ? Math.min(Math.abs(y - want), 50) / 1000 : 0
       return { mbid: a.id, title: a.title, year: y, score: similarity(normKey(a.title), target) - yearPenalty }
     })
-    .sort((x, z) => z.score - x.score)
+    .sort((x, y) => y.score - x.score)
   const seen = new Set<string>()
   const out: VaAlbumMatch[] = []
   for (const m of scored) {
@@ -53,5 +53,7 @@ export async function resolveVariousArtistsAlbumMbids(title: string, want?: numb
   if (!res.ok)
     throw new Error(`metadata search failed (${res.status})`)
   const body = await res.json() as MetaSearchEntry[]
+  if (!Array.isArray(body) || body.length === 0)
+    console.warn('[metadata] unexpected/empty search body for', title)
   return rankVaAlbums(Array.isArray(body) ? body : [], title, want, limit).map(m => m.mbid)
 }

@@ -70,6 +70,7 @@ function albumItem(rawLine: string, artist: string, title: string): ParsedItem {
     item.variousArtists = true
   return item
 }
+
 function parseCsvPair(line: string): { a: string, b: string } | undefined {
   // Minimal CSV: two quoted or unquoted fields separated by a comma.
   const m = line.match(/^\s*"?([^",]+(?:,[^",]+)*)"?\s*,\s*"?([^",]+(?:,[^",]+)*)"?\s*$/)

@@ -294,16 +294,20 @@ async function processAdd(j: JobInternal, item: JobItem, effective: AppSettings)
       }
       catch (retryErr: unknown) {
         const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
-        if (/already been added/i.test(retryMsg)) {
-          try {
-            const summary = await nudgeExisting(item.chosen, j.monitorMode)
-            setStatus(j, item, { status: 'nudged', message: `${summary} (image fetch retried)` })
-            return
-          }
-          catch { /* fall through to error below */ }
+        // The first add may have created the record before the image fetch failed.
+        // nudgeExisting looks it up by foreign id (and throws if truly absent), so a
+        // successful nudge means the record exists and we treat it as added.
+        try {
+          const summary = await nudgeExisting(item.chosen, j.monitorMode)
+          setStatus(j, item, { status: 'nudged', message: `${summary} (image fetch retried)` })
+          return
         }
-        setStatus(j, item, { status: 'error', message: `image-fetch add failed twice: ${retryMsg}` })
-        return
+        catch (nudgeErr: unknown) {
+          const nudgeMsg = nudgeErr instanceof Error ? nudgeErr.message : String(nudgeErr)
+          console.error('[job]', j.id, 'image-retry nudge failed:', nudgeMsg)
+          setStatus(j, item, { status: 'error', message: `image-fetch add failed twice: ${retryMsg}` })
+          return
+        }
       }
     }
     setStatus(j, item, { status: 'error', message: msg })
@@ -374,7 +378,11 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<Candida
   // Various Artists compilations: Lidarr text search hides the special VA entity,
   // so resolve the comp's MBID via the metadata backend and look it up by id.
   if (parsed.variousArtists || isVariousArtists(parsed.artist)) {
-    const mbids = await resolveVariousArtistsAlbumMbids(parsed.title ?? parsed.raw, parsed.year).catch(() => [] as string[])
+    const mbids = await resolveVariousArtistsAlbumMbids(parsed.title ?? parsed.raw, parsed.year)
+      .catch((err: unknown) => {
+        console.error('[job] VA resolve failed:', err instanceof Error ? err.message : String(err))
+        return [] as string[]
+      })
     const looked = await Promise.all(
       mbids.map(mbid => retryOnTransient(() => lookupAlbum(`lidarr:${mbid}`)).catch(() => [])),
     )
