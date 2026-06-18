@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapWithConcurrency } from '../server/utils/jobs'
+import { isImageFetchError, mapWithConcurrency } from '../server/utils/jobs'
 
 describe('mapWithConcurrency', () => {
   it('returns [] for an empty input without spawning workers', async () => {
@@ -29,5 +29,20 @@ describe('mapWithConcurrency', () => {
     })
     expect(peak).toBeLessThanOrEqual(4)
     expect(peak).toBeGreaterThan(1)
+  })
+})
+
+describe('isImageFetchError', () => {
+  it('matches Lidarr image/cover fetch failures', () => {
+    for (const m of [
+      'Lidarr 500: failed to download image',
+      'Error fetching cover art for album',
+      'MediaCover refresh failed',
+    ])
+      expect(isImageFetchError(m)).toBe(true)
+  })
+  it('does not match unrelated errors', () => {
+    for (const m of ['album has already been added', 'Lidarr 404 not found'])
+      expect(isImageFetchError(m)).toBe(false)
   })
 })

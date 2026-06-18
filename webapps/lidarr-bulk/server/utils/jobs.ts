@@ -265,9 +265,8 @@ async function processAdd(j: JobInternal, item: JobItem, effective: AppSettings)
   }
   catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    // Already in Lidarr is no longer a dead end: nudge the existing record
-    // (force it monitored, kick a search for what's missing) rather than just
-    // shrugging. A failure inside the nudge surfaces as an error so it's visible.
+    console.error('[job]', j.id, 'add failed:', msg)
+    // Already in Lidarr is no longer a dead end: nudge the existing record.
     if (/already been added/i.test(msg) && item.chosen) {
       try {
         const summary = await nudgeExisting(item.chosen, j.monitorMode)
@@ -277,10 +276,37 @@ async function processAdd(j: JobInternal, item: JobItem, effective: AppSettings)
         const nudgeMsg = nudgeErr instanceof Error ? nudgeErr.message : String(nudgeErr)
         setStatus(j, item, { status: 'error', message: `already in lidarr but nudge failed: ${nudgeMsg}` })
       }
+      return
     }
-    else {
-      setStatus(j, item, { status: 'error', message: msg })
+    // Image-fetch failures are usually transient and the record often got created
+    // anyway: retry once, and if Lidarr then reports it already added, nudge it.
+    if (isImageFetchError(msg) && item.chosen) {
+      try {
+        await new Promise(r => setTimeout(r, 1500))
+        const added = await addToLidarr(item.chosen, effective, j.monitorMode)
+        setStatus(j, item, { status: 'searching-on-lidarr' })
+        if (j.kind === 'album' && added.albumId && added.artistId) {
+          await waitForArtistRefresh(added.artistId).catch(() => undefined)
+          await monitorAlbums([added.albumId], true).catch(() => undefined)
+        }
+        setStatus(j, item, { status: 'done' })
+        return
+      }
+      catch (retryErr: unknown) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+        if (/already been added/i.test(retryMsg)) {
+          try {
+            const summary = await nudgeExisting(item.chosen, j.monitorMode)
+            setStatus(j, item, { status: 'nudged', message: `${summary} (image fetch retried)` })
+            return
+          }
+          catch { /* fall through to error below */ }
+        }
+        setStatus(j, item, { status: 'error', message: `image-fetch add failed twice: ${retryMsg}` })
+        return
+      }
     }
+    setStatus(j, item, { status: 'error', message: msg })
   }
 }
 
@@ -314,6 +340,13 @@ export async function mapWithConcurrency<T, R>(
 // "Unable to communicate with LidarrAPI" — every one of those is transient and
 // clears within seconds. Retry 3x with exponential backoff before giving up.
 const TRANSIENT_LOOKUP_ERROR = /\b50[0-9]\b|Invalid response received|Unable to communicate/i
+
+// Lidarr occasionally fails an add while fetching artwork from its metadata
+// server. The record itself is usually created; the image is cosmetic. Detect
+// these so processAdd can retry once and then verify rather than hard-erroring.
+export function isImageFetchError(msg: string): boolean {
+  return /image|mediacover|cover art|cover image|failed to (?:download|fetch)/i.test(msg)
+}
 
 async function retryOnTransient<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown
