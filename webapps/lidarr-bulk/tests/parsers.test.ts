@@ -58,4 +58,11 @@ describe('parseAlbums', () => {
     const r = parseAlbums('Adele - 30\nadele - 30')
     expect(r.length).toBe(1)
   })
+  it('flags Various Artists rows from free text', () => {
+    const out = parseAlbums('Various Artists - Pulp Fiction\nvarious - Trainspotting\nReal Band - Their LP')
+    const byTitle = (t: string) => out.find(i => i.title === t)
+    expect(byTitle('Pulp Fiction')?.variousArtists).toBe(true)
+    expect(byTitle('Trainspotting')?.variousArtists).toBe(true)
+    expect(byTitle('Their LP')?.variousArtists).toBeUndefined()
+  })
 })

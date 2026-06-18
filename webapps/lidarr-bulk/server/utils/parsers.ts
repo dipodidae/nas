@@ -1,5 +1,6 @@
 // Pure parsers — no Nuxt / Node deps. Tested in tests/parsers.test.ts.
 import type { ParsedItem } from '~~/shared/types'
+import { isVariousArtists } from './matching'
 
 const QUOTES = /^['"`“”‘’]+|['"`“”‘’]+$/g
 const DASHES = /\s+[–—―-]\s+/ // en/em/hyphen between two parts, requires surrounding whitespace
@@ -62,6 +63,13 @@ export function parseArtists(blob: string): ParsedItem[] {
 //
 // We don't try to be clever about dash usage inside titles. If a line has
 // multiple dash-separators, we take the first split.
+
+function albumItem(rawLine: string, artist: string, title: string): ParsedItem {
+  const item: ParsedItem = { raw: rawLine, kind: 'album', artist, title }
+  if (isVariousArtists(artist))
+    item.variousArtists = true
+  return item
+}
 function parseCsvPair(line: string): { a: string, b: string } | undefined {
   // Minimal CSV: two quoted or unquoted fields separated by a comma.
   const m = line.match(/^\s*"?([^",]+(?:,[^",]+)*)"?\s*,\s*"?([^",]+(?:,[^",]+)*)"?\s*$/)
@@ -89,7 +97,7 @@ export function parseAlbums(blob: string): ParsedItem[] {
     // 1) CSV pair
     const csv = parseCsvPair(line)
     if (csv) {
-      out.push({ raw: rawLine, kind: 'album', artist: csv.a, title: csv.b })
+      out.push(albumItem(rawLine, csv.a, csv.b))
       continue
     }
 
@@ -97,7 +105,7 @@ export function parseAlbums(blob: string): ParsedItem[] {
     if (PIPE_SPLIT.test(line)) {
       const [a, b] = line.split(PIPE_SPLIT, 2)
       if (a && b) {
-        out.push({ raw: rawLine, kind: 'album', artist: clean(a), title: clean(b) })
+        out.push(albumItem(rawLine, clean(a), clean(b)))
         continue
       }
     }
@@ -106,7 +114,7 @@ export function parseAlbums(blob: string): ParsedItem[] {
     if (BY_SPLIT.test(line)) {
       const [b, a] = line.split(BY_SPLIT)
       if (a && b) {
-        out.push({ raw: rawLine, kind: 'album', artist: clean(a), title: clean(b) })
+        out.push(albumItem(rawLine, clean(a), clean(b)))
         continue
       }
     }
@@ -117,7 +125,7 @@ export function parseAlbums(blob: string): ParsedItem[] {
       const a = line.slice(0, idx)
       const b = line.slice(idx).replace(DASHES, '')
       if (a && b) {
-        out.push({ raw: rawLine, kind: 'album', artist: clean(a), title: clean(b) })
+        out.push(albumItem(rawLine, clean(a), clean(b)))
         continue
       }
     }
