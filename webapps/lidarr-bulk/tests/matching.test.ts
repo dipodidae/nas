@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate, LidarrAlbumCandidate, LidarrArtistCandidate, ParsedItem } from '~~/shared/types'
-import { normKey, pickAutoMatch, rankCandidates, similarity, isVariousArtists } from '../server/utils/matching'
+import { albumQueryVariations, isVariousArtists, normKey, pickAutoMatch, rankCandidates, similarity, stripEditionAppendix } from '../server/utils/matching'
 
 function album(title: string, artist: string, albumType?: string): Candidate {
   return {
@@ -156,5 +156,26 @@ describe('isVariousArtists', () => {
   it('does not match real artist names or empty', () => {
     for (const s of ['Variation', 'The Various', 'Avant', '', undefined])
       expect(isVariousArtists(s)).toBe(false)
+  })
+})
+
+describe('stripEditionAppendix', () => {
+  it('strips parenthetical and trailing edition suffixes', () => {
+    expect(stripEditionAppendix('Powerslave (2015 Remaster)')).toBe('Powerslave')
+    expect(stripEditionAppendix('The Album - Deluxe Edition')).toBe('The Album')
+    expect(stripEditionAppendix('Songs (Expanded Edition)')).toBe('Songs')
+  })
+  it('leaves a clean title unchanged', () => {
+    expect(stripEditionAppendix('Master of Puppets')).toBe('Master of Puppets')
+  })
+})
+
+describe('albumQueryVariations', () => {
+  it('orders original, paren-stripped, edition-stripped, deduped, with the artist prefix', () => {
+    expect(albumQueryVariations({ raw: 'x', kind: 'album', artist: 'Iron Maiden', title: 'Powerslave (2015 Remaster)' }))
+      .toEqual(['Iron Maiden Powerslave (2015 Remaster)', 'Iron Maiden Powerslave'])
+  })
+  it('a clean title yields a single variation', () => {
+    expect(albumQueryVariations({ raw: 'x', kind: 'album', artist: 'A', title: 'B' })).toEqual(['A B'])
   })
 })

@@ -7,6 +7,7 @@ import type {
   JobItem,
   JobSnapshot,
   Kind,
+  LidarrAlbumCandidate,
   ParsedItem,
 } from '~~/shared/types'
 import { pruneHistory, recordJob } from './history'
@@ -21,7 +22,8 @@ import {
   nudgeExisting,
   waitForArtistRefresh,
 } from './lidarr'
-import { normKeyLoose, pickAutoMatch, rankCandidates, similarity } from './matching'
+import { albumQueryVariations, isVariousArtists, normKeyLoose, pickAutoMatch, rankCandidates, similarity } from './matching'
+import { resolveVariousArtistsAlbumMbids } from './metadata'
 import { loadSettings } from './settings'
 
 // Lidarr's /album/lookup proxies MusicBrainz, which throttles per-IP at ~1 req/s
@@ -335,35 +337,43 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<Candida
     const res = await retryOnTransient(() => lookupArtist(parsed.raw))
     return res.map(value => ({ kind: 'artist', value }))
   }
-  const term = parsed.artist && parsed.title
-    ? `${parsed.artist} ${parsed.title}`
-    : parsed.raw
-  const primary = await retryOnTransient(() => lookupAlbum(term))
 
-  // Fallback: if nothing in the primary result is title-similar to what was
-  // typed AND the title carries a parens/bracket qualifier, re-query with the
-  // qualifier stripped. Catches "Carnal Leftovers (demos)" → "Carnal Leftovers"
-  // and merges any new hits in.
-  if (parsed.title && /[([]/.test(parsed.title)) {
-    const wantTitle = normKeyLoose(parsed.title)
-    const hasGoodMatch = primary.some(c => similarity(normKeyLoose(c.title), wantTitle) > 0.8)
-    if (!hasGoodMatch) {
-      const stripped = parsed.title.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
-      if (stripped && stripped !== parsed.title) {
-        const fallbackTerm = parsed.artist ? `${parsed.artist} ${stripped}` : stripped
-        const fallback = await retryOnTransient(() => lookupAlbum(fallbackTerm)).catch(() => [] as typeof primary)
-        const seen = new Set(primary.map(r => r.foreignAlbumId))
-        for (const c of fallback) {
-          if (!seen.has(c.foreignAlbumId)) {
-            primary.push(c)
-            seen.add(c.foreignAlbumId)
-          }
-        }
-      }
+  // Various Artists compilations: Lidarr text search hides the special VA entity,
+  // so resolve the comp's MBID via the metadata backend and look it up by id.
+  if (parsed.variousArtists || isVariousArtists(parsed.artist)) {
+    const mbids = await resolveVariousArtistsAlbumMbids(parsed.title ?? parsed.raw, parsed.year).catch(() => [] as string[])
+    const looked = await Promise.all(
+      mbids.map(mbid => retryOnTransient(() => lookupAlbum(`lidarr:${mbid}`)).catch(() => [])),
+    )
+    const seen = new Set<string>()
+    const out: Candidate[] = []
+    for (const value of looked.flat()) {
+      if (seen.has(value.foreignAlbumId))
+        continue
+      seen.add(value.foreignAlbumId)
+      out.push({ kind: 'album', value })
     }
+    return out
   }
 
-  return primary.map(value => ({ kind: 'album', value }))
+  // Normal albums: try query variations (as-typed, paren-stripped, edition-
+  // stripped) until one returns a title-similar hit; merge any extra results in.
+  const variations = albumQueryVariations(parsed)
+  const want = normKeyLoose(parsed.title ?? parsed.raw)
+  const merged: LidarrAlbumCandidate[] = []
+  const seen = new Set<string>()
+  for (const term of variations) {
+    const res = await retryOnTransient(() => lookupAlbum(term)).catch(() => [] as LidarrAlbumCandidate[])
+    for (const c of res) {
+      if (!seen.has(c.foreignAlbumId)) {
+        seen.add(c.foreignAlbumId)
+        merged.push(c)
+      }
+    }
+    if (merged.some(c => similarity(normKeyLoose(c.title), want) > 0.8))
+      break
+  }
+  return merged.map(value => ({ kind: 'album', value }))
 }
 
 async function addToLidarr(

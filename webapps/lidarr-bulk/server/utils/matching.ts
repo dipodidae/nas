@@ -182,3 +182,25 @@ export function isVariousArtists(name: string | undefined): boolean {
   const k = normKey(name) // normKey strips punctuation, so "v.a." → "v a"
   return VA_TOKENS.has(k)
 }
+
+// Trailing "edition" appendices that make a lookup miss when present. Anchored to
+// the end so an album literally named "Remaster" isn't mangled mid-title.
+const EDITION_SUFFIX = /\s*[-–—]?\s*(?:deluxe|expanded|special|extended|anniversary|legacy|collector'?s|bonus[\s-]?track|remaster(?:ed)?)(?:\s+(?:edition|version|reissue))?\s*$/i
+
+export function stripEditionAppendix(title: string): string {
+  const noParens = title.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
+  const noEdition = noParens.replace(EDITION_SUFFIX, '').trim()
+  return noEdition || noParens || title
+}
+
+// Ordered, deduped Lidarr lookup terms for an album row: as-typed first, then
+// progressively stripped variants. searchCandidates tries them until one yields
+// a title-similar hit, so a stray "(Deluxe Edition)" no longer dead-ends.
+export function albumQueryVariations(parsed: ParsedItem): string[] {
+  const title = parsed.title ?? parsed.raw
+  const artist = parsed.artist ?? ''
+  const term = (t: string): string => (artist ? `${artist} ${t}` : t).trim()
+  const parenStripped = title.replace(/[([][^)\]]*[)\]]/g, ' ').replace(/\s+/g, ' ').trim()
+  const editionStripped = stripEditionAppendix(title)
+  return [...new Set([term(title), term(parenStripped), term(editionStripped)].filter(Boolean))]
+}
