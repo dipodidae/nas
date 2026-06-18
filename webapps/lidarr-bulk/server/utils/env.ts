@@ -3,6 +3,9 @@ import { z } from 'zod'
 const schema = z.object({
   LIDARR_URL: z.string().url(),
   LIDARR_API_KEY: z.string().min(1),
+  // Lidarr's metadata backend, used to resolve Various Artists comps by MBID
+  // (Lidarr's own /album/lookup hides the special VA entity from text search).
+  LIDARR_METADATA_URL: z.string().url().default('https://api.lidarr.audio/api/v0.4'),
   APP_BEARER_TOKEN: z.string().optional().default(''),
   // Session login. When both are set, the UI requires login; /api/* requires
   // either a valid session cookie or APP_BEARER_TOKEN (if set).
