@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate, LidarrAlbumCandidate, LidarrArtistCandidate, ParsedItem } from '~~/shared/types'
-import { normKey, pickAutoMatch, rankCandidates, similarity } from '../server/utils/matching'
+import { normKey, pickAutoMatch, rankCandidates, similarity, isVariousArtists } from '../server/utils/matching'
 
 function album(title: string, artist: string, albumType?: string): Candidate {
   return {
@@ -145,5 +145,16 @@ describe('rankCandidates', () => {
     const parsed: ParsedItem = { raw: 'X', kind: 'album', artist: 'A', title: 'X' }
     const one = album('X', 'A')
     expect(rankCandidates('album', parsed, [one])).toEqual([one])
+  })
+})
+
+describe('isVariousArtists', () => {
+  it('matches the various-artists tokens, case/space-insensitive', () => {
+    for (const s of ['Various Artists', 'various', 'VA', 'v.a.', '  Various   Artists '])
+      expect(isVariousArtists(s)).toBe(true)
+  })
+  it('does not match real artist names or empty', () => {
+    for (const s of ['Variation', 'The Various', 'Avant', '', undefined])
+      expect(isVariousArtists(s)).toBe(false)
   })
 })

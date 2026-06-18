@@ -172,3 +172,13 @@ export function rankCandidates(kind: Kind, parsed: ParsedItem, candidates: Candi
     .sort((a, b) => (b.strict - a.strict) || (b.loose - a.loose) || (a.originalIndex - b.originalIndex))
     .map(x => x.c)
 }
+
+// "Various Artists" comes in many spellings; Lidarr hides the special VA entity
+// from text search, so we detect it up front and resolve such rows by MBID.
+const VA_TOKENS = new Set(['various artists', 'various artist', 'various', 'va', 'v a'])
+export function isVariousArtists(name: string | undefined): boolean {
+  if (!name)
+    return false
+  const k = normKey(name) // normKey strips punctuation, so "v.a." → "v a"
+  return VA_TOKENS.has(k)
+}

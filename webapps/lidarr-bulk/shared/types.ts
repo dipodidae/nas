@@ -10,6 +10,10 @@ export interface ParsedItem {
   title?: string
   // Anything we couldn't confidently split lands here for the user to review.
   needsReview?: boolean
+  // Set when the row is a Various Artists compilation — resolved by MBID, not text search.
+  variousArtists?: true
+  // Release year, when known (Spotify) — disambiguates same-titled comps.
+  year?: number
 }
 
 export interface LidarrImage {
