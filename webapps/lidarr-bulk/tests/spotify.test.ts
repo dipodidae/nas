@@ -79,6 +79,20 @@ describe('albumItemsFromTracks', () => {
   it('returns empty result for an empty playlist', () => {
     expect(albumItemsFromTracks([])).toEqual({ items: [], stats: { tracks: 0, skipped: 0, uniqueAlbums: 0 } })
   })
+
+  it('flags Various Artists comps and carries the release year', () => {
+    const res = albumItemsFromTracks([
+      { track: { type: 'track', album: { id: 'a1', name: 'Pulp Fiction', album_type: 'compilation', release_date: '1994-09-26', artists: [{ name: 'Various Artists' }] } } },
+      { track: { type: 'track', album: { id: 'a2', name: 'Mix', album_type: 'compilation', release_date: '2001', artists: [{ name: 'DJ Real' }] } } },
+      { track: { type: 'track', album: { id: 'a3', name: 'Solo LP', album_type: 'album', release_date: '2010-01-01', artists: [{ name: 'A Band' }] } } },
+    ] as never)
+    expect(res.items[0]).toMatchObject({ kind: 'album', artist: 'Various Artists', title: 'Pulp Fiction', variousArtists: true, year: 1994 })
+    // album_type 'compilation' alone flags it even when the credited artist isn't literally "Various Artists"
+    expect(res.items[1]).toMatchObject({ variousArtists: true, year: 2001 })
+    // a normal album is not flagged and has no variousArtists key
+    expect(res.items[2].variousArtists).toBeUndefined()
+    expect(res.items[2].year).toBe(2010)
+  })
 })
 
 describe('trackDetailsFromItems', () => {

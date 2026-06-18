@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import type { Env } from './env'
 import type { ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyTrack } from '~~/shared/types'
 import { loadEnv } from './env'
+import { isVariousArtists } from './matching'
 
 export const SPOTIFY_ACCOUNTS = 'https://accounts.spotify.com'
 export const SPOTIFY_API = 'https://api.spotify.com/v1'
@@ -44,12 +45,20 @@ export function needsRefresh(token: StoredToken, now: number): boolean {
 // Shapes of the slices of the Spotify API responses we read. Everything is
 // `unknown`-guarded because we never trust the upstream payload.
 interface ApiArtist { name?: unknown }
-interface ApiAlbum { id?: unknown, name?: unknown, artists?: ApiArtist[] }
+interface ApiAlbum { id?: unknown, name?: unknown, album_type?: unknown, release_date?: unknown, artists?: ApiArtist[] }
 interface ApiTrack { type?: unknown, name?: unknown, artists?: ApiArtist[], album?: ApiAlbum | null }
 export interface PlaylistTrackItem { is_local?: unknown, track?: ApiTrack | null }
 
 function cleanString(v: unknown): string {
   return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''
+}
+
+// Spotify release_date is 'YYYY', 'YYYY-MM', or 'YYYY-MM-DD'. Take the year only.
+function releaseYear(v: unknown): number | undefined {
+  if (typeof v !== 'string')
+    return undefined
+  const y = Number.parseInt(v.slice(0, 4), 10)
+  return Number.isFinite(y) ? y : undefined
 }
 
 // Collapse a playlist's tracks into unique albums (deduped by Spotify album id),
@@ -74,7 +83,14 @@ export function albumItemsFromTracks(items: PlaylistTrackItem[]): SpotifyResolve
     if (seen.has(albumId))
       continue
     seen.add(albumId)
-    out.push({ raw: `${artist} - ${title}`, kind: 'album', artist, title })
+    const isComp = album?.album_type === 'compilation' || isVariousArtists(artist)
+    const item: ParsedItem = { raw: `${artist} - ${title}`, kind: 'album', artist, title }
+    const year = releaseYear(album?.release_date)
+    if (year !== undefined)
+      item.year = year
+    if (isComp)
+      item.variousArtists = true
+    out.push(item)
   }
   return { items: out, stats: { tracks: items.length, skipped, uniqueAlbums: out.length } }
 }
@@ -245,7 +261,7 @@ export async function fetchPlaylistTracks(accessToken: string, playlistId: strin
   const encoded = encodeURIComponent(playlistId)
   return fetchAllPages<PlaylistTrackItem>(
     accessToken,
-    `/playlists/${encoded}/tracks?limit=100&fields=next,items(is_local,track(type,album(id,name,artists(name))))`,
+    `/playlists/${encoded}/tracks?limit=100&fields=next,items(is_local,track(type,album(id,name,album_type,release_date,artists(name))))`,
   )
 }
 
