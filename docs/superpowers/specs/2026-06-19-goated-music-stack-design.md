@@ -119,7 +119,18 @@ roadmap doc itself** — only under each phase's own approved plan.
 - Surface "loop freshness" (last scrobble, last imported playlist) on `ops.html`.
 **Risk notes:** Jellyfin version gate; plugin compatibility. Reversible (plugin removal).
 
-### Phase 2 — Acquisition hardening (MEDIUM impact, MEDIUM risk)
+### Phase 2 — Acquisition hardening — ✅ DONE (2026-06-19)
+**Tubifarry upgraded 2.1.0 → 2.1.1** (via `InstallPlugin` command + restart).
+Verified: zero factory errors; flood-control flags survived (`useFallbackSearch`
+/`useTrackFallback`=False); the new 2.1.1 semaphore `concurrentSearchLimit=1` is
+active (one outbound slskd search at a time — the real anti-flood mechanism);
+`maxGrabsPerUser=3`; indexer connectivity test HTTP 200; no #199 (FFmpeg loop) or
+#200 (byparr JSON) regressions; no slskd bans. slskd v0.25 migration already done
+(running 0.25.1.0); gluetun native port integration N/A (AirVPN static port).
+Rollback artifact kept at `.docker-config/lidarr/.plugin-backups/Tubifarry.2.1.0.bak`
+(OUTSIDE the plugins scan path — see plan). Original plan below, for reference.
+
+### Phase 2 (original) — Acquisition hardening (MEDIUM impact, MEDIUM risk)
 **Goal:** push flood control and config-correctness upstream into the tools so
 fewer custom-script firefights are needed.
 - Upgrade **Tubifarry to v2.1.1** (gains slskd semaphore + `MaxGrabsPerUser`,

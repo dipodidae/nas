@@ -60,13 +60,22 @@ Expected: the Tubifarry indexer (id 4) with `useFallbackSearch= False` and `useT
 
 - [ ] **Step 4: Back up the working 2.1.0 plugin directory (the rollback artifact)**
 
+⚠️ **CRITICAL: the backup MUST live OUTSIDE the `plugins/` tree.** Lidarr scans
+the *entire* `plugins/` directory and loads every assembly it finds — a backup
+copy left under `plugins/` produces a SECOND `Lidarr.Plugin.Tubifarry.dll`, two
+`SlskdIndexer` types, and `FindTypeByName` throws *"Sequence contains more than
+one matching element"* → IndexerFactory/MetadataFactory/DownloadClientFactory all
+fail and `/api/v1/indexer` returns HTTP 500. (Learned the hard way 2026-06-19.)
+
 Run:
 ```bash
 CFG="${CONFIG_DIRECTORY:-/home/tom/nas/.docker-config}"
-cp -a "$CFG/lidarr/plugins/TypNull/Tubifarry" "$CFG/lidarr/plugins/TypNull/Tubifarry.2.1.0.bak"
-ls -la "$CFG/lidarr/plugins/TypNull/Tubifarry.2.1.0.bak/Lidarr.Plugin.Tubifarry.dll"
+mkdir -p "$CFG/lidarr/.plugin-backups"
+cp -a "$CFG/lidarr/plugins/TypNull/Tubifarry" "$CFG/lidarr/.plugin-backups/Tubifarry.2.1.0.bak"
+ls -la "$CFG/lidarr/.plugin-backups/Tubifarry.2.1.0.bak/Lidarr.Plugin.Tubifarry.dll"
 ```
-Expected: the `.bak` dir exists with the DLL. (Rollback at any later gate = `rm -rf .../Tubifarry && mv .../Tubifarry.2.1.0.bak .../Tubifarry && docker restart lidarr`.)
+Expected: the `.bak` dir exists with the DLL, **outside** `plugins/`. (Rollback at
+any later gate = `rm -rf $CFG/lidarr/plugins/TypNull/Tubifarry && cp -a $CFG/lidarr/.plugin-backups/Tubifarry.2.1.0.bak $CFG/lidarr/plugins/TypNull/Tubifarry && docker restart lidarr`.)
 
 - [ ] **Step 5: Capture a slskd ban/flood baseline from recent logs**
 
@@ -86,9 +95,20 @@ Note whether any flood/ban lines already exist, so post-upgrade comparison is me
 - Consumes: 2.1.0 backup (Task 1 Step 4), Lidarr ≥ 3.1.3.0 (Task 1 Step 2).
 - Produces: Tubifarry 2.1.1 loaded, indexer settings intact (verified Task 3).
 
-- [ ] **Step 1: (UI) Update the plugin via Lidarr**
+- [ ] **Step 1: Update the plugin (UI or API)**
 
-In Lidarr: System → Plugins → Tubifarry → **Update** (Lidarr pulls the latest release from the TypNull/Tubifarry GitHub repo). If "Update" is not offered, use **Install** with the repo URL `https://github.com/TypNull/Tubifarry` to force a re-fetch of the latest (2.1.1).
+UI path: System → Plugins → Tubifarry → **Update**.
+
+API path (verified working 2026-06-19) — the install is a **command**, NOT a POST
+to `/system/plugins/install` (that returns HTTP 405):
+```bash
+LK=$(grep -E '^API_KEY_LIDARR=' .env | cut -d= -f2-)
+curl -fsS -X POST -H "X-Api-Key: $LK" -H 'Content-Type: application/json' \
+  -d '{"name":"InstallPlugin","githubUrl":"https://github.com/TypNull/Tubifarry"}' \
+  http://127.0.0.1:8686/api/v1/command          # → HTTP 201
+# poll until the InstallPlugin command status == "completed", then restart
+```
+Expected: command completes, `plugins/TypNull/Tubifarry/Lidarr.Plugin.Tubifarry.deps.json` shows `2.1.1`.
 
 - [ ] **Step 2: Restart Lidarr to load the new plugin assembly**
 
