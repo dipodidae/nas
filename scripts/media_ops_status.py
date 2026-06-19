@@ -150,6 +150,17 @@ class SlskdStatus:
 
 
 @dataclass
+class ListenBrainzStatus:
+    """ListenBrainz loop freshness (informational — never degrades overall)."""
+
+    reachable: bool
+    user: str | None = None
+    last_listen_epoch: int | None = None
+    last_listen_age_s: float | None = None
+    error: str | None = None
+
+
+@dataclass
 class QbitStatus:
     """qBittorrent status (best-effort)."""
 
@@ -181,6 +192,7 @@ class OpsReport:
     slskd: SlskdStatus | None = None
     qbittorrent: QbitStatus | None = None
     logs: list[LogStatus] = field(default_factory=list)
+    listenbrainz: ListenBrainzStatus | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +393,22 @@ def format_summary(report: OpsReport) -> str:
             parts.append(f"torrents={q.torrent_count}")
         lines.append(f"  ✓ {' '.join(parts)}")
 
+    # --- Music loop (ListenBrainz) — informational ---
+    lines.append("\nMusic loop (ListenBrainz):")
+    lb = report.listenbrainz
+    if lb is None:
+        lines.append("  - not checked")
+    elif not lb.reachable:
+        lines.append(f"  ⚠ {lb.error or 'unreachable'}")
+    elif lb.last_listen_age_s is None:
+        user_str = f"{lb.user} · " if lb.user else ""
+        lines.append(f"  ✓ {user_str}no listens yet")
+    else:
+        age = lb.last_listen_age_s
+        ago = f"{round(age / 60)}m ago" if age < 3600 else f"{round(age / 3600)}h ago"
+        user_str = f"{lb.user} · " if lb.user else ""
+        lines.append(f"  ✓ {user_str}last scrobble {ago}")
+
     # --- Log freshness ---
     lines.append("\nCron logs:")
     if not report.logs:
@@ -565,6 +593,41 @@ def gather_slskd(api_key: str | None) -> SlskdStatus:
         return SlskdStatus(reachable=False, error=f"parse error: {exc}")
 
 
+def gather_listenbrainz(
+    user: str | None,
+    token: str | None,
+    now_epoch: float,
+) -> ListenBrainzStatus:
+    """Read the user's most-recent listen timestamp from the public LB API.
+
+    Best-effort: any failure returns reachable=False and never raises.  Unlike
+    the other sources this reaches the public internet (api.listenbrainz.org),
+    which is expected.
+    """
+    if not user:
+        return ListenBrainzStatus(reachable=False, error="LISTENBRAINZ_USER not set")
+    url = f"https://api.listenbrainz.org/1/user/{user}/listens?count=1"
+    headers = {"Authorization": f"Token {token}"} if token else {}
+    try:
+        status, body = _http_get(url, headers)
+        if status != 200:
+            return ListenBrainzStatus(reachable=False, user=user, error=f"HTTP {status}")
+        listens = json.loads(body)["payload"]["listens"] if body else []
+        if not listens:
+            return ListenBrainzStatus(reachable=True, user=user)
+        epoch = int(listens[0]["listened_at"])
+        return ListenBrainzStatus(
+            reachable=True,
+            user=user,
+            last_listen_epoch=epoch,
+            last_listen_age_s=max(0.0, now_epoch - epoch),
+        )
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return ListenBrainzStatus(reachable=False, user=user, error=str(exc))
+    except (ValueError, KeyError) as exc:
+        return ListenBrainzStatus(reachable=False, user=user, error=f"parse error: {exc}")
+
+
 def gather_qbittorrent(user: str | None, password: str | None) -> QbitStatus:
     """Login to qBittorrent and count torrents.  Best-effort — never fatal."""
     base = "http://localhost:8080"
@@ -735,6 +798,7 @@ def _report_to_dict(report: OpsReport) -> dict:
         "slskd": asdict(report.slskd) if report.slskd else None,
         "qbittorrent": asdict(report.qbittorrent) if report.qbittorrent else None,
         "logs": [asdict(lg) for lg in report.logs],
+        "listenbrainz": asdict(report.listenbrainz) if report.listenbrainz else None,
     }
 
 
@@ -775,7 +839,15 @@ def main(argv: list[str] | None = None) -> int:
     # 5. Cron log freshness
     logs = gather_logs(log_dir, now_epoch, args.stale_after)
 
-    # Assemble
+    # 6. ListenBrainz music-loop freshness (informational — never fatal)
+    listenbrainz = gather_listenbrainz(
+        user=env.get("LISTENBRAINZ_USER"),
+        token=env.get("API_KEY_LISTENBRAINZ"),
+        now_epoch=now_epoch,
+    )
+
+    # Assemble.  ListenBrainz is intentionally NOT fed into derive_overall_status
+    # — a stale scrobble must not mark the whole stack degraded.
     overall = derive_overall_status(containers, arr_services, slskd, qbit, logs)
     report = OpsReport(
         generated_at=now.isoformat(),
@@ -785,6 +857,7 @@ def main(argv: list[str] | None = None) -> int:
         slskd=slskd,
         qbittorrent=qbit,
         logs=logs,
+        listenbrainz=listenbrainz,
     )
 
     report_dict = _report_to_dict(report)

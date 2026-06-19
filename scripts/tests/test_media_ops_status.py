@@ -7,6 +7,7 @@ and assert on the pure helper functions.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -359,3 +360,58 @@ def test_extract_health_variants():
     assert m._extract_health("Up 30 seconds (health: starting)") == "starting"
     assert m._extract_health("Up 5 minutes") == ""
     assert m._extract_health("Exited (0) 2 hours ago") == ""
+
+
+# ---------------------------------------------------------------------------
+# ListenBrainz music-loop tile (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_gather_listenbrainz_parses_latest_listen(monkeypatch):
+    payload = {"payload": {"listens": [{"listened_at": 1_700_000_000}]}}
+
+    def fake_get(url, headers):
+        assert "user/tom/listens" in url
+        return 200, json.dumps(payload)
+
+    monkeypatch.setattr(m, "_http_get", fake_get)
+    st = m.gather_listenbrainz(user="tom", token="tok", now_epoch=1_700_000_060.0)
+    assert st.reachable is True
+    assert st.last_listen_epoch == 1_700_000_000
+    assert st.last_listen_age_s == 60.0
+
+
+def test_gather_listenbrainz_no_user_is_unreachable():
+    st = m.gather_listenbrainz(user=None, token=None, now_epoch=1.0)
+    assert st.reachable is False
+    assert "not set" in (st.error or "")
+
+
+def test_gather_listenbrainz_http_error_never_raises(monkeypatch):
+    def boom(url, headers):
+        raise OSError("network down")
+
+    monkeypatch.setattr(m, "_http_get", boom)
+    st = m.gather_listenbrainz(user="tom", token="tok", now_epoch=1.0)
+    assert st.reachable is False
+    assert st.error
+
+
+def test_report_dict_includes_listenbrainz():
+    import datetime as _dt
+
+    report = m.OpsReport(
+        generated_at=_dt.datetime(2026, 6, 19, tzinfo=_dt.UTC).isoformat(),
+        overall="ok",
+        containers=[],
+        arr_services=[],
+        slskd=None,
+        qbittorrent=None,
+        logs=[],
+        listenbrainz=m.ListenBrainzStatus(
+            reachable=True, user="tom", last_listen_age_s=42.0
+        ),
+    )
+    d = m._report_to_dict(report)
+    assert d["listenbrainz"]["user"] == "tom"
+    assert d["listenbrainz"]["last_listen_age_s"] == 42.0
