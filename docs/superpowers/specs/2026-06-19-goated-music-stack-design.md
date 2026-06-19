@@ -158,7 +158,21 @@ valence, danceability, brightness, etc.), and what role AudioMuse-AI plays vs th
 in-house `playlist-generator`. Essentia and AudioMuse are the **same question** —
 "better sonic features via local ML" — so they are evaluated together, against the
 current heuristic baseline, NOT pre-built.
-- Establish the **heuristic baseline** first: `eval_loop.py` scores on current features.
+- **Heuristic baseline established (2026-06-19, `eval_loop.py --multi --max-iter 1`,
+  9-prompt suite, preserved in `eval_out/baseline_20260619/`):**
+  **overall 5.70/10** — genre 6.7 (strongest, C2/C3 album_tags working) · arc 5.89 ·
+  fidelity 5.4 · curation 5.33 · **transition 5.11 (weakest)**. Diagnosis: HIGH
+  genre-drift, MEDIUM transition-weakness, MEDIUM arc-failure. **Key implication:**
+  the bottleneck is *sequencing/transition*, not feature richness — and the
+  diagnosis's own quick-wins are all *scoring-weight tweaks* (genre-constraint
+  weight, transition component, energy/darkness trajectory emphasis), NOT "get
+  better features." So sonic-ML is only justified if it beats cheap sequencer
+  tuning **specifically on transition_quality**. Caveats: max-iter 1 is a floor
+  (production iterates); the suite is dark/metal-heavy (shoegaze 3.80 / jazz 4.50
+  worst — likely partly library composition, not algorithm).
+- **Therefore — do the FREE sequencer-weight tuning first** (the diagnosis quick-wins
+  in `trajectory/candidates.py` + `sequencer.py`), re-eval against 5.70. Only if
+  transitions stay weak does the Essentia/AudioMuse spend earn its place.
 - **Essentia arm:** spike model-based mood/genre/feature extraction on a *sample*
   of tracks; feed into the existing audio-feature consumers; re-score. Adopt only
   if it beats baseline by a meaningful margin.
