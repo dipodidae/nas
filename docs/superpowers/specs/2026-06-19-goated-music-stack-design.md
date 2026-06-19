@@ -137,27 +137,39 @@ fewer custom-script firefights are needed.
 is breaking. Both need staging. Respects the documented slskd login-timeout /
 ghost-session gotcha (no login-aware healthcheck).
 
-### Phase 3 — Acoustic enrichment backfill (MEDIUM impact, MEDIUM effort)
-**Goal:** fill the empty `album_tags` enrichment table that `playlist-generator`
-already references, using a live source now that AcousticBrainz is frozen.
-- Stand up local **Essentia** inference (host-side script in `scripts/`, matching
-  the existing operational-script contract; or a dedicated container) to produce
-  mood/genre/feature vectors per track.
-- Backfill `album_tags`; wire the C2/C3 enrichment paths the
-  `playlist-enrichment` memory notes are dormant pending this backfill.
-- Optionally pair **beets** as the automated post-import tagger feeding the
-  enrichment pipeline (Picard stays the manual GUI rescue tool).
-**Risk notes:** compute cost of inference; backfill is large but one-shot then incremental.
+### Phase 3 — Acoustic enrichment backfill — ✅ VERIFIED ALREADY DONE (2026-06-19)
+**Original goal:** fill the "empty" `album_tags` table and wire its consumers.
+**Verification finding:** the premise was stale. `album_tags` holds **44,303 rows
+across 7,148 albums** (Last.fm tags + Discogs styles/genres). Its consumers
+(`genre/manifold.py` C2/C3 ensemble, `trajectory/candidates.py` album_genres, the
+BM25/genre-match queries in `database_pg.py`) read it via plain SQL JOINs and are
+**NOT flag-gated** — they auto-activated when the table filled. There is nothing
+to implement here.
+- **Residual (optional, minor):** MusicBrainz + Metal Archives contributed 0
+  `album_tags` rows despite being wired — a small enrichment-coverage gap, not a phase.
+- **Recommended follow-up:** re-run `eval_loop.py --multi` to quantify the lift the
+  now-live C2/C3 paths give (a measurement, not a build).
+- **Essentia question moved to Phase 4** — see below.
 
-### Phase 4 — Recommendation bake-off (EVALUATION, then decide)
-**Goal:** decide AudioMuse-AI's role relative to the in-house `playlist-generator`.
-- Time-boxed evaluation: stand up AudioMuse-AI server + Jellyfin companion plugin
-  in parallel, compare playlist quality / similarity / Instant-Mix integration
-  against the home-grown engine on the same library.
-- Outcome decides: replace, harvest ideas, or keep home-grown. **No commitment
-  until the bake-off ships its own findings doc.**
-**Risk notes:** pure evaluation; the only risk is sunk time. Explicitly avoids
-nuking a working in-house system on hype.
+### Phase 4 — Sonic-ML bake-off: heuristics vs Essentia vs AudioMuse-AI (EVALUATION, then decide)
+**Goal:** decide whether *local ML sonic features* beat the **librosa heuristic
+proxies** the engine already uses (`service/app/audio/analyzer.py`: BPM, loudness,
+valence, danceability, brightness, etc.), and what role AudioMuse-AI plays vs the
+in-house `playlist-generator`. Essentia and AudioMuse are the **same question** —
+"better sonic features via local ML" — so they are evaluated together, against the
+current heuristic baseline, NOT pre-built.
+- Establish the **heuristic baseline** first: `eval_loop.py` scores on current features.
+- **Essentia arm:** spike model-based mood/genre/feature extraction on a *sample*
+  of tracks; feed into the existing audio-feature consumers; re-score. Adopt only
+  if it beats baseline by a meaningful margin.
+- **AudioMuse-AI arm:** stand up its server + Jellyfin companion plugin in
+  parallel; compare playlist quality / similarity / Instant-Mix integration.
+- Outcome decides per-arm: replace, harvest specific ideas, or keep home-grown.
+  **No commitment until the bake-off ships its own findings doc.**
+**Risk notes:** pure evaluation; the only cost is time. Explicitly avoids the
+trap of replacing working heuristics (or a working in-house engine) on hype —
+informed by the C4/harmonic experience, where a fancier feature tested
+*below-random* and was correctly shipped OFF.
 
 ### Phase C (continuous, parallel) — \*arr quality + Cleanuparr audit (LOW risk)
 **Goal:** make sure the self-healing already installed is scoped safely.
