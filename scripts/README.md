@@ -656,6 +656,25 @@ Flags:
 
 Safe by design: no deletions, no forceful state resets. One reannounce per batch.
 
+### `album_art.py`
+
+Backfills **missing external album covers** (`folder.jpg`) across the music library by delegating to [sacad](https://github.com/desbma/sacad)'s recursive `sacad_r` CLI, which searches Deezer/Discogs/iTunes/Last.fm and writes one image per album folder. Lidarr already writes `folder.jpg` for most albums (the convention this matches); this fills the few hundred gaps — and any future imports Lidarr fails to art — so Jellyfin always has a cover. `sacad_r` natively skips folders that already contain the cover file, so runs are incremental and idempotent (only the gaps trigger network calls). Albums with no cover on any source are simply left untouched and retried next run (sacad has no negative cache).
+
+**Dry-run is the default** — a bare invocation walks the tree and prints a plan (album dirs found / already have the cover / missing, plus a sample of missing paths) and downloads nothing. `--apply` is required to fetch.
+
+```bash
+python scripts/album_art.py                       # dry-run: plan only, downloads nothing
+python scripts/album_art.py --music-dir /mnt/drive/music
+python scripts/album_art.py --apply               # download missing folder.jpg at 1000px (cron uses this)
+python scripts/album_art.py --apply --size 600    # smaller covers
+python scripts/album_art.py --apply --filename cover.jpg   # different cover filename
+python scripts/album_art.py --apply --ignore-existing      # force re-download ALL (overwrites)
+```
+
+Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited non-zero), `2` fatal (`sacad_r` not installed, music dir missing, unexpected error).
+
+Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded.
+
 ## 🧪 Testing & Linting
 
 Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.

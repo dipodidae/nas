@@ -263,6 +263,13 @@ Scripts in `scripts/` that run on-demand (not cron) against the live stack:
   out of `complete/manual/`). Acts by default; `--dry-run` to preview. Uses
   `QBITTORRENT_USER` / `QBITTORRENT_PASS` / `QBITTORRENT_HOST`.
 
+Cron-driven media maintenance scripts (`album_art.py`, `replaygain.py`) are the
+opposite default — **dry-run unless `--apply` is passed**. `album_art.py`
+backfills missing `folder.jpg` album covers via sacad's `sacad_r`; it reuses
+`SHARE_DIRECTORY` (music root = `$SHARE_DIRECTORY/music`) and adds no new `.env`
+key. Requires `sacad` in the venv (pinned in `scripts/requirements.txt`). Runs
+weekly (Sun 04:45, flock-guarded). See `scripts/README.md` for details.
+
 ## Exit Codes (Python Scripts)
 
 - `0` - Success
