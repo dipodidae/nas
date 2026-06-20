@@ -16,6 +16,9 @@ ruff>=0.6.0
 # Testing (CI + local)
 pytest>=8.3.0
 
+# Album-art backfill — provides the sacad_r CLI (scripts/album_art.py)
+sacad==2.8.3
+
 # NOTE: Versions are specified with minimum bounds to allow security patches.
 # For fully reproducible builds you can generate a lock snapshot:
 #   pip freeze > scripts/requirements.lock
