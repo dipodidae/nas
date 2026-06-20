@@ -1,3 +1,7 @@
 [submodule "webapps/jellyfin-playlist-generator"]
 	path = webapps/jellyfin-playlist-generator
 	url = https://github.com/dipodidae/jellyfin-playlist-generator.git
+[submodule "webapps/ongehoord/src"]
+	path = webapps/ongehoord/src
+	url = https://github.com/dipodidae/ongehoord-ui-content.git
+	branch = dev
