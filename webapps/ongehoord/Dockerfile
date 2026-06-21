@@ -33,11 +33,16 @@ COPY src/ ./
 RUN pnpm install --frozen-lockfile
 
 # Replicate upstream's proven node-server recipe (package.json "build:e2e"):
-# prepare types, build with the node-server preset, then bundle the prebuilt
-# @nuxt/content SQLite DB next to the server entry so content resolves at runtime.
+# prepare types, build with the node-server preset. A failed build (e.g. a
+# prerender error) MUST fail the image build — otherwise we ship an image with
+# no .output/server/index.mjs that crash-loops on start.
 RUN pnpm nuxi prepare \
- && NITRO_PRESET=node-server pnpm nuxt build \
- && cp .data/content/contents.sqlite .output/server/ 2>/dev/null || true
+ && NITRO_PRESET=node-server pnpm nuxt build
+
+# Bundle the prebuilt @nuxt/content SQLite DB next to the server entry so content
+# resolves at runtime. The `|| true` is scoped to ONLY this cp (the DB may be
+# absent), and must not mask the build step above.
+RUN cp .data/content/contents.sqlite .output/server/ 2>/dev/null || true
 
 # ---- runtime stage ---------------------------------------------------------
 FROM node:22-alpine AS runtime

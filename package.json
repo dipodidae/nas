@@ -86,7 +86,8 @@
     "qbt:kickstart:dry": "bash -c '. .venv/bin/activate && python scripts/qbittorrent_stalled_kickstart.py --dry-run'",
     "ops:status": "bash -c '. .venv/bin/activate && python scripts/media_ops_status.py'",
     "replaygain": "bash -c '. .venv/bin/activate && python scripts/replaygain.py'",
-    "replaygain:apply": "bash -c '. .venv/bin/activate && python scripts/replaygain.py --apply'"
+    "replaygain:apply": "bash -c '. .venv/bin/activate && python scripts/replaygain.py --apply'",
+    "ongehoord:deploy": "bash webapps/ongehoord/redeploy.sh"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",
