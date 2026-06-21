@@ -21,6 +21,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # webapps/ongehoord
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"               # nas repo root
 SUBMODULE="${SCRIPT_DIR}/src"
 
+# Route build temp off /tmp. On this host /tmp is a quota'd tmpfs that fills up
+# (large unrelated files exhaust the per-user quota); `docker compose build`
+# then can't write its metadata file and aborts with "disk quota exceeded".
+# Use a repo-local dir on the roomy ext4 root instead. It sits outside the
+# build context (webapps/ongehoord) so it's not sent to the daemon.
+export TMPDIR="${REPO_ROOT}/.deploy-tmp"
+mkdir -p "${TMPDIR}"
+
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 log "Ensuring submodule is initialised"

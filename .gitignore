@@ -1,4 +1,5 @@
 .env
+.env.ongehoord
 
 # Logs
 logs/
@@ -26,3 +27,6 @@ vpn-configs/
 
 # never commit env backups (they contain real secrets)
 .env.bak*
+
+# ongehoord redeploy build-temp (TMPDIR routed off the quota'd /tmp tmpfs)
+.deploy-tmp/
