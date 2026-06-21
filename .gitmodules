@@ -4,4 +4,4 @@
 [submodule "webapps/ongehoord/src"]
 	path = webapps/ongehoord/src
 	url = https://github.com/dipodidae/ongehoord-ui-content.git
-	branch = dev
+	branch = acceptance

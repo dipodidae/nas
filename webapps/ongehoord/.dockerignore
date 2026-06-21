@@ -1,0 +1,20 @@
+# Keep the build context lean — these never affect the production build.
+src/.git
+src/.github
+src/.windsurf
+src/.vscode
+src/.claude
+src/.pi
+src/node_modules
+src/.nuxt
+src/.output
+src/.data
+src/dist
+src/docs
+src/e2e
+src/screenshots
+src/test-stubs
+src/**/*.test.ts
+src/**/*.nuxt.test.ts
+src/skills-lock.json
+src/*-log.json

@@ -1,0 +1,32 @@
+## ongehoord.subdomain.conf — copy to:
+##   ${CONFIG_DIRECTORY}/swag/nginx/proxy-confs/ongehoord.subdomain.conf
+## Preview of the dipodidae/ongehoord-ui-content `dev` branch.
+## Whole site is gated by HTTP basic auth (creds in webapps/ongehoord/.env →
+## baked into /config/nginx/.htpasswd-ongehoord). Auth is at THIS proxy layer,
+## NOT in the app.
+# make sure that your ongehoord container is named ongehoord
+# make sure that your dns has a CNAME for ongehoord pointing at PUBLIC_DOMAIN
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name ongehoord.*;
+
+    include /config/nginx/ssl.conf;
+
+    client_max_body_size 5m;
+
+    location / {
+        # HTTP basic auth gate for the whole preview.
+        auth_basic "ongehoord preview";
+        auth_basic_user_file /config/nginx/.htpasswd-ongehoord;
+
+        include /config/nginx/proxy.conf;
+        include /config/nginx/resolver.conf;
+        set $upstream_app ongehoord;
+        set $upstream_port 3000;
+        set $upstream_proto http;
+        proxy_pass $upstream_proto://$upstream_app:$upstream_port;
+    }
+}
