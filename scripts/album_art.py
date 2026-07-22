@@ -38,6 +38,17 @@ Environment
   SHARE_DIRECTORY   Base share path (default: /mnt/drive). Music root resolves
                     to ``$SHARE_DIRECTORY/music`` unless ``--music-dir`` given.
 
+Overwrite-once
+--------------
+``--overwrite-once`` overwrites each album's cover ONE time with a fresh
+sacad-sourced image (``sacad_r -i`` per folder), then drops a hidden
+``.album_art_done`` marker so consecutive runs skip that folder forever. New
+albums arrive unmarked and get their one pass automatically. ``--limit N``
+(default 300) caps folders per run so the first pass drains over several runs.
+A cover is never blanked: sacad leaves existing art in place when no source
+has a replacement. Folders that end a run with no cover stay unmarked and are
+retried next run (same as plain gap-fill).
+
 Usage
 -----
   # Dry-run (default) — prints plan, downloads nothing
@@ -46,11 +57,14 @@ Usage
   # Plan for a specific directory
   python scripts/album_art.py --music-dir /mnt/drive/music
 
-  # Download missing covers at 1000px
+  # Fill only MISSING covers (tree-wide, cheap)
   python scripts/album_art.py --apply
 
-  # Force re-download for ALL albums (overwrite existing covers)
+  # Force re-download for ALL albums, every run (overwrite existing covers)
   python scripts/album_art.py --apply --ignore-existing
+
+  # Overwrite each album's cover once, then never again (the cron mode)
+  python scripts/album_art.py --apply --overwrite-once --limit 300
 """
 
 from __future__ import annotations

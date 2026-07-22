@@ -660,20 +660,23 @@ Safe by design: no deletions, no forceful state resets. One reannounce per batch
 
 Backfills **missing external album covers** (`folder.jpg`) across the music library by delegating to [sacad](https://github.com/desbma/sacad)'s recursive `sacad_r` CLI, which searches Deezer/Discogs/iTunes/Last.fm and writes one image per album folder. Lidarr already writes `folder.jpg` for most albums (the convention this matches); this fills the few hundred gaps — and any future imports Lidarr fails to art — so Jellyfin always has a cover. `sacad_r` natively skips folders that already contain the cover file, so runs are incremental and idempotent (only the gaps trigger network calls). Albums with no cover on any source are simply left untouched and retried next run (sacad has no negative cache).
 
+**Overwrite-once (`--overwrite-once`)** — much Lidarr/embedded art is low quality. This mode overwrites each album's cover *once* with a fresh sacad image (`sacad_r -i` per folder), then drops a hidden `.album_art_done` marker so consecutive runs skip that folder forever. New albums arrive unmarked and get their one pass on the next run. `--limit N` (default 300) caps folders per run so the first big pass drains across several runs. **A cover is never blanked** — sacad leaves existing art in place when no source has a replacement. A folder that still has no cover after its attempt stays unmarked and is retried next run (identical to plain gap-fill). `--marker` overrides the sidecar filename. This is the mode the weekly cron uses.
+
 **Dry-run is the default** — a bare invocation walks the tree and prints a plan (album dirs found / already have the cover / missing, plus a sample of missing paths) and downloads nothing. `--apply` is required to fetch.
 
 ```bash
 python scripts/album_art.py                       # dry-run: plan only, downloads nothing
 python scripts/album_art.py --music-dir /mnt/drive/music
-python scripts/album_art.py --apply               # download missing folder.jpg at 1000px (cron uses this)
+python scripts/album_art.py --apply               # fill only MISSING folder.jpg at 1000px
 python scripts/album_art.py --apply --size 600    # smaller covers
 python scripts/album_art.py --apply --filename cover.jpg   # different cover filename
-python scripts/album_art.py --apply --ignore-existing      # force re-download ALL (overwrites)
+python scripts/album_art.py --apply --ignore-existing      # force re-download ALL, every run
+python scripts/album_art.py --apply --overwrite-once --limit 300  # overwrite once then freeze (cron uses this)
 ```
 
 Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited non-zero), `2` fatal (`sacad_r` not installed, music dir missing, unexpected error).
 
-Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded.
+Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 300`.
 
 ## 🧪 Testing & Linting
 
