@@ -77,6 +77,8 @@ AUDIO_EXTENSIONS: frozenset[str] = frozenset(
 DEFAULT_SHARE_DIRECTORY = "/mnt/drive"
 DEFAULT_SIZE = 1000
 DEFAULT_COVER_FILENAME = "folder.jpg"
+DEFAULT_MARKER_FILENAME = ".album_art_done"
+DEFAULT_LIMIT = 300
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +96,9 @@ class RunConfig:
     size: int
     cover_filename: str
     ignore_existing: bool
+    overwrite_once: bool
+    limit: int
+    marker_filename: str
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +164,71 @@ def summarize_plan(
     return "\n".join(lines)
 
 
+def dir_is_marked(d: Path, marker_filename: str) -> bool:
+    """True if *d* already carries the overwrite-once sidecar marker."""
+    return (d / marker_filename).exists()
+
+
+def partition_by_marker(
+    dirs: list[Path], marker_filename: str
+) -> tuple[list[Path], list[Path]]:
+    """Split *dirs* into (marked, unmarked), preserving input order.
+
+    Marked dirs have already had their one overwrite and are skipped forever.
+    """
+    marked: list[Path] = []
+    unmarked: list[Path] = []
+    for d in dirs:
+        (marked if dir_is_marked(d, marker_filename) else unmarked).append(d)
+    return marked, unmarked
+
+
+def select_batch(unmarked: list[Path], limit: int) -> tuple[list[Path], list[Path]]:
+    """Return (batch, deferred): the first *limit* dirs to process this run.
+
+    ``limit <= 0`` disables the cap (process everything now).
+    """
+    if limit <= 0:
+        return list(unmarked), []
+    return unmarked[:limit], unmarked[limit:]
+
+
+def build_overwrite_cmd(target_dir: Path, size: int, cover_filename: str) -> list[str]:
+    """Build a per-folder ``sacad_r -i`` command that force-refreshes one album.
+
+    ``-i`` ignores any existing cover and re-downloads; sacad leaves the
+    existing file in place when no source has art, so a cover is never blanked.
+    """
+    return ["sacad_r", "-i", str(target_dir), str(size), cover_filename]
+
+
+def summarize_overwrite_plan(
+    *,
+    total: int,
+    n_marked: int,
+    n_overwrite: int,
+    n_gap: int,
+    n_batch: int,
+    n_deferred: int,
+    sample: list[Path],
+    cover_filename: str,
+    sample_n: int = 5,
+) -> str:
+    """Human-readable dry-run summary for --overwrite-once (no I/O)."""
+    lines: list[str] = [
+        f"Found {total} album director{'y' if total == 1 else 'ies'}.",
+        f"  {n_marked} already marked done (skip).",
+        f"  {n_overwrite} unmarked with existing art (overwrite once).",
+        f"  {n_gap} unmarked missing {cover_filename} (gap fill).",
+        f"  {n_batch} will be processed this run; {n_deferred} deferred to a later run.",
+    ]
+    if sample:
+        shown = sample[:sample_n]
+        lines.append(f"Sample to process (first {len(shown)}):")
+        lines.extend(f"  {d}" for d in shown)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -210,6 +280,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Force re-download for ALL albums, overwriting existing covers (sacad_r -i).",
     )
+    parser.add_argument(
+        "--overwrite-once",
+        action="store_true",
+        default=False,
+        help=(
+            "Overwrite each album's cover ONCE (sacad_r -i per folder), then "
+            "mark it done so consecutive runs skip it. Requires --apply."
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        metavar="N",
+        help=(
+            f"Max album folders to process per --overwrite-once run "
+            f"(default {DEFAULT_LIMIT}; <=0 means no cap)."
+        ),
+    )
+    parser.add_argument(
+        "--marker",
+        default=DEFAULT_MARKER_FILENAME,
+        help=(
+            f"Sidecar filename marking a folder as already overwritten "
+            f"(default {DEFAULT_MARKER_FILENAME})."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -222,12 +319,77 @@ def _resolve_config(args: argparse.Namespace) -> RunConfig:
         size=args.size,
         cover_filename=args.filename,
         ignore_existing=args.ignore_existing,
+        overwrite_once=args.overwrite_once,
+        limit=args.limit,
+        marker_filename=args.marker,
     )
 
 
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
+
+def _run_overwrite_once(config: RunConfig, album_dirs: list[Path]) -> int:
+    """Overwrite each unmarked album's cover once, then mark it done.
+
+    Returns an exit code (0 success, 1 if any per-folder sacad_r failed).
+    """
+    marked, unmarked = partition_by_marker(album_dirs, config.marker_filename)
+    gap = dirs_missing_cover(unmarked, config.cover_filename)
+    n_gap = len(gap)
+    n_overwrite = len(unmarked) - n_gap
+    batch, deferred = select_batch(unmarked, config.limit)
+
+    print(
+        summarize_overwrite_plan(
+            total=len(album_dirs),
+            n_marked=len(marked),
+            n_overwrite=n_overwrite,
+            n_gap=n_gap,
+            n_batch=len(batch),
+            n_deferred=len(deferred),
+            sample=batch,
+            cover_filename=config.cover_filename,
+        )
+    )
+
+    if config.dry_run:
+        print(
+            "\nDRY-RUN: nothing downloaded. Pass --apply to overwrite the "
+            f"{len(batch)} folder(s) above."
+        )
+        return 0
+
+    if not batch:
+        print("\nNothing to do — every album is already marked done.")
+        return 0
+
+    marker_body = (
+        f"album_art.py overwrite-once size={config.size} "
+        f"cover={config.cover_filename}\n"
+    )
+    exit_code = 0
+    print(f"\nOverwriting covers for {len(batch)} folder(s) with sacad_r -i…")
+    for d in batch:
+        cmd = build_overwrite_cmd(d, config.size, config.cover_filename)
+        result = subprocess.run(cmd, check=False)  # noqa: S603 — controlled input
+        if result.returncode != 0:
+            print(
+                f"WARNING: sacad_r exited {result.returncode} for {d}",
+                file=sys.stderr,
+            )
+            exit_code = 1
+        # Mark done iff a cover now exists (overwritten OR pre-existing art kept).
+        # A still-empty gap stays unmarked so future runs retry it.
+        if (d / config.cover_filename).exists():
+            (d / config.marker_filename).write_text(marker_body)
+
+    print(
+        f"Done. Processed {len(batch)} folder(s); "
+        f"{len(deferred)} deferred to a later run."
+    )
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -264,11 +426,16 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"Scanning {config.music_dir} for album directories…")
         album_dirs = discover_album_dirs(config.music_dir, AUDIO_EXTENSIONS)
-        missing = dirs_missing_cover(album_dirs, config.cover_filename)
-        print(summarize_plan(album_dirs, missing, config.cover_filename))
 
         if not album_dirs:
+            print(summarize_plan(album_dirs, [], config.cover_filename))
             return 0
+
+        if config.overwrite_once:
+            return _run_overwrite_once(config, album_dirs)
+
+        missing = dirs_missing_cover(album_dirs, config.cover_filename)
+        print(summarize_plan(album_dirs, missing, config.cover_filename))
 
         cmd = build_sacad_cmd(config)
         print(f"sacad command: {' '.join(cmd)}")
