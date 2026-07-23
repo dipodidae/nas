@@ -562,6 +562,53 @@ services:
         max-size: 10m
         max-file: '2'
 
+  # qui: modern web UI for qBittorrent (autobrr/qui). NOT a torrent client — it
+  # has no BitTorrent engine and talks to the existing qBittorrent daemon over
+  # its WebUI API at qbittorrent:8080 (gluetun's nas-network alias), exactly
+  # like the *arr clients. Plain nas-network service (NOT in gluetun's netns).
+  # No PUID/PGID support upstream, so the user is set directly. Config + SQLite
+  # (qui.db) live in /config. Admin account and the qBittorrent instance are
+  # created in the web UI on first run (qui cannot be seeded from env).
+  qui:
+    image: ghcr.io/autobrr/qui:latest
+    container_name: qui
+    user: '${PUID:-1000}:${PGID:-1000}'
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+      - QUI__HOST=0.0.0.0
+      - QUI__PORT=7476
+      - QUI__SESSION_SECRET=${QUI_SESSION_SECRET}
+    volumes:
+      - ${CONFIG_DIRECTORY}/qui:/config
+    ports:
+      - '127.0.0.1:7476:7476'
+    restart: unless-stopped
+    depends_on:
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - swag_port=7476
+      - swag_proto=http
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:7476/']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
   # NOTE: Jellyfin volume mappings are NOT to be changed per owner's instructions
   jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
@@ -768,6 +815,50 @@ services:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:3000/healthz']
       interval: 60s
       timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # webapps/ongehoord — self-hosted PREVIEW of dipodidae/ongehoord-ui-content
+  # (Nuxt 4 + @nuxt/content), pinned to the `dev` branch via the nested git
+  # submodule at webapps/ongehoord/src. Upstream ships to Vercel with no
+  # Dockerfile, so webapps/ongehoord/Dockerfile builds the nitro node-server
+  # output. Locally built → unlabeled (Watchtower can't pull); update by pulling
+  # the submodule and rebuilding. SWAG fronts it at ongehoord.${PUBLIC_DOMAIN}
+  # with HTTP basic auth at the proxy layer (creds in webapps/ongehoord/.env →
+  # /config/nginx/.htpasswd-ongehoord); the app itself has NO auth. App runtime
+  # secrets (Vimeo/Maps/OpenAI/etc.) come from ~/nas/.env.ongehoord via env_file.
+  # No host port: SWAG reaches it in-network at ongehoord:3000.
+  ongehoord:
+    build:
+      context: ./webapps/ongehoord
+    image: nas/ongehoord:latest
+    pull_policy: build
+    container_name: ongehoord
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+      - NITRO_HOST=0.0.0.0
+      - NITRO_PORT=3000
+    # App runtime secrets (NUXT_* tokens). Gitignored, user-managed.
+    env_file:
+      - ./.env.ongehoord
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:3000/nl']
+      interval: 60s
+      timeout: 5s
       retries: 3
       start_period: 45s
     logging:
