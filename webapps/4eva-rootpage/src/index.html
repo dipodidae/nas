@@ -27,8 +27,7 @@
         padding: 2rem;
         background:
           radial-gradient(ellipse at 20% 50%, rgba(88, 28, 135, 0.08) 0%, transparent 50%),
-          radial-gradient(ellipse at 80% 20%, rgba(15, 82, 186, 0.06) 0%, transparent 50%),
-          #0a0a0f;
+          radial-gradient(ellipse at 80% 20%, rgba(15, 82, 186, 0.06) 0%, transparent 50%), #0a0a0f;
       }
 
       .container {
@@ -39,8 +38,14 @@
       }
 
       @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(12px); }
-        to { opacity: 1; transform: translateY(0); }
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       h1 {
@@ -104,12 +109,24 @@
         flex-shrink: 0;
       }
 
-      .dot--purple { background: #a78bfa; }
-      .dot--blue { background: #60a5fa; }
-      .dot--emerald { background: #34d399; }
-      .dot--amber { background: #fbbf24; }
-      .dot--rose { background: #fb7185; }
-      .dot--cyan { background: #22d3ee; }
+      .dot--purple {
+        background: #a78bfa;
+      }
+      .dot--blue {
+        background: #60a5fa;
+      }
+      .dot--emerald {
+        background: #34d399;
+      }
+      .dot--amber {
+        background: #fbbf24;
+      }
+      .dot--rose {
+        background: #fb7185;
+      }
+      .dot--cyan {
+        background: #22d3ee;
+      }
 
       footer {
         margin-top: 4rem;
@@ -124,24 +141,12 @@
       <h1>4eva.me</h1>
       <p class="subtitle">Select a service to continue</p>
       <div class="grid">
-        <a href="https://jellyfin.4eva.me">
-          <span class="dot dot--purple"></span> Jellyfin
-        </a>
-        <a href="https://jellyseerr.4eva.me">
-          <span class="dot dot--blue"></span> Jellyseerr
-        </a>
-        <a href="https://sonarr.4eva.me">
-          <span class="dot dot--emerald"></span> Sonarr
-        </a>
-        <a href="https://radarr.4eva.me">
-          <span class="dot dot--amber"></span> Radarr
-        </a>
-        <a href="https://bazarr.4eva.me">
-          <span class="dot dot--rose"></span> Bazarr
-        </a>
-        <a href="https://lidarr-bulk.4eva.me">
-          <span class="dot dot--cyan"></span> Lidarr Bulk
-        </a>
+        <a href="https://jellyfin.4eva.me"> <span class="dot dot--purple"></span> Jellyfin </a>
+        <a href="https://jellyseerr.4eva.me"> <span class="dot dot--blue"></span> Jellyseerr </a>
+        <a href="https://sonarr.4eva.me"> <span class="dot dot--emerald"></span> Sonarr </a>
+        <a href="https://radarr.4eva.me"> <span class="dot dot--amber"></span> Radarr </a>
+        <a href="https://bazarr.4eva.me"> <span class="dot dot--rose"></span> Bazarr </a>
+        <a href="https://lidarr-bulk.4eva.me"> <span class="dot dot--cyan"></span> Lidarr Bulk </a>
       </div>
       <footer>homelab</footer>
     </div>

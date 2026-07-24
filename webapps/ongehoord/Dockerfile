@@ -18,18 +18,37 @@ WORKDIR /app
 # in-process IPX/sharp optimizer bundled into the node-server. Without this, every
 # optimized image URL 404s on this self-hosted deployment. sharp's native deps are
 # installed above. The provider is read at build time in nuxt.config.ts.
+# max-old-space-size caps the V8 heap for the nuxt build. 4096 MB was enough
+# until upstream's `acceptance` grew (more @nuxt/content routes + prerendering);
+# the build now peaks past 4 GB and OOMs ("Reached heap limit"). The MS01 host
+# has 32 GB, so give the build generous headroom.
 ENV CI=1 \
-    NODE_OPTIONS=--max-old-space-size=4096 \
+    NODE_OPTIONS=--max-old-space-size=8192 \
     NUXT_IMAGE_PROVIDER=ipx
 
-# corepack pins pnpm to the version in package.json's packageManager field.
+# corepack pins pnpm to the version in package.json's packageManager field
+# (currently pnpm 11).
 RUN corepack enable
+
+# pnpm 11 config shim — upstream still ships pnpm-10-shaped config (overrides in
+# package.json, onlyBuiltDependencies) that pnpm 11 no longer honours; the shim
+# mirrors both into their pnpm 11 homes in pnpm-workspace.yaml. See the file
+# header for the full rationale. COPYed before the source so its layer caches
+# across app-source changes.
+COPY pnpm11-config-shim.mjs /usr/local/bin/pnpm11-config-shim.mjs
 
 # Copy the app source (the submodule checkout).
 COPY src/ ./
 
-# Install with the committed lockfile; pnpm 10 auto-builds the native deps
-# listed under onlyBuiltDependencies in pnpm-workspace.yaml.
+# Reconcile upstream's config with pnpm 11 before installing: without this the
+# frozen install aborts with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH (unread
+# overrides) and then ERR_PNPM_IGNORED_BUILDS (unread native-dep build
+# allow-list). Operates on the in-image copy only.
+RUN node /usr/local/bin/pnpm11-config-shim.mjs
+
+# Install with the committed lockfile; the shim moved the native-dep build
+# allow-list into pnpm 11's `allowBuilds`, so better-sqlite3 / sharp / esbuild
+# compile during install.
 RUN pnpm install --frozen-lockfile
 
 # Replicate upstream's proven node-server recipe (package.json "build:e2e"):

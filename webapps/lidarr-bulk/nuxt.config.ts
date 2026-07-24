@@ -4,7 +4,7 @@ export default defineNuxtConfig({
     compatibilityVersion: 4,
   },
   compatibilityDate: '2025-01-01',
-  modules: ['@nuxt/ui', 'nuxt-auth-utils'],
+  modules: ['@nuxt/eslint', '@nuxt/ui', 'nuxt-auth-utils'],
   devtools: { enabled: true },
   colorMode: {
     preference: 'dark',

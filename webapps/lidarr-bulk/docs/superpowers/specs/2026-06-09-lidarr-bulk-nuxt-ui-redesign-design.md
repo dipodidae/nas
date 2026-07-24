@@ -28,8 +28,8 @@ where Nuxt UI offers a clearly better pattern (toasts, alerts, forms).
   classes (`.panel`, `.tab`, `.status`, `.candidate`, `.kbd`, `nav.top`).
 - `app/app.vue` — top nav chrome (logo + history/settings links + sign-out).
 - `app/pages/index.vue` — 476 lines: 3 tabs, paste-textarea, dry-run + monitor
-  + advanced profile pickers, external-prompt builder, live job-progress view
-  split into needs-attention / working / settled groups.
+  - advanced profile pickers, external-prompt builder, live job-progress view
+    split into needs-attention / working / settled groups.
 - `app/pages/login.vue`, `app/pages/history.vue` (with replay), `app/pages/settings.vue`.
 - `app/components/CandidateRow.vue` (disambiguation picker).
 - `app/composables/useJob.ts` — SSE streaming composable (logic, **kept as-is**).
@@ -43,8 +43,8 @@ where Nuxt UI offers a clearly better pattern (toasts, alerts, forms).
    default); drop the manual `color-scheme` meta (handled by color-mode).
 3. Replace `main.css` entirely with:
    ```css
-   @import "tailwindcss";
-   @import "@nuxt/ui";
+   @import 'tailwindcss';
+   @import '@nuxt/ui';
    ```
    plus a `@theme` block for any font/token tweaks.
 4. `app.config.ts` sets UI defaults:
@@ -72,15 +72,15 @@ where Nuxt UI offers a clearly better pattern (toasts, alerts, forms).
 
 `index.vue` is gutted into focused components, each owning its own logic:
 
-| New component | Replaces | Owns |
-|---|---|---|
-| `BulkAddForm.vue` | paste textarea + controls + advanced + Add-all | parse → `useJob().start`, dry-run/monitor (`USwitch`/`USelect`), advanced profiles in a `UCollapsible`, lazy profile fetch |
-| `AiDiscoverPanel.vue` | the entire `tab === 'ai'` block | GPT generate (`/api/ai/suggest`), AI status fetch, the external-prompt `UCollapsible` with `UCheckbox` flavors, copy-to-clipboard |
-| `JobMonitor.vue` | needs-attention / working / settled panels + summary | renders a `JobSnapshot`, derives counts, groups items |
-| `CandidatePicker.vue` | `CandidateRow.vue` | candidate card with `UAvatar`, pick/skip `UButton`s |
-| `JobItemRow.vue` | the repeated `.item` rows | one item line (label + message + status badge) |
-| `StatusBadge.vue` | the `badge()` function + `.status` CSS | renders a `UBadge` from `ItemStatus` |
-| `HistoryEntryCard.vue` | a history entry block | entry summary + `UCollapsible` detail + replay buttons |
+| New component          | Replaces                                             | Owns                                                                                                                              |
+| ---------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `BulkAddForm.vue`      | paste textarea + controls + advanced + Add-all       | parse → `useJob().start`, dry-run/monitor (`USwitch`/`USelect`), advanced profiles in a `UCollapsible`, lazy profile fetch        |
+| `AiDiscoverPanel.vue`  | the entire `tab === 'ai'` block                      | GPT generate (`/api/ai/suggest`), AI status fetch, the external-prompt `UCollapsible` with `UCheckbox` flavors, copy-to-clipboard |
+| `JobMonitor.vue`       | needs-attention / working / settled panels + summary | renders a `JobSnapshot`, derives counts, groups items                                                                             |
+| `CandidatePicker.vue`  | `CandidateRow.vue`                                   | candidate card with `UAvatar`, pick/skip `UButton`s                                                                               |
+| `JobItemRow.vue`       | the repeated `.item` rows                            | one item line (label + message + status badge)                                                                                    |
+| `StatusBadge.vue`      | the `badge()` function + `.status` CSS               | renders a `UBadge` from `ItemStatus`                                                                                              |
+| `HistoryEntryCard.vue` | a history entry block                                | entry summary + `UCollapsible` detail + replay buttons                                                                            |
 
 After extraction, `index.vue` is just: `UTabs` (Artists / Albums / Discover ✨)
 → the active panel component → `<JobMonitor>`.
@@ -103,21 +103,22 @@ new test.
 
 Every raw element maps to a Nuxt UI component:
 
-| Today | Nuxt UI |
-|---|---|
-| `<textarea>` | `UTextarea` |
-| `<input>` | `UInput` |
-| `<select>` | `USelect` |
-| checkbox | `UCheckbox` / `USwitch` |
-| `<button>` | `UButton` (with `:loading` for "starting…" / "asking GPT…" / "saving…") |
-| `<details>`/`<summary>` | `UCollapsible` |
-| `.tabs` / `.tab` | `UTabs` |
-| `.panel` | `UCard` |
-| `.status` badge | `UBadge` |
-| `.kbd` | `UKbd` |
-| candidate thumbnail | `UAvatar` |
+| Today                   | Nuxt UI                                                                 |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `<textarea>`            | `UTextarea`                                                             |
+| `<input>`               | `UInput`                                                                |
+| `<select>`              | `USelect`                                                               |
+| checkbox                | `UCheckbox` / `USwitch`                                                 |
+| `<button>`              | `UButton` (with `:loading` for "starting…" / "asking GPT…" / "saving…") |
+| `<details>`/`<summary>` | `UCollapsible`                                                          |
+| `.tabs` / `.tab`        | `UTabs`                                                                 |
+| `.panel`                | `UCard`                                                                 |
+| `.status` badge         | `UBadge`                                                                |
+| `.kbd`                  | `UKbd`                                                                  |
+| candidate thumbnail     | `UAvatar`                                                               |
 
 **Feedback upgrade:**
+
 - Inline error `<span>`s (AI generation, login) and the `alert()` in
   history-replay → `useToast()` notifications.
 - Persistent states (Settings "Can't reach Lidarr") → `UAlert`.

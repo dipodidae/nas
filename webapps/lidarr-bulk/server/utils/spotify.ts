@@ -265,6 +265,33 @@ export async function fetchPlaylistTracks(accessToken: string, playlistId: strin
   )
 }
 
+// Map a Spotify /search playlist page into trimmed playlists. Spotify returns
+// `null` entries for playlists it owns / has deprecated (since late 2024), and
+// occasionally rows without an id — drop both before trimming so the UI never
+// renders a phantom card or crashes on a missing id.
+export function playlistsFromSearch(items: (RawPlaylist | null)[]): SpotifyPlaylist[] {
+  return items
+    .filter((p): p is RawPlaylist => p != null && typeof p.id === 'string')
+    .map(trimPlaylist)
+}
+
+// Search ALL public playlists by keyword (not just the connected account's).
+// Thin I/O wrapper around the pure mapper above; a blank query short-circuits
+// so we never spend a request on it. Single page — `limit` results, no paging.
+export async function searchPlaylists(accessToken: string, query: string, limit = 24): Promise<SpotifyPlaylist[]> {
+  const q = query.trim()
+  if (!q)
+    return []
+  const params = new URLSearchParams({ q, type: 'playlist', limit: String(limit) })
+  const res = await fetch(`${SPOTIFY_API}/search?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok)
+    throw new Error(`Spotify API failed (${res.status}): ${await res.text()}`)
+  const body = await res.json() as { playlists?: { items?: (RawPlaylist | null)[] } }
+  return playlistsFromSearch(body.playlists?.items ?? [])
+}
+
 export function trimPlaylist(p: RawPlaylist): SpotifyPlaylist {
   return {
     id: p.id,

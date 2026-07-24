@@ -26,6 +26,7 @@ All four pure functions and their dataclasses are defined in the single script f
 ## Task 1: Scaffold the script — module header, env wiring, `_request`, exit-code skeleton
 
 **Files:**
+
 - Create: `scripts/slskd_lidarr_nuke.py`
 
 - [ ] **Step 1: Write the script scaffold**
@@ -101,7 +102,6 @@ DEFAULT_SLSKD_HOST = "http://localhost:5030"
 DEFAULT_SLSKD_COMPLETE_DIR = "/mnt/drive/downloads/complete/slskd"
 TERMINAL_PREFIX = "Completed"
 
-
 def _request(
   method: str,
   url: str,
@@ -121,7 +121,6 @@ def _request(
   except urllib.error.HTTPError as exc:
     return exc.code, exc.read()
 
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Clean-slate the slskd<->Lidarr pipeline (nuke queue + transfers + folder)."
@@ -138,7 +137,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   )
   return parser.parse_args(argv)
 
-
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
   lidarr_host = os.environ.get("LIDARR_HOST", DEFAULT_LIDARR_HOST).rstrip("/")
@@ -153,7 +151,6 @@ def main(argv: list[str] | None = None) -> int:
     return 2
   # Phases wired in later tasks.
   return 0
-
 
 if __name__ == "__main__":
   sys.exit(main())
@@ -176,6 +173,7 @@ git commit -m "feat(nuke): scaffold slskd<->lidarr clean-slate script"
 ## Task 2: `plan_lidarr_nuke` — select every queue id to delete
 
 **Files:**
+
 - Modify: `scripts/slskd_lidarr_nuke.py`
 - Create: `scripts/tests/test_slskd_lidarr_nuke.py`
 
@@ -190,7 +188,6 @@ from pathlib import Path
 
 import pytest
 
-
 def _load_module():
   root = Path(__file__).resolve().parents[2]
   scripts_dir = root / "scripts"
@@ -204,16 +201,12 @@ def _load_module():
   spec.loader.exec_module(module)
   return module
 
-
 nuke = _load_module()
-
 
 # ---- plan_lidarr_nuke ----------------------------------------------------
 
-
 def test_plan_lidarr_nuke_empty_queue():
   assert nuke.plan_lidarr_nuke([]) == []
-
 
 def test_plan_lidarr_nuke_selects_all_states():
   records = [
@@ -223,7 +216,6 @@ def test_plan_lidarr_nuke_selects_all_states():
     {"id": 4, "status": "warning"},
   ]
   assert nuke.plan_lidarr_nuke(records) == [1, 2, 3, 4]
-
 
 def test_plan_lidarr_nuke_skips_rows_without_int_id():
   records = [{"id": 1}, {"id": None}, {"title": "no id"}, {"id": "x"}]
@@ -264,6 +256,7 @@ git commit -m "feat(nuke): plan_lidarr_nuke selects all queue ids"
 ## Task 3: `collect_slskd_transfers` — partition active vs terminal
 
 **Files:**
+
 - Modify: `scripts/slskd_lidarr_nuke.py`
 - Modify: `scripts/tests/test_slskd_lidarr_nuke.py`
 
@@ -272,10 +265,8 @@ git commit -m "feat(nuke): plan_lidarr_nuke selects all queue ids"
 ```python
 # ---- collect_slskd_transfers ---------------------------------------------
 
-
 def _dl(username, directory, files):
   return {"username": username, "directories": [{"directory": directory, "files": files}]}
-
 
 def test_collect_slskd_transfers_partitions_active_and_terminal():
   payload = [
@@ -289,7 +280,6 @@ def test_collect_slskd_transfers_partitions_active_and_terminal():
   active, terminal = nuke.collect_slskd_transfers(payload)
   assert {(t.username, t.transfer_id) for t in active} == {("alice", "t1"), ("alice", "t2")}
   assert terminal == 2
-
 
 def test_collect_slskd_transfers_empty():
   assert nuke.collect_slskd_transfers([]) == ([], 0)
@@ -358,6 +348,7 @@ git commit -m "feat(nuke): collect_slskd_transfers partitions active vs terminal
 ## Task 4: `spare_basenames` + `plan_folder_sweep` — disk sweep planning with containment
 
 **Files:**
+
 - Modify: `scripts/slskd_lidarr_nuke.py`
 - Modify: `scripts/tests/test_slskd_lidarr_nuke.py`
 
@@ -365,7 +356,6 @@ git commit -m "feat(nuke): collect_slskd_transfers partitions active vs terminal
 
 ```python
 # ---- spare_basenames -----------------------------------------------------
-
 
 def test_spare_basenames_extracts_path_basenames():
   records = [
@@ -376,9 +366,7 @@ def test_spare_basenames_extracts_path_basenames():
   ]
   assert nuke.spare_basenames(records) == {"Album One", "Album Two", "Album Three"}
 
-
 # ---- plan_folder_sweep ---------------------------------------------------
-
 
 def test_plan_folder_sweep_selects_unspared_children(tmp_path):
   root = tmp_path / "slskd"
@@ -390,7 +378,6 @@ def test_plan_folder_sweep_selects_unspared_children(tmp_path):
   (root / "loose.txt").write_text("not a dir")  # files ignored
   targets = nuke.plan_folder_sweep(root, {"Importing Now"})
   assert targets == [drop]
-
 
 def test_plan_folder_sweep_containment_rejects_escape(tmp_path):
   root = tmp_path / "slskd"
@@ -425,7 +412,6 @@ def spare_basenames(records: list[dict]) -> set[str]:
         if name:
           out.add(name)
   return out
-
 
 def plan_folder_sweep(complete_dir: Path, spare: set[str]) -> list[Path]:
   """Direct-child dirs under ``complete_dir`` to delete (not in ``spare``).
@@ -464,6 +450,7 @@ git commit -m "feat(nuke): spare_basenames + plan_folder_sweep with containment 
 ## Task 5: Side-effecting helpers — fetch/delete wrappers
 
 **Files:**
+
 - Modify: `scripts/slskd_lidarr_nuke.py`
 
 These are thin `urllib` wrappers (not unit-tested — they only call `_request`; the planners they feed are tested). Verify against live services in Task 7's manual `--dry-run`.
@@ -477,7 +464,6 @@ def fetch_lidarr_queue(host: str, api_key: str) -> list[dict]:
   if status >= 400:
     raise RuntimeError(f"GET /api/v1/queue returned HTTP {status}")
   return json.loads(body).get("records", []) if body else []
-
 
 def bulk_delete_lidarr(host: str, api_key: str, ids: list[int]) -> bool:
   """DELETE /api/v1/queue/bulk with the graceful teardown params.
@@ -494,7 +480,6 @@ def bulk_delete_lidarr(host: str, api_key: str, ids: list[int]) -> bool:
   status, _ = _request("DELETE", url, api_key, header="X-Api-Key", data=payload)
   return status in (200, 204)
 
-
 def delete_lidarr_item(host: str, api_key: str, queue_id: int) -> bool:
   params = urllib.parse.urlencode(
     {"removeFromClient": "true", "blocklist": "true", "skipRedownload": "true"}
@@ -503,20 +488,17 @@ def delete_lidarr_item(host: str, api_key: str, queue_id: int) -> bool:
   status, _ = _request("DELETE", url, api_key, header="X-Api-Key")
   return status in (200, 204)
 
-
 def fetch_slskd_downloads(host: str, api_key: str) -> list[dict]:
   status, body = _request("GET", f"{host}/api/v0/transfers/downloads", api_key)
   if status >= 400:
     raise RuntimeError(f"GET /api/v0/transfers/downloads returned HTTP {status}")
   return json.loads(body) if body else []
 
-
 def cancel_slskd_transfer(host: str, api_key: str, t: SlskdTransfer) -> bool:
   user = urllib.parse.quote(t.username, safe="")
   url = f"{host}/api/v0/transfers/downloads/{user}/{t.transfer_id}?remove=true"
   status, _ = _request("DELETE", url, api_key)
   return status in (200, 204, 404)  # 404 == already gone
-
 
 def clear_slskd_completed(host: str, api_key: str) -> bool:
   """Bulk-clear all terminal slskd download records.
@@ -546,6 +528,7 @@ git commit -m "feat(nuke): add Lidarr/slskd HTTP helpers"
 ## Task 6: Wire `main()` — three phases, dry-run, summary, exit codes
 
 **Files:**
+
 - Modify: `scripts/slskd_lidarr_nuke.py:main` (replace the placeholder body after env validation)
 
 - [ ] **Step 1: Replace the `# Phases wired in later tasks.` block in `main()`**
@@ -696,6 +679,7 @@ Expected: prints the `=== slskd<->Lidarr CLEAN SLATE ===  [DRY RUN]` banner and 
 ## Task 8: Docs — `scripts/README.md` and `AGENTS.md`
 
 **Files:**
+
 - Modify: `scripts/README.md`
 - Modify: `AGENTS.md`
 
@@ -703,7 +687,7 @@ Expected: prints the `=== slskd<->Lidarr CLEAN SLATE ===  [DRY RUN]` banner and 
 
 Find the section listing the slskd/Lidarr scripts (near `slskd_complete_sweep.py` / `lidarr_stuck_download_reaper.py`) and add an entry matching the surrounding format:
 
-```markdown
+````markdown
 ### `slskd_lidarr_nuke.py`
 
 **Clean-slate button** for the slskd↔Lidarr pipeline — aggressive, on-demand,
@@ -727,10 +711,12 @@ Acts by default; `--dry-run` previews. Phase toggles: `--skip-lidarr`,
 python scripts/slskd_lidarr_nuke.py --dry-run   # preview
 python scripts/slskd_lidarr_nuke.py             # ACT: full clean slate
 ```
+````
 
 Env: `API_KEY_LIDARR`, `API_KEY_SLSKD`, `LIDARR_HOST`, `SLSKD_HOST`,
 `SLSKD_COMPLETE_DIR`. Exit: `0` ok/dry-run/noop, `1` partial, `2` fatal.
-```
+
+````
 
 - [ ] **Step 2: Add the script to the `AGENTS.md` script list**
 
@@ -740,7 +726,7 @@ Find the list of scripts in `AGENTS.md` and add a one-line entry in the same sty
 - `slskd_lidarr_nuke.py` — on-demand clean-slate: nukes the whole Lidarr queue
   (remove+blocklist+skipRedownload), wipes all slskd transfers, and sweeps the
   slskd completed folder. Acts by default; `--dry-run` to preview.
-```
+````
 
 - [ ] **Step 3: Verify the docs reference real flags/env**
 

@@ -11,9 +11,11 @@
 **Component API note:** This codebase has never used Nuxt UI. The exact prop/slot names below reflect Nuxt UI v4 conventions; if `pnpm typecheck` or `pnpm build` reports a prop mismatch, consult the live docs via the `nuxt-ui-remote` MCP (`get-component` / `get-example`) and adjust — the structure stays the same.
 
 **Verification baseline (run before starting):**
+
 ```bash
 cd webapps/lidarr-bulk && pnpm test
 ```
+
 Expected: existing suites (`lidarr`, `openai`, `external-prompt`) PASS. These must stay green throughout.
 
 ---
@@ -21,6 +23,7 @@ Expected: existing suites (`lidarr`, `openai`, `external-prompt`) PASS. These mu
 ### Task 1: Install Nuxt UI and wire the theme
 
 **Files:**
+
 - Modify: `webapps/lidarr-bulk/package.json` (via pnpm)
 - Modify: `webapps/lidarr-bulk/nuxt.config.ts`
 - Replace: `webapps/lidarr-bulk/app/assets/css/main.css`
@@ -30,18 +33,23 @@ Expected: existing suites (`lidarr`, `openai`, `external-prompt`) PASS. These mu
 - [ ] **Step 1: Install packages**
 
 Run:
+
 ```bash
 cd webapps/lidarr-bulk && pnpm add @nuxt/ui tailwindcss
 ```
+
 Expected: `@nuxt/ui` and `tailwindcss` added to `dependencies`.
 
 - [ ] **Step 2: Add the module to `nuxt.config.ts`**
 
 Change the `modules` line to include `@nuxt/ui` and add a `colorMode` default. Final `modules` + new keys:
+
 ```ts
   modules: ['@nuxt/ui', 'nuxt-auth-utils'],
 ```
+
 Remove the `{ name: 'color-scheme', content: 'dark light' }` meta entry from `app.head.meta` (color-mode handles this). Add at top level:
+
 ```ts
   colorMode: {
     preference: 'dark',
@@ -52,8 +60,8 @@ Remove the `{ name: 'color-scheme', content: 'dark light' }` meta entry from `ap
 - [ ] **Step 3: Replace `app/assets/css/main.css` entirely**
 
 ```css
-@import "tailwindcss";
-@import "@nuxt/ui";
+@import 'tailwindcss';
+@import '@nuxt/ui';
 ```
 
 - [ ] **Step 4: Create `app/app.config.ts`**
@@ -89,9 +97,11 @@ export default defineAppConfig({
 - [ ] **Step 6: Verify dev server boots and theme loads**
 
 Run:
+
 ```bash
 cd webapps/lidarr-bulk && pnpm build
 ```
+
 Expected: build succeeds (Nuxt UI present, no missing-module error). The old nav/pages still render via their own markup until later tasks replace them.
 
 - [ ] **Step 7: Commit**
@@ -106,12 +116,14 @@ git commit -m "feat(lidarr-bulk): install Nuxt UI v4 with violet/slate theme"
 ### Task 2: Status badge mapping (pure function + test)
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/shared/status-badge.ts`
 - Create: `webapps/lidarr-bulk/tests/status-badge.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 `webapps/lidarr-bulk/tests/status-badge.test.ts`:
+
 ```ts
 import { describe, expect, it } from 'vitest'
 import type { ItemStatus } from '../shared/types'
@@ -206,6 +218,7 @@ git commit -m "feat(lidarr-bulk): pure statusBadge mapping with test"
 ### Task 3: StatusBadge component
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/components/StatusBadge.vue`
 
 - [ ] **Step 1: Write the component**
@@ -247,12 +260,14 @@ git commit -m "feat(lidarr-bulk): StatusBadge component"
 ### Task 4: Default layout (nav chrome, color-mode, user menu)
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/layouts/default.vue`
 - Modify: `webapps/lidarr-bulk/app/pages/login.vue` (add `layout: false` — confirm already present)
 
 - [ ] **Step 1: Write `app/layouts/default.vue`**
 
 Moves the `/api/me` + `logout()` logic out of `app.vue` (now empty of chrome).
+
 ```vue
 <script setup lang="ts">
 interface Me { authRequired: boolean, user: { name: string } | null }
@@ -352,12 +367,14 @@ git commit -m "feat(lidarr-bulk): default layout with UNavigationMenu, color-mod
 ### Task 5: CandidatePicker component (replaces CandidateRow)
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/components/CandidatePicker.vue`
 - Delete: `webapps/lidarr-bulk/app/components/CandidateRow.vue` (in Task 10 cleanup)
 
 - [ ] **Step 1: Write `CandidatePicker.vue`**
 
 Owns the thumb/title/subtitle derivation that lived in `CandidateRow.vue`, plus the pick/skip controls (so `index.vue` no longer renders the skip button itself).
+
 ```vue
 <script setup lang="ts">
 import type { Candidate } from '~~/shared/types'
@@ -427,6 +444,7 @@ git commit -m "feat(lidarr-bulk): CandidatePicker component"
 ### Task 6: JobItemRow + JobMonitor components
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/components/JobItemRow.vue`
 - Create: `webapps/lidarr-bulk/app/components/JobMonitor.vue`
 
@@ -458,6 +476,7 @@ const label = computed(() =>
 - [ ] **Step 2: Write `JobMonitor.vue`**
 
 Owns all the grouping/counts logic from the old `index.vue` (lines 162-209, 401-474). Emits `choose` so the parent (which holds `useJob`) performs the pick.
+
 ```vue
 <script setup lang="ts">
 import type { Candidate, ItemStatus, JobSnapshot, ParsedItem } from '~~/shared/types'
@@ -565,6 +584,7 @@ git commit -m "feat(lidarr-bulk): JobMonitor + JobItemRow components"
 ### Task 7: BulkAddForm component
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/components/BulkAddForm.vue`
 
 Owns parse → start logic (old `index.vue` lines 126-155), dry-run/monitor controls, and the advanced profile `UCollapsible` with lazy profile fetch (lines 104-119). Takes the shared `useJob` controls via props so the parent owns the single job instance.
@@ -739,6 +759,7 @@ git commit -m "feat(lidarr-bulk): BulkAddForm component"
 ### Task 8: AiDiscoverPanel component
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/components/AiDiscoverPanel.vue`
 
 Owns AI status fetch, GPT generation, and the external-prompt builder (old `index.vue` lines 27-100, 227-309). Pushes generated rows up into the shared blob via `update:blob`.
@@ -895,6 +916,7 @@ git commit -m "feat(lidarr-bulk): AiDiscoverPanel component"
 ### Task 9: Rewrite index.vue to compose the new components
 
 **Files:**
+
 - Modify: `webapps/lidarr-bulk/app/pages/index.vue` (full rewrite)
 
 - [ ] **Step 1: Rewrite `index.vue`**
@@ -986,6 +1008,7 @@ git commit -m "refactor(lidarr-bulk): compose index.vue from Nuxt UI components"
 ### Task 10: Rewrite login.vue + delete CandidateRow
 
 **Files:**
+
 - Modify: `webapps/lidarr-bulk/app/pages/login.vue` (full rewrite)
 - Delete: `webapps/lidarr-bulk/app/components/CandidateRow.vue`
 
@@ -1069,6 +1092,7 @@ git commit -m "refactor(lidarr-bulk): Nuxt UI login form; remove CandidateRow"
 ### Task 11: Rewrite settings.vue
 
 **Files:**
+
 - Modify: `webapps/lidarr-bulk/app/pages/settings.vue` (full rewrite)
 
 - [ ] **Step 1: Rewrite `settings.vue`**
@@ -1167,6 +1191,7 @@ git commit -m "refactor(lidarr-bulk): Nuxt UI settings form"
 ### Task 12: Rewrite history.vue + HistoryEntryCard
 
 **Files:**
+
 - Create: `webapps/lidarr-bulk/app/components/HistoryEntryCard.vue`
 - Modify: `webapps/lidarr-bulk/app/pages/history.vue` (full rewrite)
 

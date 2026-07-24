@@ -3,6 +3,7 @@ import {
   albumItemsFromTracks,
   buildAuthorizeUrl,
   needsRefresh,
+  playlistsFromSearch,
   spotifyEnabled,
   trackDetailsFromItems,
 } from '../server/utils/spotify'
@@ -92,6 +93,33 @@ describe('albumItemsFromTracks', () => {
     // a normal album is not flagged and has no variousArtists key
     expect(res.items[2].variousArtists).toBeUndefined()
     expect(res.items[2].year).toBe(2010)
+  })
+})
+
+describe('playlistsFromSearch', () => {
+  const raw = (id: string, name: string) => ({
+    id,
+    name,
+    owner: { display_name: `${name} owner` },
+    images: [{ url: `https://img/${id}.jpg` }],
+    tracks: { total: 7 },
+  })
+
+  it('drops null and id-less entries, maps the rest via trimPlaylist', () => {
+    const out = playlistsFromSearch([
+      raw('p1', 'Synthwave'),
+      null, // Spotify-owned / deprecated playlists come back as null
+      { name: 'No id', tracks: { total: 3 } } as never,
+      raw('p2', 'Darkwave'),
+    ])
+    expect(out).toEqual([
+      { id: 'p1', name: 'Synthwave', trackCount: 7, imageUrl: 'https://img/p1.jpg', owner: 'Synthwave owner' },
+      { id: 'p2', name: 'Darkwave', trackCount: 7, imageUrl: 'https://img/p2.jpg', owner: 'Darkwave owner' },
+    ])
+  })
+
+  it('returns an empty array for an empty page', () => {
+    expect(playlistsFromSearch([])).toEqual([])
   })
 })
 

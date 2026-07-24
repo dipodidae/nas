@@ -115,7 +115,7 @@ export async function addArtist(c: LidarrArtistCandidate, o: AddArtistOptions): 
 // album too, so the top-level `monitored: true` on the POST body is ignored —
 // we PUT /album/monitor and /artist/editor afterward to force the right state.
 // If the artist already exists Lidarr links it (PUT is a no-op in that case).
-export interface AddAlbumOptions extends AddArtistOptions {}
+export type AddAlbumOptions = AddArtistOptions
 
 export async function addAlbum(c: LidarrAlbumCandidate, o: AddAlbumOptions): Promise<{ id: number, artistId: number }> {
   const artistFid = typeof c.artist === 'string' ? undefined : c.artist?.foreignArtistId
@@ -143,6 +143,12 @@ export async function addAlbum(c: LidarrAlbumCandidate, o: AddAlbumOptions): Pro
     { method: 'POST', body: JSON.stringify(body) },
   )
   if (created?.artistId) {
+    // Wait out the RefreshArtist clobber before re-monitoring (same race the
+    // artist path guards against): the refresh runs AlbumMonitoredService and
+    // unmonitors every album, so PUTting monitor=true before it drains leaves
+    // the album unmonitored — and lidarr_monitor_sweep then re-monitors the
+    // whole discography. Poll the refresh out first, exactly like enforceMonitor.
+    await waitForArtistRefresh(created.artistId).catch(() => undefined)
     await call('/api/v1/artist/editor', {
       method: 'PUT',
       body: JSON.stringify({ artistIds: [created.artistId], monitored: true }),

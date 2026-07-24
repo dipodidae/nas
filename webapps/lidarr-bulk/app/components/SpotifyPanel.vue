@@ -18,6 +18,17 @@ const recreatingId = ref<string | null>(null)
 const result = ref<JellyfinPushResult | null>(null)
 const showResult = ref(false)
 
+// Public-playlist search (all of Spotify, not just this account's playlists).
+const searchQuery = ref('')
+const searchResults = ref<SpotifyPlaylist[]>([])
+const searching = ref(false)
+const searchError = ref<string | null>(null)
+const searched = ref(false) // a search has run — distinguishes "no results" from "not searched yet"
+
+// One resolve/recreate at a time, shared across both grids so a click in one
+// dims the other too.
+const busy = computed(() => resolvingId.value !== null || recreatingId.value !== null)
+
 function describeError(err: unknown): string {
   const e = err as { statusMessage?: string, data?: { statusMessage?: string }, message?: string }
   return e.data?.statusMessage ?? e.statusMessage ?? e.message ?? 'Spotify request failed.'
@@ -61,6 +72,25 @@ onMounted(async () => {
   if (connected.value)
     await loadPlaylists()
 })
+
+async function runSearch(): Promise<void> {
+  const q = searchQuery.value.trim()
+  if (!q || searching.value)
+    return
+  searching.value = true
+  searchError.value = null
+  try {
+    const res = await $fetch<{ playlists: SpotifyPlaylist[] }>('/api/spotify/search-playlists', { query: { q } })
+    searchResults.value = res.playlists
+    searched.value = true
+  }
+  catch (err: unknown) {
+    searchError.value = describeError(err)
+  }
+  finally {
+    searching.value = false
+  }
+}
 
 async function disconnect(): Promise<void> {
   await $fetch('/api/spotify/disconnect', { method: 'POST' })
@@ -139,59 +169,89 @@ async function recreate(playlist: SpotifyPlaylist): Promise<void> {
         </div>
       </div>
 
+      <!-- Search all public Spotify playlists, not just this account's. -->
+      <div class="mt-5">
+        <p class="text-xs uppercase tracking-wide text-muted mb-2">
+          Search all public playlists
+        </p>
+        <form class="flex gap-2" @submit.prevent="runSearch">
+          <UInput
+            v-model="searchQuery"
+            class="flex-1"
+            icon="i-lucide-search"
+            placeholder="e.g. synthwave, 90s rock, rainy day…"
+            :disabled="busy"
+          />
+          <UButton
+            type="submit"
+            icon="i-lucide-search"
+            label="Search"
+            :loading="searching"
+            :disabled="busy || !searchQuery.trim()"
+          />
+        </form>
+
+        <UAlert
+          v-if="searchError"
+          class="mt-3"
+          color="warning"
+          variant="soft"
+          icon="i-lucide-triangle-alert"
+          title="Search failed"
+          :description="searchError"
+        />
+        <div v-else-if="searching" class="mt-3 text-sm text-muted">
+          Searching…
+        </div>
+        <template v-else-if="searched">
+          <div v-if="searchResults.length === 0" class="mt-3 text-sm text-muted">
+            No public playlists matched “{{ searchQuery }}”.
+          </div>
+          <div v-else class="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            <SpotifyPlaylistCard
+              v-for="p in searchResults"
+              :key="p.id"
+              :playlist="p"
+              :busy="busy"
+              :resolving="resolvingId === p.id"
+              :recreating="recreatingId === p.id"
+              :jellyfin-enabled="jellyfinEnabled"
+              @pick="pick(p)"
+              @recreate="recreate(p)"
+            />
+          </div>
+        </template>
+      </div>
+
+      <p class="text-xs uppercase tracking-wide text-muted mt-6 mb-2">
+        Your playlists
+      </p>
       <UAlert
         v-if="loadError"
-        class="mt-4"
         color="warning"
         variant="soft"
         icon="i-lucide-triangle-alert"
         title="Couldn’t load your playlists"
         :description="`${loadError} — if this is a 403, the account must be added under User Management in your Spotify app (apps in Development Mode only allow allowlisted accounts), or disconnect and connect a different account above.`"
       />
-      <div v-else-if="loading" class="mt-4 text-sm text-muted">
+      <div v-else-if="loading" class="text-sm text-muted">
         Loading playlists…
       </div>
-      <div v-else-if="playlists.length === 0" class="mt-4 text-sm text-muted">
+      <div v-else-if="playlists.length === 0" class="text-sm text-muted">
         No playlists found on your account.
       </div>
-      <div v-else class="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-        <div
+      <div v-else class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <SpotifyPlaylistCard
           v-for="p in playlists"
           :key="p.id"
-          class="text-left rounded-lg border border-default p-2 transition"
-          :class="{ 'opacity-50': resolvingId !== null || recreatingId !== null }"
-        >
-          <button
-            type="button"
-            :disabled="resolvingId !== null || recreatingId !== null"
-            class="block w-full text-left hover:opacity-90"
-            @click="pick(p)"
-          >
-            <img v-if="p.imageUrl" :src="p.imageUrl" :alt="p.name" class="w-full aspect-square object-cover rounded-md mb-2">
-            <div v-else class="w-full aspect-square rounded-md mb-2 bg-elevated flex items-center justify-center">
-              <UIcon name="i-lucide-music" class="text-2xl text-muted" />
-            </div>
-            <div class="text-sm font-medium truncate">
-              {{ p.name }}
-            </div>
-            <div class="text-xs text-muted">
-              <template v-if="resolvingId === p.id">resolving…</template>
-              <template v-else>{{ p.trackCount }} track{{ p.trackCount === 1 ? '' : 's' }}</template>
-            </div>
-          </button>
-          <UButton
-            v-if="jellyfinEnabled"
-            class="mt-2 w-full justify-center"
-            size="xs"
-            color="neutral"
-            variant="soft"
-            icon="i-lucide-list-music"
-            :loading="recreatingId === p.id"
-            :disabled="resolvingId !== null || recreatingId !== null"
-            :label="recreatingId === p.id ? 'Recreating…' : 'Recreate in Jellyfin'"
-            @click="recreate(p)"
-          />
-        </div>
+          :playlist="p"
+          :busy="busy"
+          :resolving="resolvingId === p.id"
+          :recreating="recreatingId === p.id"
+          :jellyfin-enabled="jellyfinEnabled"
+          @pick="pick(p)"
+          @recreate="recreate(p)"
+        />
       </div>
     </template>
 

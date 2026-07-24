@@ -39,13 +39,13 @@ One command that:
 
 ## Design decisions (from brainstorming)
 
-| Decision | Choice |
-|---|---|
-| Lidarr fate of nuked rows | `removeFromClient=true&blocklist=true&skipRedownload=true` — graceful client-side cancel, blocklist only the *dead release* (album stays monitored), **no auto re-search** (external automation / lidarr-bulk re-kicks later). |
-| slskd scope | Full wipe: cancel all active/queued transfers **and** clear all terminal records. |
-| Folder sweep | Empty the whole completed/slskd folder except dirs an active Lidarr import references. |
-| Safety gate | Acts by default; `--dry-run` previews. (Matches repo convention.) |
-| Queue blast radius | Entire Lidarr queue — moot, since slskd is Lidarr's only client. |
+| Decision                  | Choice                                                                                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lidarr fate of nuked rows | `removeFromClient=true&blocklist=true&skipRedownload=true` — graceful client-side cancel, blocklist only the _dead release_ (album stays monitored), **no auto re-search** (external automation / lidarr-bulk re-kicks later). |
+| slskd scope               | Full wipe: cancel all active/queued transfers **and** clear all terminal records.                                                                                                                                              |
+| Folder sweep              | Empty the whole completed/slskd folder except dirs an active Lidarr import references.                                                                                                                                         |
+| Safety gate               | Acts by default; `--dry-run` previews. (Matches repo convention.)                                                                                                                                                              |
+| Queue blast radius        | Entire Lidarr queue — moot, since slskd is Lidarr's only client.                                                                                                                                                               |
 
 ## Architecture
 
@@ -62,8 +62,8 @@ observations accurate.
   - Fallback: per-id `DELETE /api/v1/queue/{id}?<same params>` if bulk returns
     an error status.
 - **Why graceful:** Lidarr routes the cancel through Tubifarry, which tears down
-  the matching slskd transfer — so the transfer is removed *with Lidarr's
-  knowledge*, nothing is orphaned. `blocklist=true` blocklists the specific dead
+  the matching slskd transfer — so the transfer is removed _with Lidarr's
+  knowledge_, nothing is orphaned. `blocklist=true` blocklists the specific dead
   release (not the album); the album returns to monitored/missing.
   `skipRedownload=true` suppresses an immediate re-search storm.
 
@@ -129,13 +129,13 @@ plan (queue rows, transfers, dirs + GB) before any destructive action.
 
 ## Environment
 
-| Var | Required | Default |
-|---|---|---|
-| `API_KEY_LIDARR` | yes | — |
-| `API_KEY_SLSKD` | yes | — |
-| `LIDARR_HOST` | no | `http://localhost:8686` |
-| `SLSKD_HOST` | no | `http://localhost:5030` |
-| `SLSKD_COMPLETE_DIR` | no | `/mnt/drive/downloads/complete/slskd` |
+| Var                  | Required | Default                               |
+| -------------------- | -------- | ------------------------------------- |
+| `API_KEY_LIDARR`     | yes      | —                                     |
+| `API_KEY_SLSKD`      | yes      | —                                     |
+| `LIDARR_HOST`        | no       | `http://localhost:8686`               |
+| `SLSKD_HOST`         | no       | `http://localhost:5030`               |
+| `SLSKD_COMPLETE_DIR` | no       | `/mnt/drive/downloads/complete/slskd` |
 
 dotenv fallback when keys aren't already in the environment (same idiom as the
 existing scripts).

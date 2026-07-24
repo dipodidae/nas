@@ -389,13 +389,22 @@ In `webapps/4eva-rootpage/src/ops.html`'s `render(d)` function, near the downloa
 ```
 (If `ops.html` has a dedicated section id better suited than `downloaders`, use it; match the existing `dot()`/`esc()`/`.row`/`.name`/`.sub` markup conventions already in the file.)
 
-- [ ] **Step 12: Build the rootpage and confirm no template break**
+- [ ] **Step 12: Validate the inline JS, then deploy via image rebuild**
 
-Run:
+`webapps/4eva-rootpage` is a **static nginx image** (no vite/pnpm build) — the
+Dockerfile `COPY src/ /usr/share/nginx/html/`. Validate the edited inline
+script parses, then deploy by rebuilding the container:
 ```bash
-cd webapps/4eva-rootpage && pnpm install && pnpm run build && cd -
+# syntax-check the inline <script> block
+python3 - <<'PY'
+import re; h=open('webapps/4eva-rootpage/src/ops.html').read()
+open('/tmp/ops_script.js','w').write(re.search(r'<script>(.*?)</script>', h, re.S).group(1))
+PY
+node --check /tmp/ops_script.js && echo "JS OK"
+# deploy (live action — confirm with owner first)
+docker compose up -d --build 4eva-rootpage
 ```
-Expected: build succeeds, `dist/ops.html` regenerated (SWAG serves `dist/` read-only, so the build is required for the change to go live).
+Expected: `JS OK`, then the container rebuilds and serves the updated `ops.html`.
 
 - [ ] **Step 13: End-to-end smoke against the live API**
 

@@ -46,11 +46,42 @@ describe('addAlbum', () => {
     const methods = calls.map(c => `${c.method} ${c.url.replace('http://lidarr.test', '')}`)
     expect(methods).toEqual([
       'POST /api/v1/album',
+      'GET /api/v1/command',
       'PUT /api/v1/artist/editor',
       'PUT /api/v1/album/monitor',
     ])
-    expect(calls[1].body).toEqual({ artistIds: [7], monitored: true })
-    expect(calls[2].body).toEqual({ albumIds: [42], monitored: true })
+    const editor = calls.find(c => c.url.endsWith('/api/v1/artist/editor'))
+    const monitor = calls.find(c => c.url.endsWith('/api/v1/album/monitor'))
+    expect(editor?.body).toEqual({ artistIds: [7], monitored: true })
+    expect(monitor?.body).toEqual({ albumIds: [42], monitored: true })
+  })
+
+  it('waits out the RefreshArtist clobber (polls /command) before monitoring the album', async () => {
+    // Regression: Lidarr enqueues a RefreshArtist after the album POST that
+    // unmonitors every album. Without waiting it out, the album/monitor PUT
+    // runs first and gets clobbered to unmonitored -> the artist lands with
+    // zero monitored albums, and lidarr_monitor_sweep then re-monitors the
+    // WHOLE discography. The refresh poll MUST precede the monitor PUT.
+    const order: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+      order.push(`${method} ${url.replace('http://lidarr.test', '')}`)
+      if (url.endsWith('/api/v1/album') && method === 'POST')
+        return new Response(JSON.stringify({ id: 42, artistId: 7 }), { status: 201 })
+      return new Response(JSON.stringify([]), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await addAlbum(candidate, opts)
+
+    expect(order).toEqual([
+      'POST /api/v1/album',
+      'GET /api/v1/command',
+      'PUT /api/v1/artist/editor',
+      'PUT /api/v1/album/monitor',
+    ])
+    expect(order.indexOf('GET /api/v1/command')).toBeLessThan(order.indexOf('PUT /api/v1/album/monitor'))
   })
 })
 
