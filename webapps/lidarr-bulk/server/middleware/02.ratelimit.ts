@@ -2,7 +2,7 @@
 // an in-memory ring per IP. SSE streams are excluded so progress doesn't burn
 // budget.
 
-import { createError, defineEventHandler, getHeader, getRequestIP, getRequestURL } from 'h3'
+import { createError, defineEventHandler, getHeader, getRequestIP, getRequestURL, setHeader } from 'h3'
 import { loadEnv } from '../utils/env'
 
 const WINDOW_MS = 60_000
@@ -29,7 +29,15 @@ export default defineEventHandler((event) => {
   const now = Date.now()
   const prev = trim(buckets.get(ip) ?? [], now)
   if (prev.length >= env.RATE_LIMIT_PER_MINUTE) {
-    throw createError({ statusCode: 429, statusMessage: 'Too Many Requests' })
+    // Tell the client when it can retry instead of just refusing: the oldest
+    // request in the window is the one that has to age out.
+    const retryAfterMs = (prev[0] ?? now) + WINDOW_MS - now
+    const retryAfter = Math.max(1, Math.ceil(retryAfterMs / 1000))
+    setHeader(event, 'Retry-After', String(retryAfter))
+    throw createError({
+      statusCode: 429,
+      statusMessage: `Rate limit of ${env.RATE_LIMIT_PER_MINUTE}/min reached — retry in ${retryAfter}s`,
+    })
   }
   prev.push(now)
   buckets.set(ip, prev)

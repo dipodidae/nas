@@ -1,12 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import {
-  albumItemsFromTracks,
-  buildAuthorizeUrl,
-  needsRefresh,
-  playlistsFromSearch,
-  spotifyEnabled,
-  trackDetailsFromItems,
-} from '../server/utils/spotify'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { albumItemsFromTracks, buildAuthorizeUrl, needsRefresh, playlistsFromSearch, resetSpotifyBackoff, spotifyEnabled, spotifyFetch, trackDetailsFromItems } from '../server/utils/spotify'
 
 const ENV = {
   SPOTIFY_API_CLIENT_ID: 'cid',
@@ -151,5 +144,50 @@ describe('trackDetailsFromItems', () => {
       t('Keep', 'Keeper'),
     ])
     expect(out).toEqual([{ title: 'Keep', artist: 'Keeper', album: 'Some Album' }])
+  })
+})
+
+describe('spotifyFetch — 429 handling', () => {
+  beforeEach(() => {
+    resetSpotifyBackoff()
+    vi.unstubAllGlobals()
+  })
+
+  it('retries after a 429 and honours Retry-After', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      calls++
+      return calls === 1
+        ? { status: 429, ok: false, headers: new Headers({ 'retry-after': '1' }), text: async () => 'slow down' }
+        : { status: 200, ok: true, headers: new Headers(), json: async () => ({ items: [] }) }
+    }))
+    const res = await spotifyFetch('https://api.spotify.com/v1/me/playlists', 'tok')
+    expect(res.status).toBe(200)
+    expect(calls).toBe(2)
+  })
+
+  it('gives up after the attempt cap and returns the 429 rather than hanging', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      status: 429,
+      ok: false,
+      // 0s so the test doesn't actually wait; the cap is what's under test.
+      headers: new Headers({ 'retry-after': '0' }),
+      text: async () => 'nope',
+    })))
+    const res = await spotifyFetch('https://api.spotify.com/v1/me/playlists', 'tok')
+    expect(res.status).toBe(429)
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(4)
+  })
+
+  it('passes non-429 responses straight through without retrying', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      status: 401,
+      ok: false,
+      headers: new Headers(),
+      text: async () => 'expired',
+    })))
+    const res = await spotifyFetch('https://api.spotify.com/v1/me', 'tok')
+    expect(res.status).toBe(401)
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(1)
   })
 })

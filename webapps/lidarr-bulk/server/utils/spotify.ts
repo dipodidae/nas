@@ -232,13 +232,55 @@ interface Page<T> { items: T[], next?: string | null, total?: number }
 // round trip per 100 tracks — 19 of them, strictly sequential, for a 1842-track
 // playlist. The endpoint also accepts `offset`, and the first response tells us
 // `total`, so every page after the first can be fetched in parallel.
-const PAGE_CONCURRENCY = 5
+const PAGE_CONCURRENCY = 3
 const PAGE_LIMIT = 100
 
+// Spotify answers 429 with a Retry-After (seconds) and the limit is account-wide,
+// so once tripped every later call fails too — including simply listing the user's
+// playlists. Honour the header rather than retrying blind, and pause the whole
+// module for that long so parallel page fetches back off together instead of each
+// discovering the limit for itself.
+const SPOTIFY_MAX_ATTEMPTS = 4
+const SPOTIFY_MAX_BACKOFF_MS = 30_000
+let spotifyPausedUntil = 0
+
+const napt = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+
+function retryAfterMs(res: Response): number {
+  const header = Number.parseInt(res.headers.get('retry-after') ?? '', 10)
+  const ms = Number.isFinite(header) ? header * 1000 : 2000
+  return Math.min(ms, SPOTIFY_MAX_BACKOFF_MS)
+}
+
+export async function spotifyFetch(url: string, accessToken: string): Promise<Response> {
+  for (let attempt = 0; attempt < SPOTIFY_MAX_ATTEMPTS; attempt++) {
+    const pause = spotifyPausedUntil - Date.now()
+    if (pause > 0)
+      await napt(pause)
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+    if (res.status !== 429)
+      return res
+    const wait = retryAfterMs(res)
+    spotifyPausedUntil = Math.max(spotifyPausedUntil, Date.now() + wait)
+    console.warn(`[spotify] 429, backing off ${wait}ms (attempt ${attempt + 1}/${SPOTIFY_MAX_ATTEMPTS})`)
+    if (attempt === SPOTIFY_MAX_ATTEMPTS - 1)
+      return res
+  }
+  throw new Error('unreachable')
+}
+
+export function resetSpotifyBackoff(): void {
+  spotifyPausedUntil = 0
+}
+
 async function getPage<T>(accessToken: string, url: string): Promise<Page<T>> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-  if (!res.ok)
-    throw new Error(`Spotify API failed (${res.status}): ${await res.text()}`)
+  const res = await spotifyFetch(url, accessToken)
+  if (!res.ok) {
+    const body = await res.text()
+    if (res.status === 429)
+      throw new Error(`Spotify rate limit hit (429) — try again in a moment: ${body.slice(0, 120)}`)
+    throw new Error(`Spotify API failed (${res.status}): ${body}`)
+  }
   return await res.json() as Page<T>
 }
 
@@ -279,10 +321,7 @@ async function fetchAllPages<T>(accessToken: string, first: string): Promise<T[]
   const out: T[] = []
   let url: string | null = first.startsWith('http') ? first : `${SPOTIFY_API}${first}`
   while (url) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-    if (!res.ok)
-      throw new Error(`Spotify API failed (${res.status}): ${await res.text()}`)
-    const page = await res.json() as Page<T>
+    const page: Page<T> = await getPage<T>(accessToken, url)
     out.push(...(page.items ?? []))
     url = page.next ?? null
   }
@@ -327,11 +366,13 @@ export async function searchPlaylists(accessToken: string, query: string, limit 
   if (!q)
     return []
   const params = new URLSearchParams({ q, type: 'playlist', limit: String(limit) })
-  const res = await fetch(`${SPOTIFY_API}/search?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  })
-  if (!res.ok)
-    throw new Error(`Spotify API failed (${res.status}): ${await res.text()}`)
+  const res = await spotifyFetch(`${SPOTIFY_API}/search?${params.toString()}`, accessToken)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(res.status === 429
+      ? `Spotify rate limit hit (429) — try again in a moment`
+      : `Spotify API failed (${res.status}): ${text}`)
+  }
   const body = await res.json() as { playlists?: { items?: (RawPlaylist | null)[] } }
   return playlistsFromSearch(body.playlists?.items ?? [])
 }

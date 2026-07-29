@@ -745,7 +745,7 @@ services:
       - JELLYFIN_URL=http://jellyfin:8096
       - JELLYFIN_API_KEY=${API_KEY_JELLYFIN}
       - JELLYFIN_USER_ID=${JELLYFIN_USER_ID}
-      - RATE_LIMIT_PER_MINUTE=30
+      - RATE_LIMIT_PER_MINUTE=300
       - BODY_LIMIT_BYTES=262144
     volumes:
       - ${CONFIG_DIRECTORY}/lidarr-bulk:/config

@@ -12,7 +12,11 @@ const schema = z.object({
   APP_USERNAME: z.string().optional().default(''),
   APP_PASSWORD: z.string().optional().default(''),
   CONFIG_DIR: z.string().default('/config'),
-  RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
+  // Per-IP sliding window on /api/*. Sized for a single-user UI that makes one
+  // request per candidate pick: 30 was tripping mid-session on a playlist with a
+  // couple of dozen ambiguous rows, and once tripped it 429s *everything* —
+  // including loading the Spotify playlists.
+  RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(300),
   BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(262144),
   // Optional — enables the AI "Discover" tab. When unset, the endpoint 503s and
   // the tab tells the user it's disabled.

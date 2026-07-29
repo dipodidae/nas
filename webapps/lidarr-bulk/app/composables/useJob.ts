@@ -61,13 +61,29 @@ export function useJob() {
     })
   }
 
+  // Picking is one request per click, so a session working through a couple of
+  // dozen ambiguous rows is the most likely thing to meet the per-IP limit. A
+  // rejected pick would otherwise be lost — the click did nothing and the row
+  // stays stuck — so honour Retry-After and try again rather than surfacing it.
   async function choose(itemId: string, candidate: Candidate | null): Promise<void> {
     if (!job.value)
       return
-    await $fetch(`/api/jobs/${job.value.id}/choose`, {
-      method: 'POST',
-      body: { itemId, candidate },
-    })
+    const url = `/api/jobs/${job.value.id}/choose`
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await $fetch(url, { method: 'POST', body: { itemId, candidate } })
+        return
+      }
+      catch (err: unknown) {
+        const e = err as { status?: number, statusCode?: number, response?: { headers?: Headers } }
+        const status = e.status ?? e.statusCode
+        if (status !== 429 || attempt === 2)
+          throw err
+        const retryAfter = Number.parseInt(e.response?.headers?.get('retry-after') ?? '', 10)
+        const waitMs = Math.min(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1500, 10_000)
+        await new Promise(r => setTimeout(r, waitMs))
+      }
+    }
   }
 
   onScopeDispose(close)
