@@ -10,6 +10,7 @@ import type {
   LidarrAlbumCandidate,
   ParsedItem,
 } from '~~/shared/types'
+import { mapWithConcurrency } from './concurrency'
 import { learnArtistIdentity, learnedArtistIdentity, resolveAlbumViaArtist, resolveByCandidateAlias } from './artist-resolve'
 import { pruneHistory, recordJob } from './history'
 import {
@@ -33,7 +34,17 @@ import { loadSettings } from './settings'
 // flooding the upstream.
 const LOOKUP_CONCURRENCY = 6
 
-type Listener = (snap: JobSnapshot) => void
+// SSE protocol. emit() used to push a full JobSnapshot on every status change,
+// which is O(items) per change and therefore O(items²) per job. With ~900 albums
+// and candidate lists attached that reached tens of megabytes per update and made
+// the browser unusable. Now the initial state is sent once and every subsequent
+// change is a single-item patch.
+export type JobEvent =
+  | { type: 'snapshot', snapshot: JobSnapshot }
+  | { type: 'item', item: JobItem }
+  | { type: 'done' }
+
+type Listener = (event: JobEvent) => void
 
 interface JobInternal extends JobSnapshot {
   listeners: Set<Listener>
@@ -67,11 +78,10 @@ function snap(j: JobInternal): JobSnapshot {
   }
 }
 
-function emit(j: JobInternal): void {
-  const s = snap(j)
+function publish(j: JobInternal, event: JobEvent): void {
   for (const l of j.listeners) {
     try {
-      l(s)
+      l(event)
     }
     catch {
       // ignore listener errors
@@ -79,9 +89,15 @@ function emit(j: JobInternal): void {
   }
 }
 
+// Whole-job push. Only for the initial subscribe and for completion — never per
+// status change; see the JobEvent comment.
+function emit(j: JobInternal): void {
+  publish(j, j.done ? { type: 'done' } : { type: 'snapshot', snapshot: snap(j) })
+}
+
 function setStatus(j: JobInternal, item: JobItem, patch: Partial<JobItem>): void {
   Object.assign(item, patch)
-  emit(j)
+  publish(j, { type: 'item', item: { ...item } })
 }
 
 export function createJob(
@@ -128,8 +144,10 @@ export function subscribe(id: string, listener: Listener): (() => void) | undefi
   if (!j)
     return
   j.listeners.add(listener)
-  // Push current state immediately.
-  listener(snap(j))
+  // Push current state immediately, then only deltas.
+  listener({ type: 'snapshot', snapshot: snap(j) })
+  if (j.done)
+    listener({ type: 'done' })
   return () => j.listeners.delete(listener)
 }
 
@@ -207,24 +225,7 @@ async function run(j: JobInternal): Promise<void> {
     })
   }
 
-  // Phase B — serial add worker, but drives by readiness, not input order.
-  // Pulls any 'matched' item first; if none, awaits the next pick to resolve
-  // (which the pick handler will flip to 'matched' or 'skipped'). Adds stay
-  // serial — Lidarr's artist-creation + RefreshArtist wait can't overlap.
-  while (j.items.some(i => i.status === 'matched' || i.status === 'needs-choice')) {
-    const ready = j.items.find(i => i.status === 'matched')
-    if (ready) {
-      await processAdd(j, ready, effective)
-      continue
-    }
-    const pendingPicks = j.items
-      .filter(i => i.status === 'needs-choice')
-      .map(i => j.picks.get(i.id))
-      .filter((p): p is Promise<Candidate | null> => p !== undefined)
-    if (pendingPicks.length === 0)
-      break
-    await Promise.race(pendingPicks)
-  }
+  await runAddPhase(j, effective)
   j.done = true
   emit(j)
   // Record to history file once the job is done (any pending picks turned into
@@ -235,6 +236,86 @@ async function run(j: JobInternal): Promise<void> {
   }
   catch (err) {
     console.error('[job]', j.id, 'history record failed:', err)
+  }
+}
+
+// Phase B — the add worker. Driven by readiness, not input order: it takes any
+// 'matched' item, and when none is ready it waits for the next user pick (which
+// the pick handler flips to 'matched' or 'skipped').
+//
+// Adds run concurrently across artists but strictly sequentially *within* one
+// artist. That split is the whole point. Lidarr enqueues a RefreshArtist after
+// every add, and that refresh runs AlbumMonitoredService and can unmonitor the
+// album we just added — the clobber that waitForArtistRefresh(artistId) exists to
+// wait out. The wait is per-artist, so two adds for the *same* artist would race
+// each other's refresh, while adds for *different* artists never touch the same
+// refresh and are safe in parallel. A playlist is mostly distinct artists, so this
+// turns an hours-long serial queue into roughly a third of that without weakening
+// the monitoring guarantee at all.
+const ADD_CONCURRENCY = 3
+
+function artistKeyOf(item: JobItem): string {
+  if (!item.chosen)
+    return item.id
+  const { mbid, name } = candidateArtist(item.chosen)
+  // Fall back to the item id rather than a shared empty key, so unidentifiable
+  // rows don't all serialise against each other for no reason.
+  return mbid ?? (normKeyLoose(name) || item.id)
+}
+
+async function runAddPhase(j: JobInternal, effective: AppSettings): Promise<void> {
+  // Artists currently being added to. Guarantees same-artist serialisation.
+  const busyArtists = new Set<string>()
+  const inFlight = new Set<Promise<void>>()
+
+  const claimable = (): JobItem | undefined =>
+    j.items.find(i => i.status === 'matched' && !busyArtists.has(artistKeyOf(i)))
+
+  const outstanding = (): boolean =>
+    j.items.some(i => i.status === 'matched' || i.status === 'needs-choice')
+
+  while (outstanding() || inFlight.size > 0) {
+    // Fill the pipeline with work whose artist isn't already busy.
+    while (inFlight.size < ADD_CONCURRENCY) {
+      const item = claimable()
+      if (!item)
+        break
+      const key = artistKeyOf(item)
+      busyArtists.add(key)
+      // Claim it immediately so the next loop iteration can't pick it up again.
+      item.status = 'adding'
+      const task = processAdd(j, item, effective)
+        .catch((err: unknown) => {
+          console.error('[job]', j.id, 'add task crashed:', err)
+        })
+        .finally(() => {
+          busyArtists.delete(key)
+          inFlight.delete(task)
+        })
+      inFlight.add(task)
+    }
+
+    if (inFlight.size === 0) {
+      // Nothing addable. Either everything left is waiting on the user, or the
+      // only ready items belong to artists we're already adding to (impossible
+      // here, since inFlight is empty) — so wait for a pick.
+      const pendingPicks = j.items
+        .filter(i => i.status === 'needs-choice')
+        .map(i => j.picks.get(i.id))
+        .filter((p): p is Promise<Candidate | null> => p !== undefined)
+      if (pendingPicks.length === 0)
+        break
+      await Promise.race(pendingPicks)
+      continue
+    }
+
+    // Wake on the first add finishing, or on a pick arriving — whichever is
+    // first — so a newly-picked item doesn't wait behind a slow add.
+    const pendingPicks = j.items
+      .filter(i => i.status === 'needs-choice')
+      .map(i => j.picks.get(i.id))
+      .filter((p): p is Promise<Candidate | null> => p !== undefined)
+    await Promise.race<unknown>([...inFlight, ...pendingPicks])
   }
 }
 
@@ -262,6 +343,17 @@ function applyOutcome(j: JobInternal, item: JobItem, outcome: SearchOutcome): vo
     return
   }
   if (candidates.length === 0) {
+    // An empty result is only "not found" if the lookup actually succeeded.
+    // Lidarr's metadata proxy returns 503 under load, and calling that
+    // not-found sent perfectly ordinary albums ("Iron Maiden — Somewhere in
+    // Time") to the graveyard with no way for the user to tell.
+    if (outcome.lookupFailed) {
+      setStatus(j, item, {
+        status: 'error',
+        message: `lookup failed, not absent — ${outcome.lookupError ?? 'upstream error'}`,
+      })
+      return
+    }
     setStatus(j, item, { status: 'not-found' })
     return
   }
@@ -269,7 +361,7 @@ function applyOutcome(j: JobInternal, item: JobItem, outcome: SearchOutcome): vo
   // unrelated records as "multiple matches — pick the right one" is worse than
   // saying so: the honest answer is that this release wasn't found, and the user
   // was only ever going to hit Skip.
-  if (j.kind === 'album' && outcome.unrelatedResults) {
+  if (j.kind === 'album' && outcome.unrelatedResults && !outcome.lookupFailed) {
     setStatus(j, item, {
       status: 'not-found',
       message: `no release by ${item.parsed.artist} found (${candidates.length} unrelated result${candidates.length === 1 ? '' : 's'} discarded)`,
@@ -376,30 +468,6 @@ async function processAdd(j: JobInternal, item: JobItem, effective: AppSettings)
   }
 }
 
-export async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0)
-    return []
-  const out: R[] = Array.from({ length: items.length })
-  let next = 0
-  const workerCount = Math.min(Math.max(1, concurrency), items.length)
-  const workers: Promise<void>[] = []
-  for (let w = 0; w < workerCount; w++) {
-    workers.push((async () => {
-      while (true) {
-        const i = next++
-        if (i >= items.length)
-          return
-        out[i] = await fn(items[i]!, i)
-      }
-    })())
-  }
-  await Promise.all(workers)
-  return out
-}
 
 // Lidarr's lookup proxies MusicBrainz / api.lidarr.audio; both regularly emit
 // 5xx with bodies like "Invalid response received from LidarrAPI" or
@@ -414,21 +482,75 @@ export function isImageFetchError(msg: string): boolean {
   return /image|mediacover|cover art|cover image|failed to (?:download|fetch)/i.test(msg)
 }
 
+// Adaptive throttle. The 5xx above are not random: they are what the upstream
+// does when we push it too hard, and a 900-album playlist pushes it hard enough
+// that ordinary rows ("Iron Maiden Somewhere in Time") start failing. Since a
+// failed lookup used to be indistinguishable from an empty one, those rows were
+// then reported as "not found" — the flood manufactured its own false negatives.
+//
+// So every transient failure makes the whole fleet pause briefly. Under healthy
+// conditions this costs nothing; under strain it converges on a rate the upstream
+// will actually serve instead of hammering it into refusing everything.
+const THROTTLE_MS = 4000
+let throttleUntil = 0
+
+const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+
+async function awaitThrottle(): Promise<void> {
+  const wait = throttleUntil - Date.now()
+  if (wait > 0)
+    await sleep(wait)
+}
+
+function noteTransientFailure(): void {
+  throttleUntil = Math.max(throttleUntil, Date.now() + THROTTLE_MS)
+}
+
+export function resetLookupThrottle(): void {
+  throttleUntil = 0
+}
+
 async function retryOnTransient<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown
   for (let i = 0; i < attempts; i++) {
+    await awaitThrottle()
     try {
       return await fn()
     }
     catch (err) {
       lastErr = err
       const msg = err instanceof Error ? err.message : String(err)
-      if (!TRANSIENT_LOOKUP_ERROR.test(msg) || i === attempts - 1)
+      if (!TRANSIENT_LOOKUP_ERROR.test(msg))
         throw err
-      await new Promise(r => setTimeout(r, 1000 * 2 ** i))
+      noteTransientFailure()
+      if (i === attempts - 1)
+        throw err
+      await sleep(1000 * 2 ** i)
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+}
+
+// Marks a lookup as having failed rather than returned nothing. `[]` from a 503 is
+// not evidence of absence, and reporting it as "not found" is a lie the user can't
+// see through — so the row becomes a retryable error instead.
+interface LookupFailure { failed: boolean, message?: string }
+
+async function tryLookup<T>(
+  fn: () => Promise<T[]>,
+  failure: LookupFailure,
+  label: string,
+): Promise<T[]> {
+  try {
+    return await retryOnTransient(fn)
+  }
+  catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    failure.failed = true
+    failure.message ??= msg
+    console.error('[job] lookup failed', label, msg)
+    return []
+  }
 }
 
 // Result of the album search cascade. `chosen` is set when a later, more
@@ -441,19 +563,28 @@ export interface SearchOutcome {
   // True when not one candidate is even plausibly by the requested artist, so
   // the result set is unrelated noise rather than a set of alternatives.
   unrelatedResults?: boolean
+  // Set when a lookup errored out rather than returning nothing. An empty result
+  // from a 503 must never be presented as "this release does not exist".
+  lookupFailed?: boolean
+  lookupError?: string
 }
 
 // Turn a MusicBrainz album id back into a real Lidarr candidate so the add path
 // (which needs foreignAlbumId plus the nested artist record) is unchanged.
-async function lookupByMbid(mbid: string): Promise<Candidate[]> {
-  const res = await retryOnTransient(() => lookupAlbum(`lidarr:${mbid}`)).catch(() => [] as LidarrAlbumCandidate[])
+async function lookupByMbid(mbid: string, failure: LookupFailure): Promise<Candidate[]> {
+  const res = await tryLookup(() => lookupAlbum(`lidarr:${mbid}`), failure, `mbid ${mbid}`)
   return res.map(value => ({ kind: 'album' as const, value }))
 }
 
 async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<SearchOutcome> {
+  const failure: LookupFailure = { failed: false }
   if (kind === 'artist') {
-    const res = await retryOnTransient(() => lookupArtist(parsed.raw))
-    return { candidates: res.map(value => ({ kind: 'artist', value })) }
+    const res = await tryLookup(() => lookupArtist(parsed.raw), failure, parsed.raw)
+    return {
+      candidates: res.map(value => ({ kind: 'artist', value })),
+      lookupFailed: failure.failed,
+      lookupError: failure.message,
+    }
   }
 
   // Various Artists compilations: Lidarr text search hides the special VA entity,
@@ -465,7 +596,7 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<SearchO
         return [] as string[]
       })
     const looked = await Promise.all(
-      mbids.map(mbid => retryOnTransient(() => lookupAlbum(`lidarr:${mbid}`)).catch(() => [])),
+      mbids.map(mbid => tryLookup(() => lookupAlbum(`lidarr:${mbid}`), failure, `VA ${mbid}`)),
     )
     const seen = new Set<string>()
     const out: Candidate[] = []
@@ -475,7 +606,7 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<SearchO
       seen.add(value.foreignAlbumId)
       out.push({ kind: 'album', value })
     }
-    return { candidates: out }
+    return { candidates: out, lookupFailed: failure.failed, lookupError: failure.message }
   }
 
   return searchAlbumCandidates(parsed)
@@ -496,12 +627,13 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<SearchO
 //      the album at all — a Latin title under a Cyrillic artist, or a canonical
 //      album buried under tribute pressings ("Pink Floyd The Wall").
 export async function searchAlbumCandidates(parsed: ParsedItem): Promise<SearchOutcome> {
+  const failure: LookupFailure = { failed: false }
   const variations = albumQueryVariations(parsed)
   const want = normKeyLoose(parsed.title ?? parsed.raw)
   const merged: LidarrAlbumCandidate[] = []
   const seen = new Set<string>()
   for (const term of variations) {
-    const res = await retryOnTransient(() => lookupAlbum(term)).catch(() => [] as LidarrAlbumCandidate[])
+    const res = await tryLookup(() => lookupAlbum(term), failure, term)
     for (const c of res) {
       if (!seen.has(c.foreignAlbumId)) {
         seen.add(c.foreignAlbumId)
@@ -529,7 +661,7 @@ export async function searchAlbumCandidates(parsed: ParsedItem): Promise<SearchO
     return null
   })
   if (viaArtist) {
-    const resolved = await lookupByMbid(viaArtist.album.mbid)
+    const resolved = await lookupByMbid(viaArtist.album.mbid, failure)
     const chosen = resolved[0]
     if (chosen) {
       // Keep the original hits in the list behind the resolved one, so a wrong
@@ -540,7 +672,12 @@ export async function searchAlbumCandidates(parsed: ParsedItem): Promise<SearchO
     }
   }
 
-  return { candidates, unrelatedResults: !hasPlausibleArtist(parsed, candidates) }
+  return {
+    candidates,
+    unrelatedResults: !hasPlausibleArtist(parsed, candidates),
+    lookupFailed: failure.failed,
+    lookupError: failure.message,
+  }
 }
 
 async function addToLidarr(

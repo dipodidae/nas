@@ -57,3 +57,31 @@ describe('pickBestMatch', () => {
     expect(pickBestMatch({ title: 'X', artist: 'Y' }, [])).toBeNull()
   })
 })
+
+describe('pickBestMatch — cross-script (recreate what we just downloaded)', () => {
+  it('matches a romanized Spotify artist to the Cyrillic tags on the file', () => {
+    // Exactly the rows that queued and downloaded successfully: Spotify says
+    // "Basta", the file Lidarr imported is tagged "Баста".
+    const track = { title: 'На заре', artist: 'Basta' }
+    const items = [
+      { Id: 'wrong', Name: 'На заре', Artists: ['Ольга Рождественская'] },
+      { Id: 'right', Name: 'На заре', Artists: ['Баста'] },
+    ]
+    expect(pickBestMatch(track, items)).toBe('right')
+  })
+
+  it('matches a Cyrillic title against a Cyrillic file', () => {
+    const track = { title: 'Пыяла', artist: 'AIGEL' }
+    expect(pickBestMatch(track, [{ Id: 'a', Name: 'Пыяла', Artists: ['Аигел'] }])).toBe('a')
+  })
+
+  it('tolerates a Spotify artist qualifier the file does not carry', () => {
+    const track = { title: 'Sulphery', artist: 'Trial (swe)' }
+    expect(pickBestMatch(track, [{ Id: 'a', Name: 'Sulphery', Artists: ['Trial'] }])).toBe('a')
+  })
+
+  it('still refuses a same-title track by a different artist', () => {
+    const track = { title: 'На заре', artist: 'Basta' }
+    expect(pickBestMatch(track, [{ Id: 'x', Name: 'На заре', Artists: ['Альянс'] }])).toBeNull()
+  })
+})

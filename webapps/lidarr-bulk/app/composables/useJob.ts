@@ -1,4 +1,4 @@
-import type { Candidate, JobSnapshot, Kind, ParsedItem } from '~~/shared/types'
+import type { Candidate, JobItem, JobSnapshot, Kind, ParsedItem } from '~~/shared/types'
 
 export function useJob() {
   const job = ref<JobSnapshot | null>(null)
@@ -28,10 +28,33 @@ export function useJob() {
     })
     job.value = snap
     es = new EventSource(`/api/jobs/${snap.id}/stream`)
+    // The server sends one full snapshot, then a patch per changed item. Merging
+    // patches locally keeps a 900-album job's update cost flat instead of
+    // re-transferring (and re-rendering) every row on every status change.
+    const index = new Map<string, number>()
+    function reindex(s: JobSnapshot): void {
+      index.clear()
+      s.items.forEach((it, i) => index.set(it.id, i))
+    }
     es.addEventListener('snapshot', (e) => {
-      job.value = JSON.parse((e as MessageEvent).data) as JobSnapshot
-      if (job.value.done)
-        close()
+      const s = JSON.parse((e as MessageEvent).data) as JobSnapshot
+      reindex(s)
+      job.value = s
+    })
+    es.addEventListener('item', (e) => {
+      const patched = JSON.parse((e as MessageEvent).data) as JobItem
+      const current = job.value
+      if (!current)
+        return
+      const at = index.get(patched.id)
+      if (at === undefined)
+        return
+      current.items[at] = patched
+    })
+    es.addEventListener('done', () => {
+      if (job.value)
+        job.value.done = true
+      close()
     })
     es.addEventListener('error', () => {
       // Connection may close cleanly on job completion; ignore.

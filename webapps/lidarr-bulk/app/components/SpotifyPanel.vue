@@ -100,6 +100,39 @@ async function disconnect(): Promise<void> {
   toast.add({ title: 'Spotify disconnected', color: 'neutral' })
 }
 
+// Anything at or above this many albums gets confirmed rather than queued on the
+// strength of one click. A 1842-track playlist expands to ~900 albums, which is a
+// large, slow, hard-to-undo commitment to a music library.
+const CONFIRM_THRESHOLD = 25
+const FIRST_CHUNK = 100
+
+const pendingQueue = ref<{ playlist: SpotifyPlaylist, result: SpotifyResolveResult } | null>(null)
+
+function queueNow(items: ParsedItem[], playlist: SpotifyPlaylist, tracks: number): void {
+  toast.add({
+    title: `Queuing ${items.length} album${items.length === 1 ? '' : 's'}`,
+    description: `from ${tracks} tracks in “${playlist.name}”`,
+    color: 'success',
+  })
+  emit('queue', items)
+}
+
+function confirmQueueAll(): void {
+  const p = pendingQueue.value
+  if (!p)
+    return
+  pendingQueue.value = null
+  queueNow(p.result.items, p.playlist, p.result.stats.tracks)
+}
+
+function confirmQueueFirst(): void {
+  const p = pendingQueue.value
+  if (!p)
+    return
+  pendingQueue.value = null
+  queueNow(p.result.items.slice(0, FIRST_CHUNK), p.playlist, p.result.stats.tracks)
+}
+
 async function pick(playlist: SpotifyPlaylist): Promise<void> {
   if (resolvingId.value)
     return
@@ -113,12 +146,11 @@ async function pick(playlist: SpotifyPlaylist): Promise<void> {
       toast.add({ title: 'No albums', description: 'This playlist has no resolvable albums (local files / episodes only).', color: 'warning' })
       return
     }
-    toast.add({
-      title: `Queuing ${res.items.length} album${res.items.length === 1 ? '' : 's'}`,
-      description: `from ${res.stats.tracks} tracks in “${playlist.name}”`,
-      color: 'success',
-    })
-    emit('queue', res.items)
+    if (res.items.length >= CONFIRM_THRESHOLD) {
+      pendingQueue.value = { playlist, result: res }
+      return
+    }
+    queueNow(res.items, playlist, res.stats.tracks)
   }
   catch (err: unknown) {
     toast.add({ title: 'Resolve failed', description: describeError(err), color: 'error' })
@@ -159,6 +191,39 @@ async function recreate(playlist: SpotifyPlaylist): Promise<void> {
     </template>
 
     <template v-else>
+      <!-- Large playlists are confirmed, not queued on a single click: a 1842-track
+           playlist is ~900 albums, which takes a long time and is tedious to undo. -->
+      <div
+        v-if="pendingQueue"
+        class="mb-4 p-3 rounded-md ring ring-default bg-elevated/50"
+      >
+        <p class="font-medium m-0">
+          {{ pendingQueue.playlist.name }}
+        </p>
+        <p class="text-sm text-muted mt-1 mb-3">
+          {{ pendingQueue.result.stats.tracks }} tracks →
+          <strong>{{ pendingQueue.result.items.length }} unique albums</strong>
+          <template v-if="pendingQueue.result.stats.skipped > 0">
+            ({{ pendingQueue.result.stats.skipped }} skipped)
+          </template>
+        </p>
+        <div class="flex items-center gap-2 flex-wrap">
+          <UButton
+            color="primary"
+            :label="`Queue all ${pendingQueue.result.items.length}`"
+            @click="confirmQueueAll"
+          />
+          <UButton
+            v-if="pendingQueue.result.items.length > 100"
+            color="neutral"
+            variant="soft"
+            label="First 100"
+            @click="confirmQueueFirst"
+          />
+          <UButton color="neutral" variant="ghost" label="Cancel" @click="pendingQueue = null" />
+        </div>
+      </div>
+
       <div class="flex items-center justify-between gap-4 flex-wrap">
         <p class="text-muted m-0 text-sm">
           Click a playlist to queue its unique albums using your saved default profiles and monitor mode.

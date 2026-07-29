@@ -486,6 +486,35 @@ export function stripEditionAppendix(title: string): string {
 // and matches the Latin fragment against unrelated Swedish "Bästa" records —
 // whereas "На заре" alone retrieves the real release. Putting the title first
 // means the poison term is usually never spent at all.
+// Spotify disambiguates same-named artists inside the name itself — "Trial (swe)",
+// "Emerald USA", "Burzum NEW" — whereas MusicBrainz keeps the bare name and holds
+// the distinction in a separate `disambiguation` field. The qualifier therefore
+// makes every lookup miss. Returns the name as given first, then progressively
+// bare forms.
+const TRAILING_PARENTHETICAL = /\s*[([][^)\]]*[)\]]\s*$/
+// A short SHOUTED token at the end of an otherwise mixed-case name is a qualifier,
+// not part of it. Requires a preceding token that is *not* all-caps so genuinely
+// capitalised names ("AIGEL", "MODERN TALKING", "ABBA") are left alone.
+const TRAILING_QUALIFIER = /^(.*[a-z].*?)\s+([A-Z]{2,4})$/
+
+export function artistNameVariants(name: string | undefined): string[] {
+  const given = (name ?? '').trim()
+  if (!given)
+    return []
+  const out = [given]
+  const push = (s: string): void => {
+    const v = s.trim()
+    if (v.length > 1 && !out.includes(v))
+      out.push(v)
+  }
+  const noParens = given.replace(TRAILING_PARENTHETICAL, '')
+  push(noParens)
+  const qualifier = TRAILING_QUALIFIER.exec(noParens)
+  if (qualifier?.[1])
+    push(qualifier[1])
+  return out
+}
+
 // A line carrying more than one dash separator may have been split in the wrong
 // place: "A - B - C" yields artist "A" / title "B - C", but "A - B" / "C" is just
 // as plausible and nothing in the text says which. Rather than guess a second
@@ -508,6 +537,10 @@ export function albumQueryVariations(parsed: ParsedItem): string[] {
   const terms = isMixedScript(artist, title)
     ? [title, ...combined, parenStripped]
     : combined
+  // A Spotify-style qualifier in the artist name ("Trial (swe)") poisons the term
+  // just as a script mismatch does, so retry with the bare name.
+  for (const bare of artistNameVariants(artist).slice(1))
+    terms.push(`${bare} ${parenStripped}`.trim())
   if (isAmbiguouslySplit(parsed.raw))
     terms.push(parsed.raw)
   return [...new Set(terms.filter(Boolean))]

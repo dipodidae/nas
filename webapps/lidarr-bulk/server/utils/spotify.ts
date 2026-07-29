@@ -118,9 +118,9 @@ export function trackDetailsFromItems(items: PlaylistTrackItem[]): SpotifyTrack[
 
 export async function fetchPlaylistTrackDetails(accessToken: string, playlistId: string): Promise<SpotifyTrack[]> {
   const encoded = encodeURIComponent(playlistId)
-  const items = await fetchAllPages<PlaylistTrackItem>(
+  const items = await fetchPagesByOffset<PlaylistTrackItem>(
     accessToken,
-    `/playlists/${encoded}/tracks?limit=100&fields=next,items(is_local,track(type,name,artists(name),album(name)))`,
+    `/playlists/${encoded}/tracks?limit=${PAGE_LIMIT}&fields=total,next,items(is_local,track(type,name,artists(name),album(name)))`,
   )
   return trackDetailsFromItems(items)
 }
@@ -226,7 +226,51 @@ export async function getValidAccessToken(env: Env): Promise<string | null> {
   return refreshed.access_token
 }
 
-interface Page<T> { items: T[], next?: string | null }
+interface Page<T> { items: T[], next?: string | null, total?: number }
+
+// How many playlist pages to request at once. Spotify's `next` cursor forces one
+// round trip per 100 tracks — 19 of them, strictly sequential, for a 1842-track
+// playlist. The endpoint also accepts `offset`, and the first response tells us
+// `total`, so every page after the first can be fetched in parallel.
+const PAGE_CONCURRENCY = 5
+const PAGE_LIMIT = 100
+
+async function getPage<T>(accessToken: string, url: string): Promise<Page<T>> {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+  if (!res.ok)
+    throw new Error(`Spotify API failed (${res.status}): ${await res.text()}`)
+  return await res.json() as Page<T>
+}
+
+// Offset-paged fetch: one request to learn `total`, then the rest concurrently in
+// bounded waves. `path` must already contain `limit` and any `fields` selector and
+// must NOT contain `offset`.
+async function fetchPagesByOffset<T>(accessToken: string, path: string): Promise<T[]> {
+  const base = path.startsWith('http') ? path : `${SPOTIFY_API}${path}`
+  const withOffset = (offset: number): string =>
+    `${base}${base.includes('?') ? '&' : '?'}offset=${offset}`
+
+  const first = await getPage<T>(accessToken, withOffset(0))
+  const out: T[] = [...(first.items ?? [])]
+  const total = typeof first.total === 'number' ? first.total : out.length
+  if (out.length === 0 || total <= out.length)
+    return out
+
+  const offsets: number[] = []
+  for (let o = out.length; o < total; o += PAGE_LIMIT)
+    offsets.push(o)
+
+  // Ordered result slots so track order survives concurrent completion.
+  const pages: T[][] = Array.from({ length: offsets.length }, () => [])
+  for (let i = 0; i < offsets.length; i += PAGE_CONCURRENCY) {
+    const wave = offsets.slice(i, i + PAGE_CONCURRENCY)
+    await Promise.all(wave.map(async (offset, k) => {
+      const page = await getPage<T>(accessToken, withOffset(offset))
+      pages[i + k] = page.items ?? []
+    }))
+  }
+  return out.concat(...pages)
+}
 
 // Follow Spotify's `next` cursor until exhausted, accumulating items. `first`
 // is a path under SPOTIFY_API (e.g. '/me/playlists?limit=50'); subsequent pages
@@ -259,9 +303,9 @@ export async function fetchPlaylists(accessToken: string): Promise<RawPlaylist[]
 
 export async function fetchPlaylistTracks(accessToken: string, playlistId: string): Promise<PlaylistTrackItem[]> {
   const encoded = encodeURIComponent(playlistId)
-  return fetchAllPages<PlaylistTrackItem>(
+  return fetchPagesByOffset<PlaylistTrackItem>(
     accessToken,
-    `/playlists/${encoded}/tracks?limit=100&fields=next,items(is_local,track(type,album(id,name,album_type,release_date,artists(name))))`,
+    `/playlists/${encoded}/tracks?limit=${PAGE_LIMIT}&fields=total,next,items(is_local,track(type,album(id,name,album_type,release_date,artists(name))))`,
   )
 }
 

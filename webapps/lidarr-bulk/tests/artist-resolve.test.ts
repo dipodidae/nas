@@ -328,13 +328,65 @@ describe('resolveAlbumViaArtist', () => {
     expect(await resolveAlbumViaArtist(parsed)).toBeNull()
   })
 
-  it('caps how many discographies it will fetch', async () => {
+  it('caps discography fetches at 3 for distinctly-named candidates', async () => {
     lookupArtist.mockResolvedValue(
-      Array.from({ length: 10 }, (_, i) => ({ foreignArtistId: `m${i}`, artistName: 'Smyslovye Gallyutsinatsii' })),
+      Array.from({ length: 10 }, (_, i) => ({ foreignArtistId: `m${i}`, artistName: `Smyslovye Gallyutsinatsii ${i}` })),
     )
     stubFetch({})
     await resolveAlbumViaArtist(parsed)
     expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeLessThanOrEqual(3)
+  })
+
+  it('widens to 6 for homonyms, where only the discography can disambiguate', async () => {
+    // MusicBrainz holds several distinct bands called "Tribulation" / "Trial" /
+    // "Century" and does not rank the one you meant first. They score identically
+    // on name, so the only way to tell them apart is which released the album.
+    lookupArtist.mockResolvedValue(
+      Array.from({ length: 10 }, (_, i) => ({ foreignArtistId: `m${i}`, artistName: 'Tribulation' })),
+    )
+    stubFetch({})
+    await resolveAlbumViaArtist({ raw: 'x', kind: 'album', artist: 'Tribulation', title: 'Funeral Pyre' })
+    const calls = vi.mocked(globalThis.fetch).mock.calls.length
+    expect(calls).toBeGreaterThan(3)
+    expect(calls).toBeLessThanOrEqual(6)
+  })
+
+  it('finds the right homonym by which one actually has the album', async () => {
+    lookupArtist.mockResolvedValue([
+      { foreignArtistId: 'wrong1', artistName: 'Tribulation' },
+      { foreignArtistId: 'wrong2', artistName: 'Tribulation' },
+      { foreignArtistId: 'wrong3', artistName: 'Tribulation' },
+      { foreignArtistId: 'right', artistName: 'Tribulation' },
+    ])
+    const shell = (mbid: string, albums: { mbid: string, title: string, type: string }[]) =>
+      docFor(disco({ mbid, name: 'Tribulation', sortName: 'Tribulation', aliases: [], albums }))
+    stubFetch({
+      wrong1: shell('wrong1', [{ mbid: 'a', title: 'Spicy', type: 'Album' }]),
+      wrong2: shell('wrong2', [{ mbid: 'b', title: 'Clown of Thorns', type: 'Album' }]),
+      wrong3: shell('wrong3', []),
+      right: shell('right', [{ mbid: 'fp', title: 'The Horror', type: 'Album' }, { mbid: 'x', title: 'Down Below', type: 'Album' }]),
+    })
+    const hit = await resolveAlbumViaArtist({ raw: 'x', kind: 'album', artist: 'Tribulation', title: 'The Horror' })
+    expect(hit?.album).toMatchObject({ mbid: 'fp', title: 'The Horror' })
+  })
+
+  it('retries the lookup with a bare artist name when Spotify added a qualifier', async () => {
+    // "Trial (swe)" finds nothing; "Trial" finds the band.
+    lookupArtist.mockImplementation((term: string) =>
+      Promise.resolve(term === 'Trial' ? [{ foreignArtistId: 'trial', artistName: 'Trial' }] : []))
+    stubFetch({
+      trial: docFor(disco({
+        mbid: 'trial',
+        name: 'Trial',
+        sortName: 'Trial',
+        aliases: [],
+        albums: [{ mbid: 't1', title: 'Sulphery', type: 'Album', secondaryTypes: [] }],
+      })),
+    })
+    const hit = await resolveAlbumViaArtist({ raw: 'x', kind: 'album', artist: 'Trial (swe)', title: 'Sulphery' })
+    expect(hit?.album).toMatchObject({ mbid: 't1' })
+    expect(lookupArtist).toHaveBeenCalledWith('Trial (swe)')
+    expect(lookupArtist).toHaveBeenCalledWith('Trial')
   })
 
   it('reuses the artist lookup across repeated rows for the same artist', async () => {

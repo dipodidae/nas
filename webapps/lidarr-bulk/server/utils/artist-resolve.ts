@@ -25,7 +25,7 @@
 import type { Candidate, LidarrAlbumCandidate, ParsedItem } from '~~/shared/types'
 import { loadEnv } from './env'
 import { lookupArtist } from './lidarr'
-import { albumTitleExactCandidates, pickAutoMatch } from './matching'
+import { albumTitleExactCandidates, artistNameVariants, pickAutoMatch } from './matching'
 import { bestCrossScriptSimilarity } from './script'
 import { normKey } from './text'
 
@@ -51,6 +51,9 @@ export interface Discography extends ArtistIdentity {
 // is one HTTP call to the metadata backend; the payload can be large (Pink
 // Floyd's is 649 release groups / ~160 KB) so this stays tight.
 const MAX_DISCOGRAPHY_FETCHES = 3
+// Raised ceiling for homonymous names, where identity alone cannot pick the right
+// artist and only "which one released this album" can. See resolveAlbumViaArtist.
+const MAX_HOMONYM_FETCHES = 6
 // Below this cross-script score a candidate isn't worth a discography fetch.
 // Loose on purpose: alias-only names like Сплин↔Splean score ~0.67, and proving
 // those is the entire point of this module.
@@ -80,21 +83,22 @@ function tokenKey(s: string): string {
 // Every form compared here is a name the artist is recorded under, so treating
 // word order as insignificant is safe; it is not a general-purpose fuzzy match.
 export function identityProvesName(identity: ArtistIdentity, wanted: string | undefined): boolean {
-  const want = normKey(wanted)
-  if (!want)
+  if (!normKey(wanted))
     return false
-  const wantTokens = tokenKey(want)
   const forms = [identity.name, identity.sortName, ...identity.aliases]
-  return forms.some((form) => {
-    const key = normKey(form)
-    if (!key.length)
-      return false
+    .map(normKey)
+    .filter(f => f.length > 0)
+  // A Spotify qualifier is not part of the artist's identity: MusicBrainz records
+  // the band as "Trial" and keeps "(swe)" in a separate disambiguation field, so
+  // the bare forms have to be admissible targets or the name can never be proven.
+  const wants = artistNameVariants(wanted).map(normKey).filter(w => w.length > 0)
+  return forms.some(form => wants.some((want) => {
     const best = Math.max(
-      bestCrossScriptSimilarity(key, want),
-      bestCrossScriptSimilarity(tokenKey(key), wantTokens),
+      bestCrossScriptSimilarity(form, want),
+      bestCrossScriptSimilarity(tokenKey(form), tokenKey(want)),
     )
     return best >= MIN_IDENTITY
-  })
+  }))
 }
 
 // Present a discography entry as a Lidarr-shaped candidate so the decision can
@@ -239,6 +243,8 @@ export function clearArtistResolveCaches(): void {
   discographyCache.clear()
   artistLookupCache.clear()
   learnedArtists.clear()
+  inFlightDiscography.clear()
+  inFlightArtistLookup.clear()
 }
 
 // Record that `inputName` (as the user/Spotify spelled it) refers to this
@@ -260,11 +266,33 @@ export function learnedArtistIdentity(inputName: string | undefined): { mbid: st
   return key ? learnedArtists.get(key, Date.now()) : undefined
 }
 
+// In-flight coalescing. The TTL caches only help *after* a request completes, but
+// phase A runs rows concurrently, so N albums by the same artist fire N identical
+// requests simultaneously and every one of them misses the cache. Sharing the
+// promise turns that back into one request — which matters most for exactly the
+// upstream that starts returning 503 when pushed.
+const inFlightDiscography = new Map<string, Promise<Discography | null>>()
+const inFlightArtistLookup = new Map<string, Promise<{ mbid: string, name: string }[]>>()
+
+function coalesce<T>(map: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> {
+  const existing = map.get(key)
+  if (existing)
+    return existing
+  const p = run().finally(() => map.delete(key))
+  map.set(key, p)
+  return p
+}
+
 export async function fetchArtistDiscography(mbid: string): Promise<Discography | null> {
   const now = Date.now()
   const cached = discographyCache.get(mbid, now)
   if (cached !== undefined)
     return cached
+  return coalesce(inFlightDiscography, mbid, () => fetchArtistDiscographyUncached(mbid))
+}
+
+async function fetchArtistDiscographyUncached(mbid: string): Promise<Discography | null> {
+  const now = Date.now()
   const base = loadEnv().LIDARR_METADATA_URL.replace(/\/$/, '')
   let result: Discography | null
   try {
@@ -283,12 +311,16 @@ export async function fetchArtistDiscography(mbid: string): Promise<Discography 
   return result
 }
 
-async function lookupArtistCached(name: string): Promise<{ mbid: string, name: string }[]> {
+function lookupArtistCached(name: string): Promise<{ mbid: string, name: string }[]> {
   const key = normKey(name)
-  const now = Date.now()
-  const cached = artistLookupCache.get(key, now)
+  const cached = artistLookupCache.get(key, Date.now())
   if (cached !== undefined)
-    return cached
+    return Promise.resolve(cached)
+  return coalesce(inFlightArtistLookup, key, () => lookupArtistUncached(name, key))
+}
+
+async function lookupArtistUncached(name: string, key: string): Promise<{ mbid: string, name: string }[]> {
+  const now = Date.now()
   let out: { mbid: string, name: string }[]
   try {
     const res = await lookupArtist(name)
@@ -374,15 +406,36 @@ export async function resolveAlbumViaArtist(
     }
   }
 
-  const candidates = await lookupArtistCached(parsed.artist)
+  // Try the name as given, then bare forms — "Trial (swe)" finds nothing while
+  // "Trial" finds the band. Deduped by mbid across variants.
+  const byMbid = new Map<string, { mbid: string, name: string }>()
+  for (const variant of artistNameVariants(parsed.artist)) {
+    for (const c of await lookupArtistCached(variant)) {
+      if (!byMbid.has(c.mbid))
+        byMbid.set(c.mbid, c)
+    }
+    if (byMbid.size > 0)
+      break
+  }
+  const candidates = [...byMbid.values()]
   if (candidates.length === 0)
     return null
 
-  const ranked = candidates
+  const scored = candidates
     .map((c, index) => ({ ...c, score: bestCrossScriptSimilarity(c.name, parsed.artist), index }))
     .filter(c => c.score >= MIN_CANDIDATE_SIMILARITY)
     .sort((a, b) => (b.score - a.score) || (a.index - b.index))
-    .slice(0, MAX_DISCOGRAPHY_FETCHES)
+
+  // Homonyms need a wider net. MusicBrainz holds several distinct bands called
+  // "Tribulation" / "Trial" / "Century", and its search does not put the one you
+  // meant first — the Swedish Tribulation is nowhere near the top. Since they all
+  // score identically on name, the only way to tell them apart is which one
+  // actually released the album, so look at more of them. Only reached after the
+  // text search has already failed, so the extra fetches are bounded and rare.
+  const topName = normKey(scored[0]?.name)
+  const homonyms = scored.filter(c => normKey(c.name) === topName).length
+  const budget = homonyms > 1 ? MAX_HOMONYM_FETCHES : MAX_DISCOGRAPHY_FETCHES
+  const ranked = scored.slice(0, budget)
 
   const hits: { artist: ArtistIdentity, album: DiscographyAlbum }[] = []
   for (const c of ranked) {

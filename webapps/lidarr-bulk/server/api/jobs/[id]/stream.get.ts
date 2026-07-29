@@ -9,10 +9,20 @@ export default defineEventHandler(async (event) => {
   // updates flush immediately without a special location block.
   setHeader(event, 'X-Accel-Buffering', 'no')
   const stream = createEventStream(event)
-  const unsub = subscribe(id, (snap) => {
-    void stream.push({ event: 'snapshot', data: JSON.stringify(snap) })
-    if (snap.done)
-      void stream.close()
+  // One `snapshot` up front, then one `item` per change. Pushing the whole job on
+  // every status change was O(items²) over a run and reached tens of megabytes on
+  // a 900-album playlist; the client merges patches into its own copy instead.
+  const unsub = subscribe(id, (ev) => {
+    if (ev.type === 'snapshot') {
+      void stream.push({ event: 'snapshot', data: JSON.stringify(ev.snapshot) })
+      return
+    }
+    if (ev.type === 'item') {
+      void stream.push({ event: 'item', data: JSON.stringify(ev.item) })
+      return
+    }
+    void stream.push({ event: 'done', data: '1' })
+    void stream.close()
   })
   stream.onClosed(() => unsub?.())
   return stream.send()

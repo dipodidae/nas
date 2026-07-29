@@ -5,6 +5,7 @@ import type {
   Candidate,
   LidarrAlbumCandidate,
   LidarrArtistCandidate,
+  LidarrImage,
   LidarrProfilesResponse,
 } from '~~/shared/types'
 import { loadEnv } from './env'
@@ -53,12 +54,83 @@ export async function getProfiles(): Promise<LidarrProfilesResponse> {
   return { rootFolders, qualityProfiles, metadataProfiles }
 }
 
-export function lookupArtist(term: string): Promise<LidarrArtistCandidate[]> {
-  return call(`/api/v1/artist/lookup?term=${encodeURIComponent(term)}`)
+// --- Payload narrowing -------------------------------------------------------
+// A single album from /album/lookup is ~13.5 KB, of which ~14 KB is a `releases`
+// array listing every pressing with its track lists — plus links, ratings, genres
+// and media that nothing in this app reads. Those objects are not transient: they
+// land in job state, are re-serialised on every SSE update, and round-trip back
+// through /choose. A 900-album playlist with 180 ambiguous rows was pushing ~24 MB
+// per update because of it. So results are narrowed to the declared shape right at
+// the boundary, which is also the only shape the rest of the code is typed against.
+//
+// Everything the add path needs is kept: foreignAlbumId, the nested artist's
+// foreignArtistId + artistName, and the type fields the matcher scores on.
+
+// Only the cover the picker actually renders, and only its URL fields.
+function trimImages(raw: unknown): LidarrImage[] | undefined {
+  if (!Array.isArray(raw))
+    return undefined
+  const cover = raw.find((i: LidarrImage) => i?.coverType === 'cover' || i?.coverType === 'poster')
+    ?? raw[0] as LidarrImage | undefined
+  if (!cover?.coverType)
+    return undefined
+  const out: LidarrImage = { coverType: cover.coverType }
+  if (cover.remoteUrl)
+    out.remoteUrl = cover.remoteUrl
+  else if (cover.url)
+    out.url = cover.url
+  return [out]
 }
 
-export function lookupAlbum(term: string): Promise<LidarrAlbumCandidate[]> {
-  return call(`/api/v1/album/lookup?term=${encodeURIComponent(term)}`)
+export function trimArtistCandidate(raw: LidarrArtistCandidate): LidarrArtistCandidate {
+  const out: LidarrArtistCandidate = {
+    foreignArtistId: raw.foreignArtistId,
+    artistName: raw.artistName,
+  }
+  if (raw.disambiguation)
+    out.disambiguation = raw.disambiguation
+  if (raw.artistType)
+    out.artistType = raw.artistType
+  const images = trimImages(raw.images)
+  if (images)
+    out.images = images
+  return out
+}
+
+export function trimAlbumCandidate(raw: LidarrAlbumCandidate): LidarrAlbumCandidate {
+  const out: LidarrAlbumCandidate = {
+    foreignAlbumId: raw.foreignAlbumId,
+    title: raw.title,
+  }
+  if (raw.albumType)
+    out.albumType = raw.albumType
+  if (raw.secondaryTypes?.length)
+    out.secondaryTypes = raw.secondaryTypes
+  if (raw.releaseDate)
+    out.releaseDate = raw.releaseDate
+  if (typeof raw.artist === 'string') {
+    out.artist = raw.artist
+  }
+  else if (raw.artist) {
+    out.artist = {
+      foreignArtistId: raw.artist.foreignArtistId,
+      artistName: raw.artist.artistName,
+    }
+  }
+  const images = trimImages(raw.images)
+  if (images)
+    out.images = images
+  return out
+}
+
+export async function lookupArtist(term: string): Promise<LidarrArtistCandidate[]> {
+  const res = await call<LidarrArtistCandidate[]>(`/api/v1/artist/lookup?term=${encodeURIComponent(term)}`)
+  return Array.isArray(res) ? res.map(trimArtistCandidate) : []
+}
+
+export async function lookupAlbum(term: string): Promise<LidarrAlbumCandidate[]> {
+  const res = await call<LidarrAlbumCandidate[]>(`/api/v1/album/lookup?term=${encodeURIComponent(term)}`)
+  return Array.isArray(res) ? res.map(trimAlbumCandidate) : []
 }
 
 export interface AddArtistOptions {

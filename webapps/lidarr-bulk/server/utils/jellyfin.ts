@@ -4,13 +4,18 @@
 // normalization from matching.ts (normKey / normKeyLoose / similarity).
 import type { Env } from './env'
 import type { JellyfinPushResult, SpotifyTrack } from '~~/shared/types'
-import { normKeyLoose } from './matching'
-import { normKey, similarity } from './text'
+import { mapWithConcurrency } from './concurrency'
+import { artistNameVariants, normKeyLoose } from './matching'
+import { bestCrossScriptSimilarity } from './script'
+import { normKey } from './text'
 
 // A title is "matched" when its loose-normalized name is ~equal to the track's
 // and the artist matches; reuse the same strict threshold matching.ts uses.
 const MIN_TITLE_SIMILARITY = 0.95
 const MIN_ARTIST_SIMILARITY = 0.9
+// Jellyfin is on the LAN and answers quickly, but a 1842-track playlist is still
+// 1842 searches; 8 in flight keeps it responsive without hammering the server.
+const SEARCH_CONCURRENCY = 8
 
 export interface JellyfinAudioItem {
   Id: string
@@ -35,17 +40,26 @@ export function stripNoise(s: string): string {
     .trim()
 }
 
+// Cross-script, for the same reason the Lidarr matcher is: Spotify hands us a
+// romanized artist ("Basta") while the file we downloaded through Lidarr is tagged
+// with MusicBrainz's native spelling ("Баста"). Comparing those as raw strings
+// scores 0, so a playlist that queued and downloaded perfectly would then recreate
+// as empty in Jellyfin — the same input that worked upstream has to work here.
 function titleSimilarity(a: string, b: string): number {
+  const x = stripNoise(a)
+  const y = stripNoise(b)
   return Math.max(
-    similarity(normKeyLoose(stripNoise(a)), normKeyLoose(stripNoise(b))),
-    similarity(normKey(stripNoise(a)), normKey(stripNoise(b))),
+    bestCrossScriptSimilarity(normKeyLoose(x), normKeyLoose(y)),
+    bestCrossScriptSimilarity(normKey(x), normKey(y)),
   )
 }
 
 function artistMatches(trackArtist: string, item: JellyfinAudioItem): boolean {
-  const want = normKey(trackArtist)
   const names = [...(item.Artists ?? []), item.AlbumArtist].filter((n): n is string => Boolean(n))
-  return names.some(n => similarity(normKey(n), want) >= MIN_ARTIST_SIMILARITY)
+  // Spotify qualifiers ("Trial (swe)") are not part of the name the file carries.
+  const wants = artistNameVariants(trackArtist).map(normKey).filter(Boolean)
+  return names.some(n =>
+    wants.some(want => bestCrossScriptSimilarity(normKey(n), want) >= MIN_ARTIST_SIMILARITY))
 }
 
 // Best Jellyfin item id for a track, or null if nothing clears the bar.
@@ -154,14 +168,21 @@ export async function recreatePlaylistInJellyfin(
   const seen = new Set<string>()
   const skipped: { title: string, artist: string }[] = []
 
-  for (const track of tracks) {
-    let id: string | null
+  // Searched in parallel — a 1842-track playlist done one request at a time is
+  // minutes of pure waiting. Results are collected into ordered slots and only
+  // then walked in order, so playlist order and dedupe-by-first-occurrence are
+  // exactly as they were when this was a serial loop.
+  const ids = await mapWithConcurrency(tracks, SEARCH_CONCURRENCY, async (track) => {
     try {
-      id = pickBestMatch(track, await searchAudio(env, stripNoise(track.title)))
+      return pickBestMatch(track, await searchAudio(env, stripNoise(track.title)))
     }
     catch {
-      id = null // per-track search failure → treat as a miss, keep going
+      return null // per-track search failure → treat as a miss, keep going
     }
+  })
+
+  tracks.forEach((track, i) => {
+    const id = ids[i]
     if (id && !seen.has(id)) {
       seen.add(id)
       matchedIds.push(id)
@@ -169,7 +190,7 @@ export async function recreatePlaylistInJellyfin(
     else if (!id) {
       skipped.push({ title: track.title, artist: track.artist })
     }
-  }
+  })
 
   if (matchedIds.length === 0)
     return { playlistName: name, total: tracks.length, matched: 0, skipped, jellyfinPlaylistId: null }

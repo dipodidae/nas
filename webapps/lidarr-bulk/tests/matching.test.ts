@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate, LidarrAlbumCandidate, LidarrArtistCandidate, ParsedItem } from '~~/shared/types'
-import { albumQueryVariations, hasPlausibleArtist, isVariousArtists, pickAutoMatch, rankCandidates, releasePenalty, stripEditionAppendix } from '../server/utils/matching'
+import { albumQueryVariations, artistNameVariants, hasPlausibleArtist, isVariousArtists, pickAutoMatch, rankCandidates, releasePenalty, stripEditionAppendix } from '../server/utils/matching'
 import { normKey, similarity } from '../server/utils/text'
 
 function album(title: string, artist: string, albumType?: string): Candidate {
@@ -436,5 +436,33 @@ describe('albumQueryVariations', () => {
   })
   it('a clean title yields a single variation', () => {
     expect(albumQueryVariations({ raw: 'x', kind: 'album', artist: 'A', title: 'B' })).toEqual(['A B'])
+  })
+})
+
+describe('artistNameVariants', () => {
+  it('strips a Spotify parenthetical disambiguator', () => {
+    expect(artistNameVariants('Trial (swe)')).toEqual(['Trial (swe)', 'Trial'])
+  })
+
+  it('strips a shouted trailing qualifier', () => {
+    expect(artistNameVariants('Emerald USA')).toEqual(['Emerald USA', 'Emerald'])
+    expect(artistNameVariants('Burzum NEW')).toEqual(['Burzum NEW', 'Burzum'])
+  })
+
+  it('leaves genuinely capitalised names alone', () => {
+    for (const name of ['AIGEL', 'ABBA', 'MODERN TALKING', 'KISS'])
+      expect(artistNameVariants(name)).toEqual([name])
+  })
+
+  it('leaves ordinary names alone and handles empty input', () => {
+    expect(artistNameVariants('Iron Maiden')).toEqual(['Iron Maiden'])
+    expect(artistNameVariants('')).toEqual([])
+    expect(artistNameVariants(undefined)).toEqual([])
+  })
+
+  it('feeds a bare-name term into the album query variations', () => {
+    const terms = albumQueryVariations({ raw: 'x', kind: 'album', artist: 'Trial (swe)', title: 'Sulphery' })
+    expect(terms).toContain('Trial (swe) Sulphery')
+    expect(terms).toContain('Trial Sulphery')
   })
 })

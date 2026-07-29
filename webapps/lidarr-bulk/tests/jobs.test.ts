@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isImageFetchError, mapWithConcurrency } from '../server/utils/jobs'
+import { mapWithConcurrency } from '../server/utils/concurrency'
+import { isImageFetchError } from '../server/utils/jobs'
 
 describe('mapWithConcurrency', () => {
   it('returns [] for an empty input without spawning workers', async () => {
