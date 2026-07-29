@@ -10,6 +10,10 @@ pnpm-debug.log*
 *.backup
 *.bak
 *.old
+# timestamped/suffixed variants (foo.yml.bak.20260615-161521) — the bare
+# globs above only match files *ending* in .bak/.backup
+*.bak.*
+*.backup.*
 
 # Nginx cache directory
 nginx-cache/
@@ -27,6 +31,7 @@ vpn-configs/
 
 # never commit env backups (they contain real secrets)
 .env.bak*
+.env.*.bak*
 
 # ongehoord redeploy build-temp (TMPDIR routed off the quota'd /tmp tmpfs)
 .deploy-tmp/
