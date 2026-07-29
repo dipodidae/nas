@@ -58,6 +58,7 @@ export type ItemStatus =
   | 'searching-on-lidarr'
   | 'done'
   | 'nudged' // already in lidarr — re-monitored + searched the existing record
+  | 'already-complete' // already in lidarr AND fully on disk — nothing to do at all
   | 'already-added' // legacy: retained for old history entries; jobs now emit 'nudged'
   | 'would-add' // dry-run: search succeeded, would have added but didn't
   | 'not-found'

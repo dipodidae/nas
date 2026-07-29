@@ -11,6 +11,7 @@ import type {
   ParsedItem,
 } from '~~/shared/types'
 import { mapWithConcurrency } from './concurrency'
+import { findExistingAlbum } from './library'
 import { learnArtistIdentity, learnedArtistIdentity, resolveAlbumViaArtist, resolveByCandidateAlias } from './artist-resolve'
 import { pruneHistory, recordJob } from './history'
 import {
@@ -187,6 +188,12 @@ async function run(j: JobInternal): Promise<void> {
   await mapWithConcurrency(lookupItems, LOOKUP_CONCURRENCY, async (item) => {
     try {
       setStatus(j, item, { status: 'searching' })
+      // Do we already own this? Answering from Lidarr's own library costs one
+      // cached artist-index read plus one small per-artist fetch, and when the
+      // answer is "yes, complete" it saves the entire MusicBrainz cascade, a
+      // doomed add, a nudge, and — most importantly — a pointless download.
+      if (j.kind === 'album' && await settleIfAlreadyHeld(j, item))
+        return
       const outcome = await searchCandidates(j.kind, item.parsed)
       applyOutcome(j, item, outcome)
     }
@@ -317,6 +324,53 @@ async function runAddPhase(j: JobInternal, effective: AppSettings): Promise<void
       .filter((p): p is Promise<Candidate | null> => p !== undefined)
     await Promise.race<unknown>([...inFlight, ...pendingPicks])
   }
+}
+
+// Short-circuit a row against Lidarr's existing library. Returns true when the row
+// is settled and no lookup should happen.
+//
+//  - already complete on disk → nothing to do at all. Not "added", not "nudged":
+//    re-monitoring and re-searching a finished album only burns indexer and
+//    Soulseek capacity to re-download something we have.
+//  - present but incomplete → we already know its album id, so monitor + search it
+//    directly and skip the lookup, the doomed add and the nudge round-trip.
+async function settleIfAlreadyHeld(j: JobInternal, item: JobItem): Promise<boolean> {
+  const existing = await findExistingAlbum(item.parsed).catch((err: unknown) => {
+    console.error('[job] library pre-check failed:', err instanceof Error ? err.message : String(err))
+    return null
+  })
+  if (!existing)
+    return false
+
+  if (existing.complete) {
+    setStatus(j, item, {
+      status: 'already-complete',
+      message: `already in lidarr, complete on disk — ${existing.artistName} / ${existing.title}`,
+    })
+    return true
+  }
+
+  if (j.dryRun) {
+    setStatus(j, item, {
+      status: 'would-add',
+      message: `already in lidarr, ${existing.percentOfTracks ?? 0}% on disk — would search`,
+    })
+    return true
+  }
+
+  try {
+    await monitorAlbums([existing.albumId], true)
+    await commandSearchAlbum([existing.albumId])
+    setStatus(j, item, {
+      status: 'nudged',
+      message: `already in lidarr at ${existing.percentOfTracks ?? 0}% — re-monitored + searching`,
+    })
+  }
+  catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    setStatus(j, item, { status: 'error', message: `nudge of existing album failed: ${msg}` })
+  }
+  return true
 }
 
 function candidateArtist(c: Candidate): { mbid?: string, name?: string } {

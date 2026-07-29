@@ -133,6 +133,58 @@ export async function lookupAlbum(term: string): Promise<LidarrAlbumCandidate[]>
   return Array.isArray(res) ? res.map(trimAlbumCandidate) : []
 }
 
+// --- Existing library ---------------------------------------------------------
+// Narrowed reads used to answer "do we already have this?" before spending a
+// MusicBrainz lookup on it. Both are trimmed hard: the raw artist list is 25 MB
+// and a single artist's albums 300 KB, almost all of it fields we don't read.
+
+export async function libraryArtists(): Promise<{ id: number, name: string, foreignArtistId?: string }[]> {
+  const rows = await call<Array<{ id?: number, artistName?: string, foreignArtistId?: string }>>('/api/v1/artist')
+  if (!Array.isArray(rows))
+    return []
+  return rows
+    .filter((a): a is { id: number, artistName: string, foreignArtistId?: string } =>
+      typeof a.id === 'number' && typeof a.artistName === 'string')
+    .map(a => ({ id: a.id, name: a.artistName, foreignArtistId: a.foreignArtistId }))
+}
+
+export async function libraryAlbums(artistId: number): Promise<Array<{
+  albumId: number
+  artistId: number
+  title: string
+  artistName: string
+  percentOfTracks?: number
+  complete: boolean
+}>> {
+  const rows = await call<Array<{
+    id?: number
+    title?: string
+    artist?: { artistName?: string }
+    statistics?: { percentOfTracks?: number, trackCount?: number, trackFileCount?: number }
+  }>>(`/api/v1/album?artistId=${artistId}`)
+  if (!Array.isArray(rows))
+    return []
+  return rows
+    .filter((a): a is { id: number, title: string } => typeof a.id === 'number' && typeof a.title === 'string')
+    .map((a) => {
+      const stats = (a as { statistics?: { percentOfTracks?: number, trackCount?: number, trackFileCount?: number } }).statistics
+      const percent = stats?.percentOfTracks
+      // percentOfTracks is authoritative when present; fall back to raw counts.
+      // No statistics at all means "not refreshed yet", which is not complete.
+      const complete = typeof percent === 'number'
+        ? percent >= 100
+        : (stats?.trackCount ?? 0) > 0 && (stats?.trackFileCount ?? 0) >= (stats?.trackCount ?? 0)
+      return {
+        albumId: a.id,
+        artistId,
+        title: a.title,
+        artistName: (a as { artist?: { artistName?: string } }).artist?.artistName ?? '',
+        percentOfTracks: percent,
+        complete,
+      }
+    })
+}
+
 export interface AddArtistOptions {
   rootFolderPath: string
   qualityProfileId: number

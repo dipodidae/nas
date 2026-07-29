@@ -39,6 +39,10 @@ vi.mock('../server/utils/lidarr', () => ({
   nudgeExisting: vi.fn(async () => 'nudged'),
   waitForArtistRefresh: vi.fn(async () => ({ timedOut: false })),
   lookupArtist: vi.fn(async () => []),
+  // The job now pre-checks Lidarr's existing library; an empty one keeps these
+  // tests focused on add scheduling.
+  libraryArtists: vi.fn(async () => []),
+  libraryAlbums: vi.fn(async () => []),
   // albumQueryVariations' first term is `${artist} ${title}`, so the registry the
   // test builds in row() is keyed on exactly that.
   lookupAlbum: vi.fn(async (term: string) => {

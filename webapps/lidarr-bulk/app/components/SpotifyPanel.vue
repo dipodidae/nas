@@ -192,37 +192,47 @@ async function recreate(playlist: SpotifyPlaylist): Promise<void> {
 
     <template v-else>
       <!-- Large playlists are confirmed, not queued on a single click: a 1842-track
-           playlist is ~900 albums, which takes a long time and is tedious to undo. -->
-      <div
-        v-if="pendingQueue"
-        class="mb-4 p-3 rounded-md ring ring-default bg-elevated/50"
+           playlist is ~900 albums, which takes a long time and is tedious to undo.
+           This has to be a modal, not an inline panel — the playlist grids are long,
+           so a panel at the top of the card renders far above the viewport when you
+           click something near the bottom and reads as "nothing happened". -->
+      <UModal
+        :open="pendingQueue !== null"
+        title="Queue these albums?"
+        @update:open="(v: boolean) => { if (!v) pendingQueue = null }"
       >
-        <p class="font-medium m-0">
-          {{ pendingQueue.playlist.name }}
-        </p>
-        <p class="text-sm text-muted mt-1 mb-3">
-          {{ pendingQueue.result.stats.tracks }} tracks →
-          <strong>{{ pendingQueue.result.items.length }} unique albums</strong>
-          <template v-if="pendingQueue.result.stats.skipped > 0">
-            ({{ pendingQueue.result.stats.skipped }} skipped)
-          </template>
-        </p>
-        <div class="flex items-center gap-2 flex-wrap">
-          <UButton
-            color="primary"
-            :label="`Queue all ${pendingQueue.result.items.length}`"
-            @click="confirmQueueAll"
-          />
-          <UButton
-            v-if="pendingQueue.result.items.length > 100"
-            color="neutral"
-            variant="soft"
-            label="First 100"
-            @click="confirmQueueFirst"
-          />
-          <UButton color="neutral" variant="ghost" label="Cancel" @click="pendingQueue = null" />
-        </div>
-      </div>
+        <template #body>
+          <div v-if="pendingQueue">
+            <p class="font-medium m-0 truncate">
+              {{ pendingQueue.playlist.name }}
+            </p>
+            <p class="text-sm text-muted mt-1 mb-0">
+              {{ pendingQueue.result.stats.tracks }} tracks →
+              <strong>{{ pendingQueue.result.items.length }} unique albums</strong>
+              <template v-if="pendingQueue.result.stats.skipped > 0">
+                ({{ pendingQueue.result.stats.skipped }} skipped)
+              </template>
+            </p>
+          </div>
+        </template>
+        <template #footer>
+          <div class="flex items-center gap-2 flex-wrap">
+            <UButton
+              color="primary"
+              :label="`Queue all ${pendingQueue?.result.items.length ?? 0}`"
+              @click="confirmQueueAll"
+            />
+            <UButton
+              v-if="(pendingQueue?.result.items.length ?? 0) > 100"
+              color="neutral"
+              variant="soft"
+              label="First 100"
+              @click="confirmQueueFirst"
+            />
+            <UButton color="neutral" variant="ghost" label="Cancel" @click="pendingQueue = null" />
+          </div>
+        </template>
+      </UModal>
 
       <div class="flex items-center justify-between gap-4 flex-wrap">
         <p class="text-muted m-0 text-sm">

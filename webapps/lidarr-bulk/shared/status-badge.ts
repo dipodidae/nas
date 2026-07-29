@@ -15,6 +15,7 @@ export function statusBadge(status: ItemStatus): StatusBadge {
     case 'done': return { label: 'added', color: 'success', icon: 'i-lucide-check' }
     case 'nudged': return { label: 'nudged', color: 'success', icon: 'i-lucide-refresh-cw' }
     case 'already-added': return { label: 'already in lidarr', color: 'success', icon: 'i-lucide-check' }
+    case 'already-complete': return { label: 'already have it', color: 'success', icon: 'i-lucide-library-big' }
     case 'would-add': return { label: 'would add (dry-run)', color: 'primary', icon: 'i-lucide-diamond' }
     case 'not-found': return { label: 'not found', color: 'error', icon: 'i-lucide-x' }
     case 'error': return { label: 'error', color: 'error', icon: 'i-lucide-triangle-alert' }

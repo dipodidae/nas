@@ -253,20 +253,35 @@ function retryAfterMs(res: Response): number {
 }
 
 export async function spotifyFetch(url: string, accessToken: string): Promise<Response> {
+  let lastErr: unknown
   for (let attempt = 0; attempt < SPOTIFY_MAX_ATTEMPTS; attempt++) {
     const pause = spotifyPausedUntil - Date.now()
     if (pause > 0)
       await napt(pause)
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-    if (res.status !== 429)
-      return res
-    const wait = retryAfterMs(res)
-    spotifyPausedUntil = Math.max(spotifyPausedUntil, Date.now() + wait)
-    console.warn(`[spotify] 429, backing off ${wait}ms (attempt ${attempt + 1}/${SPOTIFY_MAX_ATTEMPTS})`)
-    if (attempt === SPOTIFY_MAX_ATTEMPTS - 1)
-      return res
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (res.status !== 429)
+        return res
+      const wait = retryAfterMs(res)
+      spotifyPausedUntil = Math.max(spotifyPausedUntil, Date.now() + wait)
+      console.warn(`[spotify] 429, backing off ${wait}ms (attempt ${attempt + 1}/${SPOTIFY_MAX_ATTEMPTS})`)
+      if (attempt === SPOTIFY_MAX_ATTEMPTS - 1)
+        return res
+    }
+    catch (err: unknown) {
+      // Connection-level failure ("fetch failed"), not an HTTP status. Egress here
+      // is occasionally flaky and a 1842-track playlist is 19 page requests, so
+      // one unlucky connection used to throw away the whole recreate with a 502.
+      // Retrying the page is always safe — these reads are idempotent.
+      lastErr = err
+      const detail = err instanceof Error ? err.message : String(err)
+      console.warn(`[spotify] request failed (${detail}), retry ${attempt + 1}/${SPOTIFY_MAX_ATTEMPTS}`)
+      if (attempt === SPOTIFY_MAX_ATTEMPTS - 1)
+        throw err
+      await napt(Math.min(500 * 2 ** attempt, SPOTIFY_MAX_BACKOFF_MS))
+    }
   }
-  throw new Error('unreachable')
+  throw lastErr instanceof Error ? lastErr : new Error('Spotify request failed')
 }
 
 export function resetSpotifyBackoff(): void {
