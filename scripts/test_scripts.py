@@ -121,6 +121,7 @@ def main():
     ("scripts/lidarr_purge_empty_artists.py", "lidarr-purge-empty-artists"),
     ("scripts/lidarr_backlog_drip.py", "lidarr-backlog-drip"),
     ("scripts/lidarr_stuck_download_reaper.py", "lidarr-stuck-download-reaper"),
+    ("scripts/jellyfin_subtitle_css.py", "jellyfin-subtitle-css"),
   ]
 
   for script_path, script_name in scripts:

@@ -530,6 +530,25 @@ Exit codes: `0` success / intentionally idle (queue busy or all of this page wit
 
 Environment: `API_KEY_LIDARR` + `API_KEY_SLSKD` (both required), `LIDARR_HOST` (default `http://localhost:8686`), `SLSKD_HOST` (default `http://localhost:5030`).
 
+### `jellyfin_subtitle_css.py`
+
+Fixes the "large subtitles wrap onto a second line constantly" problem. jellyfin-web renders each cue into `.videoSubtitlesInner`, which ships with a hardcoded **`max-width: 70%`** — the subtitle *size* setting scales the font but never the box, so comfortable text immediately outgrows its container. Jellyfin exposes no API field for the box geometry; the only server-side lever is **Branding → Custom CSS**, which every jellyfin-web client (browser, webOS, Tizen, Fire TV) fetches from `/Branding/Css` on load. This script merges a sentinel-delimited managed block into `BrandingOptions.CustomCss` over `POST /System/Configuration/branding`.
+
+Idempotent by construction: the `/* >>> nas-managed: subtitle-layout >>> */` sentinels mean a re-run **replaces** the block in place instead of appending, and any CSS you added by hand outside the markers is preserved byte-for-byte. `--remove` strips the block cleanly. Writes the full `BrandingOptions` object back (not just `CustomCss`) — a partial POST blanks `LoginDisclaimer`/`SplashscreenEnabled`.
+
+**Caveats:** text subtitles only (SRT/ASS) — image subs (PGS/VOBSUB) are drawn to a canvas and ignore CSS. Native apps (Android/iOS/Android TV) ignore server Custom CSS entirely. Clients cache it: hard-refresh the browser, restart the TV app.
+
+```bash
+python scripts/jellyfin_subtitle_css.py                                  # dry-run preview (default)
+python scripts/jellyfin_subtitle_css.py --apply                          # write it
+python scripts/jellyfin_subtitle_css.py --apply --max-width 96 --line-height 1.2
+python scripts/jellyfin_subtitle_css.py --apply --remove                 # strip the block
+```
+
+Exit codes: `0` success / dry-run / already up to date, `1` partial (read fine, write rejected), `2` fatal (API key missing, Jellyfin unreachable, bad `--max-width`).
+
+Environment: `API_KEY_JELLYFIN` (required), `JELLYFIN_HOST` (default `http://localhost:8096`).
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. The full live crontab on this host:
