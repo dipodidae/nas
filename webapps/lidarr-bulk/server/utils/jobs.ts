@@ -10,6 +10,7 @@ import type {
   LidarrAlbumCandidate,
   ParsedItem,
 } from '~~/shared/types'
+import { resolveAlbumViaArtist, resolveByCandidateAlias } from './artist-resolve'
 import { pruneHistory, recordJob } from './history'
 import {
   addAlbum,
@@ -22,7 +23,8 @@ import {
   nudgeExisting,
   waitForArtistRefresh,
 } from './lidarr'
-import { albumQueryVariations, isVariousArtists, normKeyLoose, pickAutoMatch, rankCandidates, similarity } from './matching'
+import { albumQueryVariations, isVariousArtists, normKeyLoose, pickAutoMatch, rankCandidates } from './matching'
+import { similarity } from './text'
 import { resolveVariousArtistsAlbumMbids } from './metadata'
 import { loadSettings } from './settings'
 
@@ -167,12 +169,14 @@ async function run(j: JobInternal): Promise<void> {
   await mapWithConcurrency(lookupItems, LOOKUP_CONCURRENCY, async (item) => {
     try {
       setStatus(j, item, { status: 'searching' })
-      const candidates = await searchCandidates(j.kind, item.parsed)
+      const { candidates, chosen } = await searchCandidates(j.kind, item.parsed)
       if (candidates.length === 0) {
         setStatus(j, item, { status: 'not-found' })
         return
       }
-      const auto = pickAutoMatch(j.kind, item.parsed, candidates)
+      // The album cascade already ran the matcher (and, for its later stages,
+      // resolved the release outright), so only the artist path decides here.
+      const auto = chosen ?? pickAutoMatch(j.kind, item.parsed, candidates)
       if (auto) {
         setStatus(j, item, { status: 'matched', chosen: auto })
       }
@@ -369,10 +373,26 @@ async function retryOnTransient<T>(fn: () => Promise<T>, attempts = 3): Promise<
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
 }
 
-async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<Candidate[]> {
+// Result of the album search cascade. `chosen` is set when a later, more
+// authoritative stage didn't just retrieve candidates but actually identified the
+// release — the caller then skips auto-matching rather than re-deciding on
+// weaker evidence.
+export interface SearchOutcome {
+  candidates: Candidate[]
+  chosen?: Candidate
+}
+
+// Turn a MusicBrainz album id back into a real Lidarr candidate so the add path
+// (which needs foreignAlbumId plus the nested artist record) is unchanged.
+async function lookupByMbid(mbid: string): Promise<Candidate[]> {
+  const res = await retryOnTransient(() => lookupAlbum(`lidarr:${mbid}`)).catch(() => [] as LidarrAlbumCandidate[])
+  return res.map(value => ({ kind: 'album' as const, value }))
+}
+
+async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<SearchOutcome> {
   if (kind === 'artist') {
     const res = await retryOnTransient(() => lookupArtist(parsed.raw))
-    return res.map(value => ({ kind: 'artist', value }))
+    return { candidates: res.map(value => ({ kind: 'artist', value })) }
   }
 
   // Various Artists compilations: Lidarr text search hides the special VA entity,
@@ -394,11 +414,27 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<Candida
       seen.add(value.foreignAlbumId)
       out.push({ kind: 'album', value })
     }
-    return out
+    return { candidates: out }
   }
 
-  // Normal albums: try query variations (as-typed, paren-stripped, edition-
-  // stripped) until one returns a title-similar hit; merge any extra results in.
+  return searchAlbumCandidates(parsed)
+}
+
+// Album retrieval cascade. Each stage is strictly more authoritative and strictly
+// more expensive than the last, and every stage short-circuits as soon as the
+// matcher can commit — so ordinary Latin rows still cost exactly one lookup.
+//
+//   1. Text search over query variations. albumQueryVariations leads with the
+//      bare native-script title for mixed-script rows, because a combined
+//      "Basta На заре" term is poison: the search discards the Cyrillic half and
+//      matches "Basta" against unrelated Swedish "Bästa" records.
+//   2. Candidate-side alias verification. We already hold rows whose title is an
+//      exact hit; the open question is only whether one of those artists is the
+//      one asked for. Settles "Мираж" ≡ Spotify's "Mirage".
+//   3. Artist-first discography resolution. For when the search never returned
+//      the album at all — a Latin title under a Cyrillic artist, or a canonical
+//      album buried under tribute pressings ("Pink Floyd The Wall").
+export async function searchAlbumCandidates(parsed: ParsedItem): Promise<SearchOutcome> {
   const variations = albumQueryVariations(parsed)
   const want = normKeyLoose(parsed.title ?? parsed.raw)
   const merged: LidarrAlbumCandidate[] = []
@@ -414,7 +450,36 @@ async function searchCandidates(kind: Kind, parsed: ParsedItem): Promise<Candida
     if (merged.some(c => similarity(normKeyLoose(c.title), want) > 0.8))
       break
   }
-  return merged.map(value => ({ kind: 'album', value }))
+  const candidates: Candidate[] = merged.map(value => ({ kind: 'album', value }))
+
+  const direct = pickAutoMatch('album', parsed, candidates)
+  if (direct)
+    return { candidates, chosen: direct }
+
+  const aliasHit = await resolveByCandidateAlias(parsed, candidates).catch((err: unknown) => {
+    console.error('[job] alias verify failed:', err instanceof Error ? err.message : String(err))
+    return undefined
+  })
+  if (aliasHit)
+    return { candidates, chosen: aliasHit }
+
+  const viaArtist = await resolveAlbumViaArtist(parsed).catch((err: unknown) => {
+    console.error('[job] artist-first resolve failed:', err instanceof Error ? err.message : String(err))
+    return null
+  })
+  if (viaArtist) {
+    const resolved = await lookupByMbid(viaArtist.album.mbid)
+    const chosen = resolved[0]
+    if (chosen) {
+      // Keep the original hits in the list behind the resolved one, so a wrong
+      // resolution is still correctable from the picker rather than a dead end.
+      const extra = candidates.filter(c =>
+        c.kind === 'album' && c.value.foreignAlbumId !== viaArtist.album.mbid)
+      return { candidates: [chosen, ...extra], chosen }
+    }
+  }
+
+  return { candidates }
 }
 
 async function addToLidarr(

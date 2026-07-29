@@ -36,6 +36,10 @@ export interface LidarrAlbumCandidate {
   foreignAlbumId: string
   title: string
   albumType?: string
+  // 'Compilation' | 'Live' | 'Demo' | 'Remix' | 'Soundtrack' | 'Mixtape' | …
+  // Used to tell a real studio album apart from the compilations and tribute
+  // pressings that outrank it in Lidarr's search results.
+  secondaryTypes?: string[]
   releaseDate?: string
   artist?: { artistName?: string, foreignArtistId?: string } | string
   images?: LidarrImage[]

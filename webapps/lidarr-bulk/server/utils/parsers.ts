@@ -7,13 +7,17 @@ const DASHES = /\s+[–—―-]\s+/ // en/em/hyphen between two parts, requires 
 const BY_SPLIT = /\s+by\s+/i
 const PIPE_SPLIT = /\s*\|\s*/
 
-// Split a blob into raw lines for the *album* parser. Album titles can contain
-// commas, so when quotes are present we only split on newlines (CSV-aware).
+// Split a blob into raw lines for the *album* parser.
+//
+// Commas are NOT separators here. Album titles and band names contain them all
+// the time — "Городок, что я выдумал", "I'm Wide Awake, It's Morning",
+// "Emerson, Lake & Palmer" — and splitting on them silently turned one release
+// into two bogus rows, each of which then failed its own lookup. A genuine
+// two-field CSV line is still recognised downstream by parseCsvPair, which is
+// the right place for that decision because it can see the whole line.
 function rawLinesAlbums(blob: string): string[] {
   const text = blob.replace(/\r\n?/g, '\n')
-  const hasQuoted = /["“”]/.test(text)
-  const splitter = hasQuoted ? /\n+/ : /[\n,;\t]+/
-  return text.split(splitter).map(s => s.trim()).filter(Boolean)
+  return text.split(/[\n;\t]+/).map(s => s.trim()).filter(Boolean)
 }
 
 // Artist parser splits aggressively on any common separator. Artists rarely
@@ -71,12 +75,23 @@ function albumItem(rawLine: string, artist: string, title: string): ParsedItem {
   return item
 }
 
+// Two-field CSV, deliberately strict. Either both fields are actually quoted, or
+// the line has exactly one comma and no other separator in sight. Anything looser
+// mistakes a comma inside a title for a field break, which is how
+// "Bright Eyes - I'm Wide Awake, It's Morning" became two rows.
 function parseCsvPair(line: string): { a: string, b: string } | undefined {
-  // Minimal CSV: two quoted or unquoted fields separated by a comma.
-  const m = line.match(/^\s*"?([^",]+(?:,[^",]+)*)"?\s*,\s*"?([^",]+(?:,[^",]+)*)"?\s*$/)
-  if (!m)
+  const quoted = line.match(/^\s*"([^"]+)"\s*,\s*"([^"]+)"\s*$/)
+  if (quoted)
+    return { a: clean(quoted[1]!), b: clean(quoted[2]!) }
+  if (DASHES.test(line) || PIPE_SPLIT.test(line) || BY_SPLIT.test(line))
     return
-  return { a: clean(m[1]!), b: clean(m[2]!) }
+  const parts = line.split(',')
+  if (parts.length !== 2)
+    return
+  const [a, b] = parts
+  if (!a?.trim() || !b?.trim())
+    return
+  return { a: clean(a), b: clean(b) }
 }
 
 function detectHeader(line: string): boolean {

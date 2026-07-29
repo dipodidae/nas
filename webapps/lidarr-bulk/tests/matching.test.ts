@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate, LidarrAlbumCandidate, LidarrArtistCandidate, ParsedItem } from '~~/shared/types'
-import { albumQueryVariations, isVariousArtists, normKey, pickAutoMatch, rankCandidates, similarity, stripEditionAppendix } from '../server/utils/matching'
+import { albumQueryVariations, isVariousArtists, pickAutoMatch, rankCandidates, releasePenalty, stripEditionAppendix } from '../server/utils/matching'
+import { normKey, similarity } from '../server/utils/text'
 
 function album(title: string, artist: string, albumType?: string): Candidate {
   return {
     kind: 'album',
     value: { title, albumType, artist: { artistName: artist, foreignArtistId: 'x' } } as unknown as LidarrAlbumCandidate,
+  }
+}
+
+function albumWith(title: string, artist: string, albumType: string, secondaryTypes: string[]): Candidate {
+  return {
+    kind: 'album',
+    value: { title, albumType, secondaryTypes, artist: { artistName: artist, foreignArtistId: 'x' } } as unknown as LidarrAlbumCandidate,
   }
 }
 
@@ -67,6 +75,154 @@ describe('pickAutoMatch (album)', () => {
     const a = album('Y', 'X', 'Album')
     const b = album('Y', 'X', 'Album')
     expect(pickAutoMatch('album', parsed, [a, b])).toBeUndefined()
+  })
+})
+
+describe('pickAutoMatch — cross-script (real Spotify rows)', () => {
+  it('matches a romanized Spotify artist to the Cyrillic MusicBrainz artist', () => {
+    // The exact row that produced ten Swedish "Bästa" compilations in the UI.
+    const parsed: ParsedItem = { raw: 'Basta - На заре', kind: 'album', artist: 'Basta', title: 'На заре' }
+    const right = album('На заре', 'Баста', 'Single')
+    const decoys = [
+      album('На заре', 'Ольга Рождественская', 'Album'),
+      album('На Заре', 'Альянс', 'Album'),
+    ]
+    // Three different artists released an album with this exact title, so this
+    // is genuinely ambiguous on title alone — the artist gate is what decides.
+    expect(pickAutoMatch('album', parsed, [...decoys, right])).toBe(right)
+  })
+
+  it('matches Аигел / Пыяла from the romanized AIGEL', () => {
+    const parsed: ParsedItem = { raw: 'AIGEL - Пыяла', kind: 'album', artist: 'AIGEL', title: 'Пыяла' }
+    const right = album('Пыяла', 'Аигел', 'Album')
+    const remix = album('Пыяла (Remix)', 'Аигел', 'Single')
+    expect(pickAutoMatch('album', parsed, [remix, right])).toBe(right)
+  })
+
+  it('still rejects a same-title album by a different Cyrillic artist', () => {
+    const parsed: ParsedItem = { raw: 'Kino - Легенда', kind: 'album', artist: 'Kino', title: 'Легенда' }
+    const wrongArtist = album('Легенда', 'Ария', 'Album')
+    const other = album('45', 'Кино', 'Album')
+    expect(pickAutoMatch('album', parsed, [wrongArtist, other])).toBeUndefined()
+  })
+
+  it('folds spelling drift between transliteration systems', () => {
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Aleksander Serov', title: 'Ты меня любишь' }
+    const right = album('Ты меня любишь', 'Александр Серов', 'Album')
+    const decoy = album('Ты меня любишь', 'Some Cover Band', 'Album')
+    expect(pickAutoMatch('album', parsed, [decoy, right])).toBe(right)
+  })
+})
+
+describe('pickAutoMatch — artistProven (alias-verified discography)', () => {
+  const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Splean', title: '25 Кадр' }
+
+  it('decides on title alone once the artist is proven by a MusicBrainz alias', () => {
+    // Сплин's romanization ("splin") never reaches "Splean" — only the alias
+    // does — so without artistProven the gate would reject this outright.
+    const right = album('25 Кадр', 'Сплин', 'Album')
+    const other = album('Гранатовый альбом', 'Сплин', 'Album')
+    expect(pickAutoMatch('album', parsed, [other, right], { artistProven: true })).toBe(right)
+    expect(pickAutoMatch('album', parsed, [other, right])).toBeUndefined()
+  })
+
+  it('still asks when the title is only fuzzy, even with a proven artist', () => {
+    // The design decision: alias-proven artist lowers the artist bar, not the
+    // title bar. "25 Кадр" vs "25-й кадр" stays a user decision.
+    const near = album('25-й кадр и ещё немного', 'Сплин', 'Album')
+    const other = album('Реверсивная хроника событий', 'Сплин', 'Album')
+    expect(pickAutoMatch('album', parsed, [near, other], { artistProven: true })).toBeUndefined()
+  })
+})
+
+describe('pickAutoMatch — release form', () => {
+  const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Iron Maiden', title: 'Powerslave' }
+
+  it('prefers the studio album over a combined 2-in-1 pressing', () => {
+    const combined = album('Powerslave / Single Collection 2', 'Iron Maiden', 'Album')
+    const studio = album('Powerslave', 'Iron Maiden', 'Album')
+    expect(pickAutoMatch('album', parsed, [combined, studio])).toBe(studio)
+  })
+
+  it('prefers the studio album over a same-titled compilation', () => {
+    const comp = albumWith('Powerslave', 'Iron Maiden', 'Album', ['Compilation'])
+    const studio = album('Powerslave', 'Iron Maiden', 'Album')
+    expect(pickAutoMatch('album', parsed, [comp, studio])).toBe(studio)
+  })
+
+  it('does not penalise a live release the user actually asked for', () => {
+    const liveParsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Iron Maiden', title: 'Live After Death' }
+    const live = albumWith('Live After Death', 'Iron Maiden', 'Album', ['Live'])
+    const studio = album('Somewhere in Time', 'Iron Maiden', 'Album')
+    expect(pickAutoMatch('album', liveParsed, [studio, live])).toBe(live)
+  })
+
+  it('does not treat an unspaced slash in a title as a combined release', () => {
+    const acdc: ParsedItem = { raw: 'x', kind: 'album', artist: 'AC/DC', title: 'Back in Black' }
+    const right = album('Back in Black', 'AC/DC', 'Album')
+    const other = album('Highway to Hell', 'AC/DC', 'Album')
+    expect(pickAutoMatch('album', acdc, [other, right])).toBe(right)
+  })
+})
+
+describe('pickAutoMatch — subtitle tolerance', () => {
+  const nautilus: ParsedItem = { raw: 'x', kind: 'album', artist: 'Nautilus Pompilius', title: 'Золотой век' }
+  const subtitled = album('Золотой век: Лучшие песни 1986—1989', 'Nautilus Pompilius', 'Album')
+  const other = album('Крылья', 'Nautilus Pompilius', 'Album')
+
+  it('does NOT decide on a subtitle-only match from a search page', () => {
+    // Load-bearing safety property. Asked for "The Wall", Lidarr's search page
+    // came back without the real album but with "The Wall: The Film Soundtrack";
+    // deciding on the subtitle form there silently added the wrong release.
+    // Absence from a truncated page is not evidence that nothing better exists.
+    const pf: ParsedItem = { raw: 'x', kind: 'album', artist: 'Pink Floyd', title: 'The Wall' }
+    const soundtrack = album('The Wall: The Film Soundtrack', 'Pink Floyd', 'Album')
+    const unrelated = album('Animals', 'Pink Floyd', 'Album')
+    expect(pickAutoMatch('album', pf, [soundtrack, unrelated])).toBeUndefined()
+    expect(pickAutoMatch('album', nautilus, [other, subtitled])).toBeUndefined()
+  })
+
+  it('does decide on a subtitle-only match inside a complete discography', () => {
+    // Real row: Spotify says "Золотой век", MusicBrainz says
+    // "Золотой век: Лучшие песни 1986—1989". Within the artist's full catalogue
+    // "no exact title exists" is a fact, so the subtitle form may decide.
+    expect(pickAutoMatch('album', nautilus, [other, subtitled], {
+      artistProven: true,
+      allowSubtitleMatch: true,
+    })).toBe(subtitled)
+  })
+
+  it('lets a literal exact title beat a subtitled one', () => {
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Radiohead', title: 'OK Computer' }
+    const oknotok = albumWith('OK Computer: OKNOTOK 1997 2017', 'Radiohead', 'Album', ['Compilation'])
+    const exact = album('OK Computer', 'Radiohead', 'Album')
+    expect(pickAutoMatch('album', parsed, [oknotok, exact])).toBe(exact)
+    expect(pickAutoMatch('album', parsed, [oknotok, exact], {
+      artistProven: true,
+      allowSubtitleMatch: true,
+    })).toBe(exact)
+  })
+
+  it('still ranks a subtitled match near the top of the picker', () => {
+    // Ranking may use subtitle evidence freely — it only orders, never decides.
+    const ranked = rankCandidates('album', nautilus, [other, subtitled])
+    expect(ranked[0]).toBe(subtitled)
+  })
+})
+
+describe('releasePenalty', () => {
+  it('is zero for a clean studio album', () => {
+    expect(releasePenalty(album('Powerslave', 'Iron Maiden', 'Album'))).toBe(0)
+  })
+
+  it('penalises non-album types, secondary types and combined pressings', () => {
+    expect(releasePenalty(album('Powerslave', 'Iron Maiden', 'Single'))).toBeGreaterThan(0)
+    expect(releasePenalty(albumWith('Powerslave', 'Iron Maiden', 'Album', ['Live']))).toBeGreaterThan(0)
+    expect(releasePenalty(album('Powerslave / Somewhere in Time', 'Iron Maiden', 'Album'))).toBeGreaterThan(0)
+  })
+
+  it('never penalises an artist candidate', () => {
+    expect(releasePenalty(artist('Iron Maiden'))).toBe(0)
   })
 })
 

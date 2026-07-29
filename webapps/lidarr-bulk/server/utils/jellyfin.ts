@@ -4,7 +4,8 @@
 // normalization from matching.ts (normKey / normKeyLoose / similarity).
 import type { Env } from './env'
 import type { JellyfinPushResult, SpotifyTrack } from '~~/shared/types'
-import { normKey, normKeyLoose, similarity } from './matching'
+import { normKeyLoose } from './matching'
+import { normKey, similarity } from './text'
 
 // A title is "matched" when its loose-normalized name is ~equal to the track's
 // and the artist matches; reuse the same strict threshold matching.ts uses.

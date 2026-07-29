@@ -5,7 +5,7 @@
 // to the normal lookup-by-MBID + add pipeline. Pure ranking is split from the
 // fetch so it can be unit-tested (mirrors spotify.ts / openai.ts).
 import { loadEnv } from './env'
-import { normKey, similarity } from './matching'
+import { normKey, similarity } from './text'
 
 export const VARIOUS_ARTISTS_MBID = '89ad4ac3-39f7-470e-963a-56509c546377'
 

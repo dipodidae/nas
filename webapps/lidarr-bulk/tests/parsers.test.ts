@@ -50,6 +50,39 @@ describe('parseAlbums', () => {
     expect(r.length).toBe(2)
     expect(r[0]).toMatchObject({ artist: 'Adele', title: '30' })
   })
+  it('keeps a comma inside an album title on one row', () => {
+    // Regression: commas used to split album blobs, so this became two bogus
+    // rows ("… — Городок" and "что я выдумал"), each failing its own lookup.
+    const r = parseAlbums('Татьяна Никитина и Сергей Никитин — Городок, что я выдумал')
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({
+      artist: 'Татьяна Никитина и Сергей Никитин',
+      title: 'Городок, что я выдумал',
+    })
+  })
+
+  it('keeps a comma inside an English album title on one row', () => {
+    const r = parseAlbums('Bright Eyes - I\'m Wide Awake, It\'s Morning')
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ artist: 'Bright Eyes', title: 'I\'m Wide Awake, It\'s Morning' })
+  })
+
+  it('keeps a comma inside a band name on one row', () => {
+    const r = parseAlbums('Emerson, Lake & Palmer - Trilogy')
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ artist: 'Emerson, Lake & Palmer', title: 'Trilogy' })
+  })
+
+  it('still splits unquoted CSV when nothing else looks like a separator', () => {
+    const r = parseAlbums('Adele,30')
+    expect(r[0]).toMatchObject({ artist: 'Adele', title: '30' })
+  })
+
+  it('still splits on semicolons and newlines', () => {
+    const r = parseAlbums('Adele - 30;Beyoncé - Lemonade\nSade - Love Deluxe')
+    expect(r).toHaveLength(3)
+  })
+
   it('flags ambiguous lines as needsReview instead of guessing', () => {
     const r = parseAlbums('justonething')
     expect(r[0]).toMatchObject({ needsReview: true })
