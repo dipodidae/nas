@@ -128,9 +128,11 @@ export function pickDiscographyAlbum(
   const chosen = pickAutoMatch('album', parsed, candidates, {
     artistProven: true,
     requireTitleEvidence: true,
-    // Safe here and only here: this pool is the artist's entire catalogue, so a
-    // unique subtitle-level match really does mean nothing better exists.
+    // Safe here and only here: this pool is the artist's entire catalogue, so
+    // both "no exact title exists" and "nothing else comes close" are facts
+    // rather than artefacts of a truncated search page.
     allowSubtitleMatch: true,
+    completeCatalogue: true,
   })
   if (!chosen || chosen.kind !== 'album')
     return undefined
@@ -224,10 +226,38 @@ class TtlCache<T> {
 
 const discographyCache = new TtlCache<Discography | null>()
 const artistLookupCache = new TtlCache<{ mbid: string, name: string }[]>()
+// Identities learned from rows that already resolved. Lidarr's artist lookup is
+// unusable for short romanized names — "Kino" returns ten Latin homographs and
+// never surfaces Кино, likewise "Basta", "Forum", "7B" — but a *title* search for
+// one of that artist's other albums finds them immediately. Playlists are full of
+// several albums by the same artist, so one row resolving teaches the rest:
+// "Kino — Звезда по имени Солнце" identifies Кино, and "Kino — 45" (whose bare
+// numeric title no search can disambiguate) then resolves from the discography.
+const learnedArtists = new TtlCache<{ mbid: string, name: string }>()
 
 export function clearArtistResolveCaches(): void {
   discographyCache.clear()
   artistLookupCache.clear()
+  learnedArtists.clear()
+}
+
+// Record that `inputName` (as the user/Spotify spelled it) refers to this
+// MusicBrainz artist. Only called with an identity that already survived the
+// matcher, so this never launders a guess into a fact.
+export function learnArtistIdentity(
+  inputName: string | undefined,
+  mbid: string | undefined,
+  name: string | undefined,
+): void {
+  const key = normKey(inputName)
+  if (!key || !mbid || !name)
+    return
+  learnedArtists.set(key, { mbid, name }, Date.now())
+}
+
+export function learnedArtistIdentity(inputName: string | undefined): { mbid: string, name: string } | undefined {
+  const key = normKey(inputName)
+  return key ? learnedArtists.get(key, Date.now()) : undefined
 }
 
 export async function fetchArtistDiscography(mbid: string): Promise<Discography | null> {
@@ -331,6 +361,19 @@ export async function resolveAlbumViaArtist(
 ): Promise<{ artist: ArtistIdentity, album: DiscographyAlbum } | null> {
   if (!parsed.artist || !parsed.title)
     return null
+
+  // An identity another row already established beats anything the text search
+  // can offer, so try it first and skip the lookup entirely on a hit.
+  const learned = learnedArtistIdentity(parsed.artist)
+  if (learned) {
+    const disco = await fetchArtistDiscography(learned.mbid)
+    if (disco) {
+      const album = pickDiscographyAlbum(disco, parsed)
+      if (album)
+        return { artist: disco, album }
+    }
+  }
+
   const candidates = await lookupArtistCached(parsed.artist)
   if (candidates.length === 0)
     return null

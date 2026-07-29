@@ -12,6 +12,8 @@ const {
   clearArtistResolveCaches,
   fetchArtistDiscography,
   identityProvesName,
+  learnArtistIdentity,
+  learnedArtistIdentity,
   parseArtistDoc,
   pickDiscographyAlbum,
   resolveAlbumViaArtist,
@@ -356,6 +358,69 @@ describe('resolveAlbumViaArtist', () => {
     // One artist lookup, one discography fetch — the second row hits both caches.
     expect(lookupArtist).toHaveBeenCalledTimes(1)
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses an identity learned from another row instead of the useless lookup', async () => {
+    // The real "Kino — 45" row. Lidarr's artist lookup for "Kino" returns ten
+    // Latin homographs and never surfaces Кино, so this row can only resolve
+    // from an identity a sibling row ("Kino — Звезда по имени Солнце") proved.
+    lookupArtist.mockResolvedValue([
+      { foreignArtistId: 'latin1', artistName: 'Kino' },
+      { foreignArtistId: 'latin2', artistName: 'Kino' },
+    ])
+    stubFetch({
+      kino: docFor(disco({
+        mbid: 'kino',
+        name: 'Кино',
+        sortName: 'Kino',
+        aliases: ['Gruppa Kino'],
+        albums: [
+          { mbid: 'k45', title: '45', type: 'Album', secondaryTypes: [] },
+          { mbid: 'k46', title: '46', type: 'Album', secondaryTypes: ['Demo'] },
+        ],
+      })),
+      latin1: docFor(disco({ mbid: 'latin1', name: 'Kino', sortName: 'Kino', aliases: [], albums: [] })),
+      latin2: docFor(disco({ mbid: 'latin2', name: 'Kino', sortName: 'Kino', aliases: [], albums: [] })),
+    })
+
+    const row = { raw: 'x', kind: 'album' as const, artist: 'Kino', title: '45' }
+    // Without the learned identity the Latin homographs win and nothing resolves.
+    expect(await resolveAlbumViaArtist(row)).toBeNull()
+
+    learnArtistIdentity('Kino', 'kino', 'Кино')
+    const hit = await resolveAlbumViaArtist(row)
+    expect(hit?.album).toMatchObject({ mbid: 'k45', title: '45' })
+    expect(hit?.artist.name).toBe('Кино')
+  })
+
+  it('falls back to the normal lookup when the learned identity does not have the album', async () => {
+    lookupArtist.mockResolvedValue([{ foreignArtistId: 'sg', artistName: 'Смысловые галлюцинации' }])
+    stubFetch({
+      wrong: docFor(disco({ mbid: 'wrong', name: 'Смысловые галлюцинации', sortName: 'Smyslovye Gallyutsinatsii', aliases: [], albums: [] })),
+      sg: docFor(disco({
+        mbid: 'sg',
+        name: 'Смысловые галлюцинации',
+        sortName: 'Smyslovye Gallyutsinatsii',
+        aliases: [],
+        albums: [{ mbid: 'g1', title: '3000', type: 'Album', secondaryTypes: [] }],
+      })),
+    })
+    learnArtistIdentity('Smyslovye Gallyutsinatsii', 'wrong', 'Смысловые галлюцинации')
+    const hit = await resolveAlbumViaArtist(parsed)
+    expect(hit?.album).toMatchObject({ mbid: 'g1' })
+  })
+
+  it('ignores incomplete learn calls and is cleared with the caches', () => {
+    learnArtistIdentity(undefined, 'm', 'n')
+    learnArtistIdentity('X', undefined, 'n')
+    learnArtistIdentity('X', 'm', undefined)
+    expect(learnedArtistIdentity('X')).toBeUndefined()
+
+    learnArtistIdentity('Kino', 'kino', 'Кино')
+    // Keyed on the normalised input name, so casing/spacing drift still hits.
+    expect(learnedArtistIdentity('  kino ')).toMatchObject({ mbid: 'kino' })
+    clearArtistResolveCaches()
+    expect(learnedArtistIdentity('Kino')).toBeUndefined()
   })
 
   it('needs both an artist and a title', async () => {

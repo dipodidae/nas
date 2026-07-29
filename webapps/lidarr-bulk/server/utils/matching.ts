@@ -19,12 +19,12 @@
 //   compilation/live/combined pressing) breaks ties, never creates them.
 
 import type { Candidate, Kind, ParsedItem } from '~~/shared/types'
-import { bestCrossScriptSimilarity, isMixedScript } from './script'
+import { bestCrossScriptSimilarity, isMixedScript, primaryRomanization } from './script'
 // normKey / similarity deliberately live in text.ts and are NOT re-exported from
 // here: Nuxt auto-imports every server/utils module, and a re-export makes the
 // same symbol resolvable from two paths (which it warns about and resolves
 // arbitrarily). Import them from './text'.
-import { normKey } from './text'
+import { normKey, similarity } from './text'
 
 const MIN_FUZZY_SIMILARITY = 0.95
 const FUZZY_MARGIN = 0.05
@@ -37,6 +37,19 @@ const ARTIST_IDENTITY = 0.9
 // just below 1.0. That keeps a true exact always ahead of it and leaves the
 // margin rule able to reject a genuinely ambiguous pair.
 const SUBTITLE_DISCOUNT = 0.97
+// Unique-clear-winner rule, valid only over a proven artist's complete catalogue
+// (see AutoMatchOptions.completeCatalogue). Having enumerated everything the
+// artist ever released, one title scoring far above every alternative is strong
+// evidence — nothing else they made could plausibly have been meant.
+//
+// Calibrated against the real cases this exists for, and against the ones it must
+// refuse (scores are this module's own, over each artist's full discography):
+//   accept  Сплин "25 Кадр"      → "25-й кадр"          0.78 vs 0.31 runner-up
+//   refuse  7Б "Я умираю, но…"   → "Я пришёл, чтобы…"   0.42 vs 0.36 — album absent
+//   refuse  Никитины "Городок…"  → "Под музыку Вивальди" 0.34 vs 0.34 — song, not album
+//   refuse  Кино "Виктор Цой 55" → live bootleg          0.41 vs 0.32 — album absent
+const CATALOGUE_MIN_SIMILARITY = 0.7
+const CATALOGUE_MIN_MARGIN = 0.25
 
 export function norm(s: string | undefined): string {
   return (s ?? '').toLowerCase().trim().replace(/\s+/g, ' ')
@@ -183,6 +196,11 @@ export interface AutoMatchOptions {
   // an artist's complete discography, where "no exact title exists" is a real
   // fact rather than an artefact of a truncated search page. See fieldScore.
   allowSubtitleMatch?: boolean
+  // Declares the candidate pool to be the artist's *entire* catalogue, which
+  // licenses the unique-clear-winner rule below. Same justification as
+  // allowSubtitleMatch: within a complete catalogue, the runner-up's score is
+  // meaningful information about what else could possibly have been meant.
+  completeCatalogue?: boolean
 }
 
 interface Scored {
@@ -284,12 +302,95 @@ export function pickAutoMatch(
     return bestByReleaseForm(exact)
 
   const best = scored[0]
-  if (!best || best.titleScore < MIN_FUZZY_SIMILARITY)
+  if (!best)
     return undefined
   const second = scored[1]
+
+  if (best.titleScore < MIN_FUZZY_SIMILARITY) {
+    // Last chance: a lone standout inside a complete catalogue. Requires both a
+    // floor and a wide gap to the runner-up, so "the album simply isn't in this
+    // artist's discography" (where everything scores low and close together)
+    // still falls through to the user.
+    if (
+      opts.completeCatalogue
+      && best.titleScore >= CATALOGUE_MIN_SIMILARITY
+      && (!second || best.adjusted - second.adjusted >= CATALOGUE_MIN_MARGIN)
+    ) {
+      return best.c
+    }
+    return undefined
+  }
   if (second && best.adjusted - second.adjusted < FUZZY_MARGIN)
     return undefined
   return best.c
+}
+
+// Best artist-name score anywhere in the result set, or 1 when there is no artist
+// to compare against.
+export function bestCandidateArtistScore(parsed: ParsedItem, candidates: Candidate[]): number {
+  if (!parsed.artist)
+    return 1
+  let best = 0
+  for (const c of candidates) {
+    if (c.kind !== 'album')
+      continue
+    const score = fieldScore(albumArtistName(c.value) ?? '', parsed.artist)
+    if (score > best)
+      best = score
+  }
+  return best
+}
+
+// Is any candidate even *plausibly* by the artist that was asked for? This is not
+// a match decision — it distinguishes "these results are unrelated noise" from
+// "the right artist is here under a name we can't quite confirm", so that only the
+// former is reported as not-found instead of rendering a picker full of strangers.
+//
+// Whole-string similarity cannot make this call. Measured against live results:
+//
+//   0.714  Татьяна Никитина и Сергей Никитин → "Татьяна и Сергей Никитины"  ← RIGHT
+//   0.750  Aleksander Serov                  → "Aleksander Jež"            ← WRONG
+//
+// The correct artist scores *below* the coincidental one, so no threshold on that
+// score can separate them. Word coverage can: Russian declension alters a word
+// ending (Никитин→Никитины, 0.875 as a token) and leaves every other word intact,
+// whereas a coincidental name shares one word out of two and nothing else. So we
+// ask what fraction of the requested name's words appear in the candidate's.
+const TOKEN_MATCH = 0.8
+const ARTIST_PLAUSIBLE_COVERAGE = 0.75
+
+// Fraction of `wanted`'s words that have a close counterpart in `got`.
+function tokenCoverage(wanted: string, got: string): number {
+  const w = wanted.split(' ').filter(Boolean)
+  const g = got.split(' ').filter(Boolean)
+  if (w.length === 0 || g.length === 0)
+    return 0
+  let matched = 0
+  for (const token of w) {
+    if (g.some(other => similarity(token, other) >= TOKEN_MATCH))
+      matched++
+  }
+  return matched / w.length
+}
+
+// Compared under both tokenizations: raw keys settle same-script pairs, primary
+// romanizations settle cross-script ones (Кино ≡ Kino).
+function artistPlausibility(wanted: string, got: string): number {
+  return Math.max(
+    tokenCoverage(normKey(wanted), normKey(got)),
+    tokenCoverage(primaryRomanization(wanted), primaryRomanization(got)),
+  )
+}
+
+export function hasPlausibleArtist(parsed: ParsedItem, candidates: Candidate[]): boolean {
+  if (!parsed.artist)
+    return true
+  const wanted = parsed.artist
+  return candidates.some((c) => {
+    if (c.kind !== 'album')
+      return false
+    return artistPlausibility(wanted, albumArtistName(c.value) ?? '') >= ARTIST_PLAUSIBLE_COVERAGE
+  })
 }
 
 // Candidates whose title is an exact comparison-key hit for the requested album,

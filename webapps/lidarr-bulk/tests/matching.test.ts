@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate, LidarrAlbumCandidate, LidarrArtistCandidate, ParsedItem } from '~~/shared/types'
-import { albumQueryVariations, isVariousArtists, pickAutoMatch, rankCandidates, releasePenalty, stripEditionAppendix } from '../server/utils/matching'
+import { albumQueryVariations, hasPlausibleArtist, isVariousArtists, pickAutoMatch, rankCandidates, releasePenalty, stripEditionAppendix } from '../server/utils/matching'
 import { normKey, similarity } from '../server/utils/text'
 
 function album(title: string, artist: string, albumType?: string): Candidate {
@@ -207,6 +207,109 @@ describe('pickAutoMatch — subtitle tolerance', () => {
     // Ranking may use subtitle evidence freely — it only orders, never decides.
     const ranked = rankCandidates('album', nautilus, [other, subtitled])
     expect(ranked[0]).toBe(subtitled)
+  })
+})
+
+describe('pickAutoMatch — unique clear winner in a complete catalogue', () => {
+  const splean: ParsedItem = { raw: 'x', kind: 'album', artist: 'Splean', title: '25 Кадр' }
+  const catalogue = { artistProven: true, requireTitleEvidence: true, completeCatalogue: true } as const
+
+  it('accepts a lone standout that plain fuzzy matching rejects', () => {
+    // The real Сплин row: MusicBrainz spells it "25-й кадр" (~0.78 here), and
+    // nothing else in the band's 35 releases comes close.
+    const right = album('25-й кадр', 'Сплин', 'Album')
+    const far = album('Ключ к шифру', 'Сплин', 'Album')
+    const alsoFar = album('Реверсивная хроника событий', 'Сплин', 'Album')
+    expect(pickAutoMatch('album', splean, [far, right, alsoFar], catalogue)).toBe(right)
+    // Without the completeCatalogue licence the same pool must stay a question.
+    expect(pickAutoMatch('album', splean, [far, right, alsoFar], {
+      artistProven: true,
+      requireTitleEvidence: true,
+    })).toBeUndefined()
+  })
+
+  it('refuses when the album simply is not in the catalogue', () => {
+    // The real 7Б row: the requested album does not exist, so everything scores
+    // low AND close together. That closeness is the signal to stay out of it.
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: '7B', title: 'Я умираю, но не сдаюсь!' }
+    const a = album('Я пришёл, чтобы петь', '7Б', 'Album')
+    const b = album('Я умираю для тебя', '7Б', 'Album')
+    const c = album('Моя любовь', '7Б', 'Album')
+    expect(pickAutoMatch('album', parsed, [a, b, c], catalogue)).toBeUndefined()
+  })
+
+  it('refuses a best match that is below the floor even with a wide margin', () => {
+    // Никитины: "Городок, что я выдумал" is a song, not a release. A big gap to
+    // the runner-up must not rescue a match that is simply not similar.
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Татьяна и Сергей Никитины', title: 'Городок, что я выдумал' }
+    const a = album('Под музыку Вивальди', 'Татьяна и Сергей Никитины', 'Album')
+    const b = album('Зимний праздник', 'Татьяна и Сергей Никитины', 'Album')
+    expect(pickAutoMatch('album', parsed, [a, b], catalogue)).toBeUndefined()
+  })
+
+  it('still prefers an exact match over a standout when both are present', () => {
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Kino', title: '45' }
+    const exact = album('45', 'Кино', 'Album')
+    const near = albumWith('46', 'Кино', 'Album', ['Demo'])
+    expect(pickAutoMatch('album', parsed, [near, exact], catalogue)).toBe(exact)
+  })
+})
+
+describe('hasPlausibleArtist', () => {
+  it('is true for the right artist under a morphologically different name', () => {
+    // Must NOT be discarded: MusicBrainz calls the duo "Татьяна и Сергей
+    // Никитины" where the input says "Татьяна Никитина и Сергей Никитин".
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Татьяна Никитина и Сергей Никитин', title: 'Городок, что я выдумал' }
+    expect(hasPlausibleArtist(parsed, [album('Под музыку Вивальди', 'Татьяна и Сергей Никитины', 'Album')])).toBe(true)
+  })
+
+  it('is true when some candidate is by the requested artist, cross-script', () => {
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: 'Kino', title: '45' }
+    expect(hasPlausibleArtist(parsed, [album('Легенда', 'Кино', 'Album')])).toBe(true)
+  })
+
+  it('separates the right artist from a coincidental one where similarity cannot', () => {
+    // Measured against live results: the correct artist scores 0.714 on whole-string
+    // similarity while a coincidental name scores 0.750, so only word coverage can
+    // tell these two apart.
+    const nikitiny: ParsedItem = { raw: 'x', kind: 'album', artist: 'Татьяна Никитина и Сергей Никитин', title: 'Городок' }
+    expect(hasPlausibleArtist(nikitiny, [album('Под музыку Вивальди', 'Татьяна и Сергей Никитины', 'Album')])).toBe(true)
+
+    const serov: ParsedItem = { raw: 'x', kind: 'album', artist: 'Aleksander Serov', title: 'Superhits Collection' }
+    expect(hasPlausibleArtist(serov, [
+      album('Aleksander Jež', 'Aleksander Jež', 'Album'),
+      album('Aleksander Arder', 'Aleksander Arder', 'Album'),
+      album('Aleksander', 'Aleksander', 'Album'),
+    ])).toBe(false)
+  })
+
+  it('rejects the other measured unrelated result sets', () => {
+    const rows: [string, string, string[]][] = [
+      ['Oleg Anofriyev', 'Золотая коллекция', ['Олег Ай', 'Oleg Sirenko', 'Микаэл Таривердиев']],
+      ['7B', 'Я умираю, но не сдаюсь!', ['Jubilee', 'Distemper', 'Опиа']],
+      ['Вячеслав Константинов', 'Зачем ты это сделала...', ['Вячеслав Артёмов', 'Вячеслав Бутусов']],
+      ['Kino', 'Виктор Цой 55', ['Виктор Цой']],
+    ]
+    for (const [artist, title, names] of rows) {
+      const parsed: ParsedItem = { raw: 'x', kind: 'album', artist, title }
+      expect(hasPlausibleArtist(parsed, names.map(n => album(title, n, 'Album'))), artist).toBe(false)
+    }
+  })
+
+  it('is false when the whole result set is unrelated', () => {
+    // The real "808 Squadliners Beatz — 2000$" row: nine "808" albums by nine
+    // unrelated artists. There is no choice for the user to meaningfully make.
+    const parsed: ParsedItem = { raw: 'x', kind: 'album', artist: '808 Squadliners Beatz', title: '2000$' }
+    const noise = [
+      album('808', 'Bass Mekanik', 'Album'),
+      album('808', 'Ufo361', 'Album'),
+      album('808', 'ONEUS', 'Single'),
+    ]
+    expect(hasPlausibleArtist(parsed, noise)).toBe(false)
+  })
+
+  it('is true when there is no artist to gate on', () => {
+    expect(hasPlausibleArtist({ raw: 'x', kind: 'album', title: '45' }, [album('45', 'Кино')])).toBe(true)
   })
 })
 

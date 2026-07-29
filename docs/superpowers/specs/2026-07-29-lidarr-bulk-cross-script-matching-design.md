@@ -173,34 +173,88 @@ one comma *and* no dash/pipe/`by` separator — so
 more dash separators additionally queries the whole raw line, since `A - B - C`
 could legitimately split either way.
 
+## Round 2
+
+The first round left 9 rows needing a pick. Checking each against the artist's
+*real* MusicBrainz discography showed 2 were fixable and 7 were genuinely absent
+upstream — so the remaining work was one matcher gap, one retrieval gap, and an
+honesty problem in how the unresolvable rows were presented.
+
+### Cross-row artist learning (`learnArtistIdentity`)
+
+`Кино`'s sortname is literally `Kino` and `7Б`'s aliases include `7B`, so identity
+proof works — but `lookupArtist("Kino")` returns ten Latin homographs and never
+surfaces Кино, so the artist path could never start. Meanwhile *other rows in the
+same job* had already identified Кино by title.
+
+So a resolved row now records `inputName → {mbid, name}`, `resolveAlbumViaArtist`
+consults that first, and `jobs.ts` gained a **phase A2** that retries still-
+unresolved album rows once identities have been learned. `Kino — 45` — a bare
+numeric title no search can disambiguate — resolves from Кино's discography.
+
+### Unique clear winner in a complete catalogue (`completeCatalogue`)
+
+Same justification as `allowSubtitleMatch`: within a proven artist's entire
+catalogue, the runner-up's score is real information. Accept the best title if it
+clears 0.7 **and** beats the runner-up by 0.25. Calibrated on real data:
+
+| | best vs runner-up | outcome |
+| --- | --- | --- |
+| Сплин `25 Кадр` → `25-й кадр` | 0.78 vs 0.31 | accept |
+| 7Б `Я умираю, но не сдаюсь!` | 0.42 vs 0.36 | refuse — album absent |
+| Никитины `Городок, что я выдумал` | 0.34 vs 0.34 | refuse — it's a song |
+| Кино `Виктор Цой 55` | 0.41 vs 0.32 | refuse — album absent |
+
+When the album isn't in the catalogue, everything scores low *and close together* —
+that closeness is the signal to stay out of it.
+
+### Honest not-found instead of a pick list full of strangers
+
+`808 Squadliners Beatz — 2000$` offered nine unrelated `808` albums under
+"Multiple matches — pick the right one". When nothing in the result set is even
+plausibly by the requested artist, the honest answer is that the release wasn't
+found; the user was only ever going to hit Skip.
+
+**Whole-string similarity cannot make that call.** Measured against live results:
+
+```
+0.714  Татьяна Никитина и Сергей Никитин → "Татьяна и Сергей Никитины"   ← RIGHT
+0.750  Aleksander Serov                  → "Aleksander Jež"             ← WRONG
+```
+
+The correct artist scores *below* the coincidental one, so no threshold on that
+score separates them — the first attempt at this (a second, lower similarity
+threshold) was simply unsound. Word coverage does separate them: Russian
+declension alters one word ending (`Никитин`→`Никитины`, 0.875 as a token) and
+leaves the rest intact, while a coincidental name shares one word out of two.
+`hasPlausibleArtist` therefore asks what fraction of the requested name's words
+have a close counterpart in the candidate's, under both raw and romanized
+tokenizations, and requires 0.75.
+
 ## Results
 
-Replayed against live Lidarr with the real failing rows (29: the 26 needs-pick
-entries, the not-found ones, and the Latin complaints):
+Replayed against live Lidarr with all the real rows (32: the original 26
+needs-pick entries, the not-found ones, and the Latin complaints):
 
-**23/29 auto-matched, 6 needs-pick, 0 not-found** — from roughly 3 before.
+**25/32 auto-matched, 1 needs-pick, 6 not-found** — from roughly 3 auto-matched
+and 26 picks before.
 
-All six remaining picks were verified as genuinely unresolvable upstream, not
-matcher failures:
-
-| Row | Why it still asks |
-| --- | --- |
-| `Splean — 25 Кадр` | Artist alias-proven; MB title is `25-й кадр`. Fuzzy title → asks, by design |
-| `Aleksander Serov — Superhits Collection` | Александр Серов has 1 release group in MB; this is not it |
-| `Oleg Anofriyev — Золотая коллекция` | Олег Анофриев has 9 release groups; not among them |
-| `7B — Я умираю, но не сдаюсь!` | Latin `7B` has 0 albums; Cyrillic `7Б` never surfaces behind the homograph |
-| `Kino — 45` | Bare numeric title (title-only search useless) + `Kino` homographs hide `Кино` |
-| `Татьяна Никитина и Сергей Никитин — …` | MB records the duo as `Татьяна и Сергей Никитины` — Russian morphology, out of scope |
+The single remaining pick is correct behaviour:
+`Татьяна Никитина и Сергей Никитин` is *kept* as a pick because the real artist is
+in the list under MusicBrainz's declined spelling, so there is a genuine choice to
+make. The 6 not-found rows were each verified absent from the artist's real
+discography.
 
 Notable fixes beyond the Cyrillic scope: `Pink Floyd — The Wall`,
-`Metallica — Master of Puppets` and `Iron Maiden — Powerslave` now auto-match the
+`Metallica — Master of Puppets` and `Iron Maiden — Powerslave` auto-match the
 correct studio release instead of a tribute album or combined pressing.
 
-Gates: `pnpm lint`, `pnpm typecheck`, `pnpm vitest run` (187 tests) all pass.
+Gates: `pnpm lint`, `pnpm typecheck`, `pnpm vitest run` (200 tests) all pass.
 
 ## Deliberately out of scope
 
-- Russian morphological variation in artist names (`Никитин` vs `Никитины`).
+- Auto-matching across Russian morphological variation in artist names
+  (`Никитин` vs `Никитины`); such rows are kept as a pick rather than discarded.
 - Romanization tables for scripts other than Cyrillic — the alias path already
   handles Greek/CJK/Hebrew/Arabic without one.
 - Rows genuinely absent from MusicBrainz (the `Garavari` entries).

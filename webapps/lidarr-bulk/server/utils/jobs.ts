@@ -10,7 +10,7 @@ import type {
   LidarrAlbumCandidate,
   ParsedItem,
 } from '~~/shared/types'
-import { resolveAlbumViaArtist, resolveByCandidateAlias } from './artist-resolve'
+import { learnArtistIdentity, learnedArtistIdentity, resolveAlbumViaArtist, resolveByCandidateAlias } from './artist-resolve'
 import { pruneHistory, recordJob } from './history'
 import {
   addAlbum,
@@ -23,7 +23,7 @@ import {
   nudgeExisting,
   waitForArtistRefresh,
 } from './lidarr'
-import { albumQueryVariations, isVariousArtists, normKeyLoose, pickAutoMatch, rankCandidates } from './matching'
+import { albumQueryVariations, hasPlausibleArtist, isVariousArtists, normKeyLoose, pickAutoMatch, rankCandidates } from './matching'
 import { similarity } from './text'
 import { resolveVariousArtistsAlbumMbids } from './metadata'
 import { loadSettings } from './settings'
@@ -169,30 +169,43 @@ async function run(j: JobInternal): Promise<void> {
   await mapWithConcurrency(lookupItems, LOOKUP_CONCURRENCY, async (item) => {
     try {
       setStatus(j, item, { status: 'searching' })
-      const { candidates, chosen } = await searchCandidates(j.kind, item.parsed)
-      if (candidates.length === 0) {
-        setStatus(j, item, { status: 'not-found' })
-        return
-      }
-      // The album cascade already ran the matcher (and, for its later stages,
-      // resolved the release outright), so only the artist path decides here.
-      const auto = chosen ?? pickAutoMatch(j.kind, item.parsed, candidates)
-      if (auto) {
-        setStatus(j, item, { status: 'matched', chosen: auto })
-      }
-      else {
-        setStatus(j, item, {
-          status: 'needs-choice',
-          candidates: rankCandidates(j.kind, item.parsed, candidates),
-        })
-        spawnPickHandler(j, item)
-      }
+      const outcome = await searchCandidates(j.kind, item.parsed)
+      applyOutcome(j, item, outcome)
     }
     catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setStatus(j, item, { status: 'error', message: msg })
     }
   })
+
+  // Phase A2 — retry the rows that are still unresolved, now that the resolved
+  // ones have taught us artist identities. Lidarr's artist lookup can't find a
+  // Cyrillic artist behind a short Latin homograph ("Kino" → ten Latin bands),
+  // but a sibling row that matched on its title already identified them. Bounded:
+  // one extra attempt per unresolved album row, and only when something was
+  // actually learned.
+  const retryable = j.items.filter(i =>
+    !i.parsed.needsReview
+    && i.status === 'needs-choice'
+    && !i.chosen
+    && j.kind === 'album'
+    && learnedArtistIdentity(i.parsed.artist) !== undefined,
+  )
+  if (retryable.length > 0) {
+    await mapWithConcurrency(retryable, LOOKUP_CONCURRENCY, async (item) => {
+      // The user may have picked while we were working; never clobber that.
+      if (item.status !== 'needs-choice' || item.chosen)
+        return
+      try {
+        const outcome = await searchCandidates(j.kind, item.parsed)
+        if (outcome.chosen && item.status === 'needs-choice' && !item.chosen)
+          applyOutcome(j, item, outcome)
+      }
+      catch {
+        // Leave the row as-is; the user can still pick from the original list.
+      }
+    })
+  }
 
   // Phase B — serial add worker, but drives by readiness, not input order.
   // Pulls any 'matched' item first; if none, awaits the next pick to resolve
@@ -223,6 +236,51 @@ async function run(j: JobInternal): Promise<void> {
   catch (err) {
     console.error('[job]', j.id, 'history record failed:', err)
   }
+}
+
+function candidateArtist(c: Candidate): { mbid?: string, name?: string } {
+  if (c.kind === 'artist')
+    return { mbid: c.value.foreignArtistId, name: c.value.artistName }
+  const artist = c.value.artist
+  return typeof artist === 'string'
+    ? { name: artist }
+    : { mbid: artist?.foreignArtistId, name: artist?.artistName }
+}
+
+// Turn a search outcome into item state. Split out so the phase-A2 retry can
+// reuse exactly the same rules rather than re-deriving them.
+function applyOutcome(j: JobInternal, item: JobItem, outcome: SearchOutcome): void {
+  const { candidates, chosen } = outcome
+  // The album cascade already ran the matcher (and, for its later stages,
+  // resolved the release outright), so only the artist path decides here.
+  const auto = chosen ?? pickAutoMatch(j.kind, item.parsed, candidates)
+  if (auto) {
+    setStatus(j, item, { status: 'matched', chosen: auto, candidates: undefined })
+    // Teach the rest of the job who this artist is.
+    const { mbid, name } = candidateArtist(auto)
+    learnArtistIdentity(j.kind === 'artist' ? item.parsed.raw : item.parsed.artist, mbid, name)
+    return
+  }
+  if (candidates.length === 0) {
+    setStatus(j, item, { status: 'not-found' })
+    return
+  }
+  // Nothing here is even by the artist that was asked for. Presenting ten
+  // unrelated records as "multiple matches — pick the right one" is worse than
+  // saying so: the honest answer is that this release wasn't found, and the user
+  // was only ever going to hit Skip.
+  if (j.kind === 'album' && outcome.unrelatedResults) {
+    setStatus(j, item, {
+      status: 'not-found',
+      message: `no release by ${item.parsed.artist} found (${candidates.length} unrelated result${candidates.length === 1 ? '' : 's'} discarded)`,
+    })
+    return
+  }
+  setStatus(j, item, {
+    status: 'needs-choice',
+    candidates: rankCandidates(j.kind, item.parsed, candidates),
+  })
+  spawnPickHandler(j, item)
 }
 
 function registerPick(j: JobInternal, itemId: string): Promise<Candidate | null> {
@@ -380,6 +438,9 @@ async function retryOnTransient<T>(fn: () => Promise<T>, attempts = 3): Promise<
 export interface SearchOutcome {
   candidates: Candidate[]
   chosen?: Candidate
+  // True when not one candidate is even plausibly by the requested artist, so
+  // the result set is unrelated noise rather than a set of alternatives.
+  unrelatedResults?: boolean
 }
 
 // Turn a MusicBrainz album id back into a real Lidarr candidate so the add path
@@ -479,7 +540,7 @@ export async function searchAlbumCandidates(parsed: ParsedItem): Promise<SearchO
     }
   }
 
-  return { candidates }
+  return { candidates, unrelatedResults: !hasPlausibleArtist(parsed, candidates) }
 }
 
 async function addToLidarr(

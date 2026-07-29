@@ -183,6 +183,13 @@ export function romanizeVariants(s: string | undefined): string[] {
   return out.length > 0 ? out : [normKey(src)]
 }
 
+// The single most likely romanization of a name — the primary reading, with every
+// ambiguous letter taking its BGN/PCGN value. Use when you need one canonical
+// Latin form rather than the full variant set (e.g. to tokenize a name).
+export function primaryRomanization(s: string | undefined): string {
+  return romanizeVariants(s)[0] ?? ''
+}
+
 // Best similarity achievable between two names once both sides are folded to a
 // common script. Symmetric. For same-script input this degrades to plain
 // normKey similarity, so it is safe to use as a drop-in comparison everywhere.
