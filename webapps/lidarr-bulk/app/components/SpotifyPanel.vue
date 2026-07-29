@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import type { JellyfinPushResult, ParsedItem, SpotifyPlaylist, SpotifyResolveResult, SpotifyStatus } from '~~/shared/types'
 
+// jobInFlight gates the batch-continue buttons: queueing starts a new job and
+// replaces the monitor, so letting a second batch start mid-run would hide the
+// batch already in progress.
+const props = defineProps<{ jobInFlight?: boolean }>()
+const jobInFlight = computed(() => props.jobInFlight === true)
 const emit = defineEmits<{ queue: [items: ParsedItem[]] }>()
 const toast = useToast()
 
@@ -104,9 +109,24 @@ async function disconnect(): Promise<void> {
 // strength of one click. A 1842-track playlist expands to ~900 albums, which is a
 // large, slow, hard-to-undo commitment to a music library.
 const CONFIRM_THRESHOLD = 25
-const FIRST_CHUNK = 100
+const BATCH_SIZE = 100
 
 const pendingQueue = ref<{ playlist: SpotifyPlaylist, result: SpotifyResolveResult } | null>(null)
+
+// Where a batched playlist got to. Queueing 100 at a time is only useful if you
+// can queue the *next* 100, so the resolved list and a cursor stay put until the
+// playlist is exhausted or explicitly dismissed.
+const batch = ref<{
+  playlist: SpotifyPlaylist
+  items: ParsedItem[]
+  tracks: number
+  queued: number
+} | null>(null)
+
+const batchRemaining = computed(() => {
+  const b = batch.value
+  return b ? b.items.length - b.queued : 0
+})
 
 function queueNow(items: ParsedItem[], playlist: SpotifyPlaylist, tracks: number): void {
   toast.add({
@@ -122,6 +142,7 @@ function confirmQueueAll(): void {
   if (!p)
     return
   pendingQueue.value = null
+  batch.value = null
   queueNow(p.result.items, p.playlist, p.result.stats.tracks)
 }
 
@@ -130,7 +151,40 @@ function confirmQueueFirst(): void {
   if (!p)
     return
   pendingQueue.value = null
-  queueNow(p.result.items.slice(0, FIRST_CHUNK), p.playlist, p.result.stats.tracks)
+  batch.value = {
+    playlist: p.playlist,
+    items: p.result.items,
+    tracks: p.result.stats.tracks,
+    queued: 0,
+  }
+  queueNextBatch()
+}
+
+function queueNextBatch(): void {
+  const b = batch.value
+  if (!b)
+    return
+  const next = b.items.slice(b.queued, b.queued + BATCH_SIZE)
+  if (next.length === 0) {
+    batch.value = null
+    return
+  }
+  b.queued += next.length
+  queueNow(next, b.playlist, b.tracks)
+  if (b.queued >= b.items.length) {
+    batch.value = null
+    toast.add({ title: 'Playlist fully queued', description: `all ${b.items.length} albums`, color: 'success' })
+  }
+}
+
+function queueAllRemaining(): void {
+  const b = batch.value
+  if (!b)
+    return
+  const rest = b.items.slice(b.queued)
+  batch.value = null
+  if (rest.length > 0)
+    queueNow(rest, b.playlist, b.tracks)
 }
 
 async function pick(playlist: SpotifyPlaylist): Promise<void> {
@@ -226,13 +280,47 @@ async function recreate(playlist: SpotifyPlaylist): Promise<void> {
               v-if="(pendingQueue?.result.items.length ?? 0) > 100"
               color="neutral"
               variant="soft"
-              label="First 100"
+              :label="`In batches of ${BATCH_SIZE}`"
               @click="confirmQueueFirst"
             />
             <UButton color="neutral" variant="ghost" label="Cancel" @click="pendingQueue = null" />
           </div>
         </template>
       </UModal>
+
+      <!-- Continue a batched playlist. Queueing replaces the job view, so the next
+           batch waits for the current one to finish rather than losing sight of it. -->
+      <div
+        v-if="batch && batchRemaining > 0"
+        class="mb-4 p-3 rounded-md ring ring-default bg-elevated/50 flex items-center justify-between gap-3 flex-wrap"
+      >
+        <div class="min-w-0">
+          <p class="font-medium m-0 truncate">
+            {{ batch.playlist.name }}
+          </p>
+          <p class="text-sm text-muted m-0">
+            queued {{ batch.queued }} of {{ batch.items.length }} —
+            <strong>{{ batchRemaining }} left</strong>
+            <template v-if="jobInFlight"> · waiting for the current batch to finish</template>
+          </p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <UButton
+            color="primary"
+            :disabled="jobInFlight"
+            :label="`Queue next ${Math.min(BATCH_SIZE, batchRemaining)}`"
+            @click="queueNextBatch"
+          />
+          <UButton
+            color="neutral"
+            variant="soft"
+            :disabled="jobInFlight"
+            :label="`Queue all ${batchRemaining} remaining`"
+            @click="queueAllRemaining"
+          />
+          <UButton color="neutral" variant="ghost" label="Dismiss" @click="batch = null" />
+        </div>
+      </div>
 
       <div class="flex items-center justify-between gap-4 flex-wrap">
         <p class="text-muted m-0 text-sm">

@@ -76,7 +76,7 @@ const albumIntro = 'Paste albums as "Artist - Album", "Album by Artist", "Artist
 
     <AiDiscoverPanel v-if="tab === 'ai'" v-model:blob="blob" />
 
-    <SpotifyPanel v-if="tab === 'spotify'" @queue="onSpotifyQueue" />
+    <SpotifyPanel v-if="tab === 'spotify'" :job-in-flight="jobInFlight" @queue="onSpotifyQueue" />
 
     <BulkAddForm
       v-if="tab !== 'spotify'"
