@@ -1252,6 +1252,15 @@ services:
       # docker/containerd race, and leave the container dead for 7 days with no
       # auto-recovery. Match the longest stop_grace_period in the stack.
       - WATCHTOWER_TIMEOUT=150s
+      # 2026-09-01: push image updates and failures to ntfy via shoutrrr.
+      # Watchtower is the one thing here that changes containers on its own, so
+      # "what changed at 04:00 and did it work" should not require reading logs.
+      # `disabletitle=no` keeps shoutrrr's own title; the URL carries the
+      # write-only `arr` credential. WATCHTOWER_NOTIFICATION_REPORT=true sends
+      # one digest per run instead of a message per container.
+      - WATCHTOWER_NOTIFICATION_URL=ntfy://${NTFY_ARR_USER}:${NTFY_ARR_PASSWORD}@ntfy:8410/nas-alerts?scheme=http&priority=default&tags=package
+      - WATCHTOWER_NOTIFICATION_REPORT=true
+      - WATCHTOWER_NOTIFICATIONS_LEVEL=info
     depends_on:
       dockerproxy:
         condition: service_started

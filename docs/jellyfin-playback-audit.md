@@ -139,6 +139,7 @@ reproducibility.
 | **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode | `scripts/aac_fallback_track.py` | n/a, additive |
 | **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
 | **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
+| **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200 | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env` | Delete the `ntfy — *` connections in each *arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
 | **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
 | **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
 
@@ -641,7 +642,39 @@ should read ~1 and 0 respectively; if `doublemapper` starts climbing, the
 - Silence a service the watchdog should not care about: add
   `--ignore <service>` to the cron line.
 
-### 4.5 Why is this transcoding? Usually: use a native client
+### 4.5 Which service notifies what
+
+Two topics, and the split is the whole point — routing informational events at
+the alerts topic would bury the failures the alerting exists to surface.
+
+| source | topic | fires on |
+|---|---|---|
+| `stack_watchdog.py` | `nas-alerts` | container down/unhealthy/missing, restart churn, Jellyfin memory, kernel OOM, autoheal, crontab lint, stale cron jobs |
+| `cron_job.py` | `nas-alerts` | any wrapped cron job exiting fatal |
+| Sonarr / Radarr | `nas-alerts` | health issue, health restored, manual interaction required |
+| Sonarr / Radarr | `nas-media` | import complete, upgrade |
+| Lidarr | `nas-alerts` | health, **download failure, import failure** |
+| Prowlarr | `nas-alerts` | health issue / restored |
+| Jellyseerr | `nas-alerts` | request pending, request failed, issue created |
+| Bazarr | `nas-media` | subtitle events |
+| Watchtower | `nas-alerts` | image updates and failures, one digest per run |
+
+**Lidarr publishes nothing to `nas-media` on purpose.** It does hundreds of
+music imports a day; those on a phone would drown everything else.
+
+Adding another service: publish to `http://ntfy:8410` from inside
+`nas-network` with the write-only `NTFY_ARR_*` credential. If the service
+cannot set an `Authorization` header, ntfy takes
+`?auth=<base64url("Basic "+base64(user:pass))>` as a query parameter, or
+`user:pass@host` URL userinfo — both verified against this deny-all instance.
+
+**Not wired, deliberately:** Jellyfin (no webhook plugin installed, and its
+health is already covered far better by the watchdog — memory, OOM and
+container state); qBittorrent (its "run program on completion" would duplicate
+Sonarr/Radarr's import notifications); slskd, Nextcloud, recyclarr (no useful
+notification surface).
+
+### 4.6 Why is this transcoding? Usually: use a native client
 
 For anything whose default audio is AC3, E-AC3, DTS or TrueHD — which is most
 of this library — a browser cannot Direct Play it and Jellyfin will remux the
@@ -663,7 +696,7 @@ python scripts/jellyfin_library_scan.py --library "TV Shows"                    
 Do not reach for a 5.1 AAC track to avoid the stereo-default trade-off — it
 transcodes on any stereo-output browser anyway (§3.6).
 
-### 4.6 Adding a new cron job
+### 4.7 Adding a new cron job
 
 Wrap it, or it can die silently like two before it:
 
@@ -681,7 +714,7 @@ this repo's 0/1/2 contract. Then `python scripts/cron_job.py --name <job>
 watchdog lints the crontab every 5 minutes and will complain if you get the
 `cd` wrong.
 
-### 4.7 Scan one library by hand
+### 4.8 Scan one library by hand
 
 ```bash
 cd /home/tom/nas && . .venv/bin/activate
