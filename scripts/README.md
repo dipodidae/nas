@@ -697,6 +697,90 @@ Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited
 
 Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 300`.
 
+### `stack_watchdog.py`
+
+The thing that shouts. Nothing on this box reported failure before it existed: Jellyfin was OOM-killed five times in 48 hours and only surfaced because an episode stuttered, qBittorrent sat dead for fourteen hours twice and was found by accident, `autoheal` was absent from the stack for over a month, and the `media_ops_status.py` cron had been silently writing nothing since June (a missing `cd` in the crontab line). Four checks, one push notification.
+
+1. **Every compose service** exists, is running, and is not `unhealthy` — compared against `docker compose config --services`, so a service defined but *never created* is caught too. "Not unhealthy" and "not there at all" look identical to anything that only inspects running containers.
+2. **Restart churn** — a climbing `RestartCount` between runs is flapping even if the container is "up" at the moment the check fires. First run never alerts (no baseline).
+3. **Jellyfin anon-RSS** from `logs/jellyfin-mem.log` (see `jellyfin_mem_sample.py`). `anon` is the OOM-relevant number; `memory.current`/`mem_peak` include page cache and read high for benign reasons. A stale (>15 min) or `SAMPLE_FAILED` sampler is itself an alert — a monitor that quietly stops is worse than none.
+4. **Kernel OOM kills** from `journalctl -k` (readable unprivileged here; `dmesg` is not, under `kernel.dmesg_restrict`). Catches kills of *any* process, including ones that leave no trace in a container's log.
+
+Delivery is **ntfy** — a plain `POST <topic-url>` with a text body is the whole publish contract, it needs no server-side application/token setup before the first alert can land, and this repo already spoke it (`SLSKD_ALERT_WEBHOOK`). Gotify would need a server plus per-application tokens first. The instance is self-hosted (compose service `ntfy`, `ntfy.<PUBLIC_DOMAIN>` via SWAG) so alert contents never leave the box; only the phone's subscription egresses. **Coverage limit:** the watchdog and ntfy run on the same host, so neither can tell you the host itself is down — that needs an off-box heartbeat, deliberately not built.
+
+State in `logs/stack_watchdog.json` de-duplicates: a new problem notifies immediately, a continuing one re-notifies every `--repeat-min` (default 60), and a recovery sends a `RESOLVED:` note.
+
+```bash
+python scripts/stack_watchdog.py                       # check and notify
+python scripts/stack_watchdog.py --dry-run             # print alerts, send nothing
+python scripts/stack_watchdog.py --self-test           # prove delivery works
+python scripts/stack_watchdog.py --jellyfin-anon-mb 2048 --repeat-min 30
+python scripts/stack_watchdog.py --ignore recyclarr    # skip a service entirely
+```
+
+Exit codes: `0` all healthy, `1` at least one alert active, `2` fatal (docker unreachable). Cron runs it `*/5` and swallows the exit code — the push is the delivery path, `logs/stack_watchdog.log` is the record. Environment: `NAS_ALERT_WEBHOOK` (falls back to `SLSKD_ALERT_WEBHOOK`), `NAS_ALERT_USER`, `NAS_ALERT_PASSWORD`.
+
+### `jellyfin_library_scan.py`
+
+Scans **one** Jellyfin library. Jellyfin's built-in "Scan Media Library" (`RefreshLibrary`) task is global-only — there is no way to schedule TV Shows weekly while keeping Music daily — and a library scan is the largest memory event on this box (~1.56 GB peak `anon`-RSS). This drives the per-library endpoint instead, so cron can give each library its own cadence and the global task's trigger list can be emptied.
+
+The call is `POST /Items/{virtualFolderItemId}/Refresh?metadataRefreshMode=Default&imageRefreshMode=Default&replaceAllMetadata=false&replaceAllImages=false&recursive=true` — the same one Jellyfin's own per-library "Scan library" button makes. `Default` mode fetches metadata for *new* items only, so it is safe on a schedule. Verified end-to-end: a file dropped straight onto disk was invisible to Jellyfin, and one run of this script made it appear.
+
+**There is deliberately no `--wait`.** On 10.11.11 a per-item refresh does *not* drive the `RefreshLibrary` scheduled task's state (it stays `Idle` throughout) and `BaseItemDto` exposes no refresh-progress field, so there is no honest REST signal to poll. A zero exit means *accepted*, not *finished*.
+
+```bash
+python scripts/jellyfin_library_scan.py --list
+python scripts/jellyfin_library_scan.py --library "TV Shows"
+python scripts/jellyfin_library_scan.py --library Movies --library Music
+python scripts/jellyfin_library_scan.py --all --dry-run
+```
+
+Exit codes: `0` all accepted, `1` partial, `2` fatal. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_HOST`. Cron: Movies Fri 05:05, TV Shows Sat 05:05, Music Sun 05:05 (Music deliberately after the 04:45 `album_art.py` pass, because sacad writes `folder.jpg` straight to disk where no *arr ever reports it).
+
+### `lidarr_jellyfin_bridge.py`
+
+Makes Lidarr's imports actually reach Jellyfin. Lidarr's own "Update Library" connection *does* fire and Jellyfin *does* answer `204` — and it is still a silent no-op, which is exactly what the 204 hides. Lidarr reports `/music/...` paths; Jellyfin's Music library is `/data/movies/music/...`; `Library/Media/Updated` drops a path that resolves to no library without logging anything. Proven by A/B against the live server:
+
+```text
+POST {"Updates":[{"Path":"/music/Bathory/1988 - Blood Fire Death"}]}
+  -> 204, no LibraryMonitor line, Jellyfin keeps the stale metadata
+POST {"Updates":[{"Path":"/data/movies/music/Bathory/1988 - Blood Fire Death"}]}
+  -> 204, 'LibraryMonitor: "Blood Fire Death" ... will be refreshed', updated
+```
+
+Sonarr and Radarr have `mapFrom`/`mapTo` fields on their MediaBrowser connection for this and they are now set. **Lidarr's does not expose them**, so this script is the mapping, applied outside Lidarr: poll Lidarr's history for `trackFileImported|Renamed|Retagged|Deleted`, take the album folder of each path, translate the prefix, and report it to Jellyfin. It reports the *album folder*, not the library root, so Jellyfin does a targeted refresh rather than the 1.56 GB whole-library walk. History is paged backwards to the cursor rather than trusting one page — one album alone produces ~25 records, so a single 200-record page does not reliably cover five minutes during a backlog drain.
+
+```bash
+python scripts/lidarr_jellyfin_bridge.py --dry-run --since-min 120
+python scripts/lidarr_jellyfin_bridge.py
+python scripts/lidarr_jellyfin_bridge.py --map-from /music --map-to /data/movies/music
+```
+
+Exit codes: `0` nothing to do or all reported, `1` partial (some folders outside the mapped root), `2` fatal. Environment: `API_KEY_LIDARR`, `API_KEY_JELLYFIN`, `LIDARR_HOST`, `JELLYFIN_HOST`. Cron: `2-59/5` (offset from the watchdog's `*/5`), flock-guarded.
+
+### `aac_fallback_track.py`
+
+Adds a **default** stereo AAC track to DTS-only media so browsers Direct Play it. Browsers cannot decode DTS and cannot play MKV, so a DTS-only file makes Jellyfin remux the container *and* transcode the audio for every web client — the exact path the Fargo stutter came down.
+
+The non-obvious half, and the reason a naive "just add an AAC track" pass changes nothing: **Jellyfin's StreamBuilder evaluates the default audio stream.** With DTS still flagged default, `PlaybackInfo` returns `SupportsDirectPlay: false` even with a good AAC track present. Measured on Fargo S01E01 against the live server with a Chrome device profile:
+
+```text
+before: DirectPlay=False DirectStream=False   audio: [dts 6ch DEFAULT]
+after:  DirectPlay=True  DirectStream=True    audio: [dts 6ch, aac 2ch DEFAULT]
+```
+
+So the script always does both: append the track *and* move the default disposition. **Trade-off:** a client that could handle DTS 5.1 — the living-room TV app — now gets stereo unless the viewer picks the surround track. The DTS stream is still there, byte-identical and first in the file, just no longer default.
+
+Nothing is destroyed: the untouched original is moved to `<SHARE>/backups/aac-remux-originals/` with its path under the media root preserved, so a revert is a plain `mv` back. Conversion is staged outside the library (a half-written `*.mkv` in the media folder is something Jellyfin or Sonarr could pick up mid-conversion) and the staged file is re-probed before the original is touched. Files whose default audio is already browser-safe are skipped, so re-running is idempotent. There is no host ffmpeg, so by default it runs Jellyfin's own binary out of the Jellyfin image (`--ffmpeg`/`--ffprobe` override that).
+
+```bash
+python scripts/aac_fallback_track.py --root "$SHARE_DIRECTORY/series/Fargo/Season 1"   # dry run
+python scripts/aac_fallback_track.py --root ... --limit 10 --apply
+python scripts/aac_fallback_track.py --file /mnt/drive/series/X/Y.mkv --apply --limit 1
+```
+
+Exit codes: `0` all processed, `1` partial, `2` fatal. Environment: `SHARE_DIRECTORY`, `PUID`, `PGID`. Not cron-driven — run it deliberately, in batches, and check the result.
+
 ## 🧪 Testing & Linting
 
 Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.

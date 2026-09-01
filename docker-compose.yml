@@ -642,6 +642,32 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
+      # 2026-09-01: OpenCL tone-mapping mod tried and reverted (see
+      # docs/jellyfin-playback-audit.md) — it needs CAP_FOWNER, which this
+      # hardened container correctly doesn't grant, and nothing today
+      # actually needs HDR tone-mapping. VPP tone-mapping is the path to use
+      # if that ever changes (works today, no extra capabilities needed).
+      # 2026-09-01: H3 test (glibc malloc arena fragmentation, matching
+      # dotnet/runtime#122027 — native RSS growth while managed heap stays
+      # flat, confirmed via heap dump in docs/jellyfin-playback-audit.md).
+      # glibc sizes arenas from the host's online CPU count (16 here), not
+      # the container's cgroup quota, so mem_limit alone can't restrain
+      # this. Capping arena count trades allocator concurrency for memory;
+      # A/B result before/after is in the audit doc. Revert: delete this line.
+      - MALLOC_ARENA_MAX=2
+      # 2026-09-01: W^X (write-xor-execute) A/B test for the memfd:doublemapper
+      # native-memory contributor (dotnet/runtime#89776 / #121455), confirmed
+      # present and growing independently of the arena cap above (docs/
+      # jellyfin-playback-audit.md). Disables .NET's double-mapping of JIT'd
+      # code (write-then-remap-executable) in favor of a single writable+
+      # executable mapping. Real, if small, hardening tradeoff — acceptable
+      # here: LAN-only media server behind SWAG, does not execute untrusted
+      # code. A/B result recorded in the audit doc. Revert: delete this line.
+      - DOTNET_EnableWriteXorExecute=0
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "991" # host 'render' GID, grants access to /dev/dri/renderD128 for QSV
     volumes:
       - ${CONFIG_DIRECTORY}/jellyfin:/config
       - ${SHARE_DIRECTORY}:/data/movies:ro
@@ -653,6 +679,17 @@ services:
     networks:
       - nas-network
     restart: unless-stopped
+    # 2026-09-01: scoped exception to the "no mem_limit" policy above. Confirmed
+    # via journalctl -k that the jellyfin process itself (not ffprobe/ffmpeg,
+    # verified from the kernel's per-task RSS table) leaks to ~22-24GB anon-RSS
+    # and gets killed by a *global* (host-wide) OOM-killer every ~2-12h, which
+    # can take down unrelated containers' health checks as collateral. This is
+    # a stopgap containing the blast radius while the leak itself is
+    # root-caused, not a fix. See docs/jellyfin-playback-audit.md.
+    # memswap_limit == mem_limit so it can't balloon into the host's swap and
+    # thrash everything else before finally getting killed.
+    mem_limit: 10g
+    memswap_limit: 10g
     labels:
       - swag=enable
       - com.centurylinklabs.watchtower.enable=true
@@ -1152,6 +1189,13 @@ services:
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - WATCHTOWER_ROLLING_RESTART=false
       - WATCHTOWER_REMOVE_VOLUMES=false
+      # Watchtower's own SIGTERM->SIGKILL timeout is separate from compose's
+      # stop_grace_period and defaults to 10s, which is too short for qbittorrent
+      # to flush torrents.db (needs up to 120s). A too-short timeout here caused
+      # Watchtower to force-kill qbittorrent mid-shutdown on 2026-08-19, hit a
+      # docker/containerd race, and leave the container dead for 7 days with no
+      # auto-recovery. Match the longest stop_grace_period in the stack.
+      - WATCHTOWER_TIMEOUT=150s
     depends_on:
       dockerproxy:
         condition: service_started
@@ -1197,6 +1241,67 @@ services:
       - nas-network
     healthcheck:
       disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # 2026-09-01: push notifications for scripts/stack_watchdog.py. Added because
+  # nothing on this box reported failure — Jellyfin was OOM-killed five times in
+  # 48h and qBittorrent sat dead for 14h, both found by accident (see
+  # docs/jellyfin-playback-audit.md). ntfy over Gotify: a single unauthenticated-
+  # shaped `POST <topic-url>` with a text body is the whole publish contract, it
+  # needs no server-side application/token setup before the first alert can land,
+  # and this repo already speaks it (SLSKD_ALERT_WEBHOOK in slskd_login_watch.py).
+  # Self-hosted rather than ntfy.sh so alert contents never leave the box; the
+  # watchdog publishes over loopback and only the phone's subscription goes out
+  # through SWAG. Note the coverage limit this implies: the watchdog and ntfy run
+  # on the same host, so neither can tell you the *host itself* is down — that
+  # needs an off-box heartbeat, deliberately not built here.
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    command: ['serve']
+    # No LSIO root init to chown /var/lib/ntfy — same gotcha as `qui`. The host
+    # dir must already be ${PUID}:${PGID} or ntfy crash-loops on first start:
+    #   mkdir -p ${CONFIG_DIRECTORY}/ntfy && chown ${PUID}:${PGID} $_
+    user: '${PUID:-1000}:${PGID:-1000}'
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=${TZ:-UTC}
+      # Non-root can't bind :80, so ntfy listens high and SWAG proxies to it.
+      - NTFY_LISTEN_HTTP=:8410
+      - NTFY_BASE_URL=https://ntfy.${PUBLIC_DOMAIN}
+      - NTFY_BEHIND_PROXY=true
+      - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
+      # deny-all: a topic on a public subdomain is otherwise world-readable to
+      # anyone who guesses its name. Access is granted per-user (see README).
+      - NTFY_AUTH_DEFAULT_ACCESS=deny-all
+      - NTFY_ENABLE_SIGNUP=false
+      # Cache so an alert raised while the phone is offline is still delivered
+      # on reconnect instead of being silently dropped.
+      - NTFY_CACHE_FILE=/var/lib/ntfy/cache.db
+      - NTFY_CACHE_DURATION=48h
+    volumes:
+      - ${CONFIG_DIRECTORY}/ntfy:/var/lib/ntfy
+    ports:
+      - '127.0.0.1:8410:8410' # publish/subscribe from host cron; public side is SWAG
+    restart: unless-stopped
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O - http://localhost:8410/v1/health | grep -q ''"healthy":true''']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging:
       driver: json-file
       options:

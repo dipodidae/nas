@@ -35,3 +35,8 @@ vpn-configs/
 
 # ongehoord redeploy build-temp (TMPDIR routed off the quota'd /tmp tmpfs)
 .deploy-tmp/
+
+# Credentials that must never be committed. `.sudo-pwd` was sitting untracked
+# in the repo root on 2026-09-01 — one `git add -A` away from a sudo password
+# in the history.
+.sudo-pwd
