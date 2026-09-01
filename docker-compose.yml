@@ -461,8 +461,25 @@ services:
         max-file: '2'
 
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    # Pinned, not :latest. Floor is qBittorrent >= 5.2.2: 5.2.0/5.2.1 carry
+    # upstream #24357, where the QLockFile lockfile records the container
+    # hostname and a Docker recreate (which changes the hostname to the new
+    # container ID) leaves qbit unable to prove the lock is stale, so it
+    # refuses to start. Fixed by PR #24363 in 5.2.2. Pinning also keeps
+    # watchtower from silently moving this container onto a regressed build
+    # overnight -- see the note on labels below.
+    # To update: bump this tag deliberately, then `docker compose up -d
+    # qbittorrent` and watch it come back healthy before walking away.
+    image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls473
     container_name: qbittorrent
+    # Stable hostname across recreates. Belt-and-braces for #24357 above: even
+    # on a fixed version this keeps the lockfile's hostname line meaningful, and
+    # it is what the custom-init stale-lock check compares against.
+    # NOTE: if qbittorrent is ever put behind a VPN sidecar via
+    # `network_mode: service:<vpn>`, it inherits that container's network
+    # namespace AND hostname -- pin the hostname on the VPN service instead,
+    # because this line would then have no effect.
+    hostname: qbittorrent
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -472,6 +489,19 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
+      # KILL is required, not optional. s6-overlay runs as root and has to
+      # signal qbittorrent-nox, which runs as abc (uid 1000). Signalling a
+      # process owned by a different uid needs CAP_KILL; without it the SIGTERM
+      # is refused with EPERM, s6 never forwards the stop, and Docker SIGKILLs
+      # at the end of stop_grace_period every single time. Measured on this box
+      # 2026-09-01: without KILL `docker compose stop` took 120.3s and left the
+      # lockfile + ipc-socket behind with no "Saving resume data completed";
+      # with KILL it takes 6.2s, logs a clean shutdown, and qbit removes its own
+      # lockfile. This was the actual root cause of the recurring crash/no-start
+      # cycle -- the stale lockfile was only the symptom.
+      # Verified minimal: KILL alone is sufficient. FOWNER/FSETID were NOT
+      # needed and are deliberately not granted.
+      - KILL
     networks:
       - nas-network
     ports:
@@ -483,27 +513,64 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
       - WEBUI_PORT=8080
-      - QBITTORRENT_USER=${QBITTORRENT_USER}
-      - QBITTORRENT_PASS=${QBITTORRENT_PASS}
+      # The LSIO image does not read QBITTORRENT_USER/QBITTORRENT_PASS -- they
+      # were never wired up upstream (linuxserver/docker-qbittorrent#228, closed
+      # as not planned) and passing them here only leaked the credentials into
+      # `docker inspect`. They stay in .env because scripts/ still uses them to
+      # authenticate against the WebUI API (qbittorrent_settings_enforce.py,
+      # qbittorrent_stalled_kickstart.py, slskd_incomplete_sweep.py,
+      # media_ops_status.py); they just have no business being in the container.
+      - TORRENTING_PORT=6881
     volumes:
       - ${CONFIG_DIRECTORY}/qbittorrent:/config
       - ${SHARE_DIRECTORY}/downloads:/downloads
-      # Self-heal: clears stale single-instance lockfiles at init so an ungraceful
-      # kill (compose recreate, watchtower update) can't trap qbit in an s6 crash loop.
+      # Self-heal: clears a *stale* single-instance lock at init so an ungraceful
+      # kill can't trap qbit in an s6 crash loop. The script proves staleness
+      # (0-byte pre-5.2.0 file, hostname mismatch, or dead PID) before deleting,
+      # so a lock held by a live instance is preserved -- it is a backstop for
+      # the CAP_KILL fix above, not a substitute for it.
       - ./qbittorrent/custom-cont-init.d:/custom-cont-init.d:ro
-    # Give qbit room to flush torrents.db + release its lock before SIGKILL on a
-    # recreate/update so it cleans up its own lockfile (default 10s is too short
-    # for the ~6MB DB+WAL).
+    # Headroom for flushing torrents.db + resume data. With CAP_KILL granted a
+    # graceful stop measures ~6s at 128 torrents (2026-09-01), so this is now
+    # generous headroom rather than a timeout that gets hit -- before CAP_KILL
+    # every stop burned the full 120s and then got SIGKILLed anyway. Re-measure
+    # with `time docker compose stop qbittorrent` if the torrent count grows a
+    # lot; raise this only if the measured time approaches it.
     stop_grace_period: 120s
     restart: unless-stopped
+    # 2026-09-01: scoped exception to the "no mem_limit on MS01" policy in the
+    # header. libtorrent 2.x mmaps torrent data and the kernel keeps those pages
+    # as page cache; with OS cache enabled this container's cgroup peaked at
+    # 21.1GB (journalctl, container scope, 2026-09-01) and contributed to
+    # host-wide OOM kills. The real fix is Session\DiskIOReadMode /
+    # DiskIOWriteMode = DisableOSCache in qBittorrent.conf (set 2026-09-01);
+    # this cap is the backstop if that is ever reverted through the WebUI.
+    # Steady state is ~1.2GB, so 4g is ~3x headroom. memswap_limit == mem_limit
+    # so it cannot balloon into host swap and thrash everything else first.
+    mem_limit: 4g
+    memswap_limit: 4g
     labels:
-      - com.centurylinklabs.watchtower.enable=true
+      # Deliberately NOT labelled for watchtower. The image tag above is pinned,
+      # so there is nothing for watchtower to update, and its nightly
+      # stop->remove->create cycle is what repeatedly broke this container:
+      # on 2026-09-01 04:01 the remove failed ("tried to kill container, but did
+      # not receive an exit event"), watchtower logged Failed=1 and moved on
+      # WITHOUT creating a replacement, so qbittorrent simply ceased to exist
+      # until a human noticed 13h later. restart: unless-stopped cannot help
+      # with that -- there is no container left to restart. Updates are now a
+      # deliberate tag bump (see image comment).
+      - autoheal=true
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:8080/']
+      # GET / returns 200 unauthenticated on 5.2.3 (verified in-container
+      # 2026-09-01), so `curl -f` is correct here -- the /api/v2/* endpoints
+      # return 403 without a session and would flap the healthcheck. --max-time
+      # bounds the request so a wedged WebUI fails the check instead of hanging
+      # until the healthcheck timeout kills it.
+      test: [CMD, curl, -f, --max-time, '10', 'http://localhost:8080/']
       interval: 60s
-      timeout: 5s
+      timeout: 15s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     logging:
       driver: json-file
       options:
