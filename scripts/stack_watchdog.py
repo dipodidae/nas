@@ -313,7 +313,16 @@ def lint_crontab(crontab: str, repo_root: Path) -> list[Alert]:
     line = raw.strip()
     if not line or line.startswith("#"):
       continue
-    body = line.split(None, 5)[-1] if len(line.split(None, 5)) > 5 else ""
+    # Cron accepts both "m h dom mon dow CMD" and the "@daily CMD" shorthands.
+    # Splitting on a fixed field count silently skips the shorthand form, which
+    # would give this lint a blind spot exactly where someone is most likely to
+    # hand-write a line.
+    if line.startswith("@"):
+      parts = line.split(None, 1)
+      body = parts[1] if len(parts) > 1 else ""
+    else:
+      parts = line.split(None, 5)
+      body = parts[5] if len(parts) > 5 else ""
     uses_relative = any(tok in body for tok in (".venv/", "scripts/", "logs/"))
     if uses_relative and f"cd {repo_root}" not in body:
       alerts.append(

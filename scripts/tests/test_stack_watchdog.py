@@ -304,3 +304,9 @@ def test_alert_key_is_stable_across_processes():
 def test_absolute_paths_need_no_cd():
     line = "0 3 * * 0 /usr/bin/docker image prune -f"
     assert wd.lint_crontab(line, REPO) == []
+
+
+def test_at_shorthand_lines_are_linted_too():
+    """@daily/@reboot are valid cron and must not be a blind spot in the lint."""
+    assert wd.lint_crontab("@daily .venv/bin/python scripts/album_art.py", REPO)
+    assert wd.lint_crontab("@daily cd /home/tom/nas && python scripts/album_art.py", REPO) == []

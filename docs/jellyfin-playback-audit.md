@@ -126,7 +126,7 @@ reproducibility.
 | **28** | **Bazarr: `addic7ed` and `opensubtitlescom` removed from `enabled_providers`** — both in permanent `AuthenticationError`. Credentials left in place, so re-enabling is a UI toggle | Bazarr `POST /api/system/settings`; `.docker-config/bazarr/config/config.yaml` | Re-add both names to `enabled_providers`; backup at `docs/jellyfin-config-backups/bazarr-config-*-pre-provider-disable.yaml` |
 | **29** | **SWAG `default.conf`: load-order comment** above the inline `include /config/nginx/proxy-confs/*.subdomain.conf;` | `.docker-config/swag/nginx/site-confs/default.conf` | Restore `default.conf.bak-20260901-*` |
 | **30** | **AAC fallback audio, first batch (Fargo Season 1, 10 files)** + `scripts/aac_fallback_track.py` | `${SHARE_DIRECTORY}/series/Fargo/Season 1`; originals at `${SHARE_DIRECTORY}/backups/aac-remux-originals/` | `mv` each original back over the converted file, then run `jellyfin_library_scan.py --library "TV Shows"` |
-| **31** | Jellyfin request logging (`.docker-config/jellyfin/logging.json`) — added for §3.1. File **deleted**; the running process keeps request logging until its next restart (see §5) | `.docker-config/jellyfin/logging.json` | Already deleted; the runbook in §4.1 says how to re-add it |
+| **31** | Jellyfin request logging (`.docker-config/jellyfin/logging.json`) — added for §3.1, **fully reverted**: file deleted and the container restarted 2026-09-01 20:42, confirmed no further `Request starting` lines | `.docker-config/jellyfin/logging.json` | Already reverted; §4.1 says how to re-add it |
 | **32** | `scripts/jellyfin_mem_sample.py`: `datetime.timezone` → `datetime.UTC` (the file's only `ruff` failure) | `scripts/jellyfin_mem_sample.py` | Cosmetic; revert with `git checkout` once committed |
 | **33** | **`autoheal` restarted.** Stopped since 2026-07-29; cause established as collateral from a bare `docker compose stop` (shell history), not a decision about autoheal — its own log shows it had never restarted anything | `docker compose up -d autoheal` | `docker compose stop autoheal` |
 | **34** | **`AUTOHEAL_DEFAULT_STOP_TIMEOUT=150`** (was the image default of 10s). autoheal ignores compose's `stop_grace_period`; a 10s SIGTERM→SIGKILL on qbittorrent is the documented stale-lockfile trigger | `docker-compose.yml` (autoheal) | Delete the line (reverts to 10s) |
@@ -518,9 +518,11 @@ raises a standing `heartbeat:unconfigured` warning until it is set. That nag is
 deliberate: this is the one remaining hole in coverage and it should keep
 saying so.
 
-Six crontab lines lost their `cd /home/tom/nas` during this pass's rewriting
-and were caught by the audit each time. That is the argument for the lint,
-made at my own expense.
+Seven crontab lines lost their `cd /home/tom/nas` while I was writing passes 8
+and 9 — three in pass 8, four in pass 9 — and the audit caught every one. That
+is the argument for the lint, made at my own expense: this bug is easy to
+introduce, invisible once introduced, and I introduced it seven times in an
+afternoon while actively thinking about it.
 
 **AAC: rollout declined, and the survey is why.** Pass 8 gathered the numbers
 to justify a rollout; the numbers argued against one. 946 files need
@@ -711,10 +713,18 @@ kept for future small batches), the 5.1 question (answered — it transcodes on
 stereo-output browsers, §3.6), autoheal (running, and two timeout defects
 fixed), the cron-silence class (wrapped + linted), and the ruff backlog (green).
 
-**In flight at the end of this pass:** the owed Jellyfin restart. It no longer
-happens by itself — jellyfin's watchtower label was removed on 2026-09-01 — and
-someone was mid-film, which was not worth interrupting for a 2 MB log saving.
-A watcher is waiting for playback to end and will then restart, confirm the
-emptied `RefreshLibrary` trigger comes back empty, and confirm request logging
-has stopped; results land in `logs/deferred_jellyfin_restart.log`. If it gives
-up (45-minute deadline) the restart is a manual `docker restart jellyfin`.
+**The owed Jellyfin restart is done**, and it confirmed both things it was
+owed for. It no longer happens by itself — jellyfin's watchtower label was
+removed on 2026-09-01 — and someone was mid-film for ~40 minutes, which was not
+worth interrupting to save 2 MB of log, so it was deferred until playback
+actually ended (20:42) rather than forced:
+
+```text
+RefreshLibrary triggers after restart: []          <- survived, PASS
+"Request starting" lines: 6761 -> 6761 over 90s    <- request logging off
+jellyfin 10.11.11, healthy, anon=318.8MB, arena_regions=0, doublemapper=0
+```
+
+The trigger result is the one that mattered: a persisted `[]` on disk was good
+evidence but not proof, and the whole point of emptying it was that the scan is
+the largest memory event left.
