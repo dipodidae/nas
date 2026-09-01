@@ -297,13 +297,32 @@ synthetic input, since the healthy cases cannot be provoked safely.
 **Two silent failures it found in its first hour, neither of which anyone
 knew about:**
 
-- **`autoheal` had not been running since 2026-07-29.** Its container
-  existed but was stopped (`RestartCount: 0` under `restart: unless-stopped`
-  means an explicit stop, which survives daemon restarts); its last startup
+- **`autoheal` had not been running since 2026-07-29.** Its last startup
   banner before today is `2026-07-29T17:20`. For over a month nothing was
   restarting unhealthy containers. This is the exact case check 1 exists
   for, and the exact case a "watch the containers that are running" monitor
   would have missed.
+
+  > **Reconciled by `nas-c0`, 2026-09-01 (supersedes the reading above).**
+  > **autoheal is running again** — restarted during the qBittorrent work; do
+  > not treat starting it as an open action.
+  >
+  > The cause was *not* an explicit stop. `docker inspect` at 18:20 read
+  > `Status=exited ExitCode=6 RestartCount=5 Policy=on-failure:5`. That is a
+  > capped-out crash loop, not an administrative stop, and the `RestartCount:
+  > 0` / `unless-stopped` premise does not hold: `/usr/local/sbin/nas-restart-guard.sh`
+  > was overwriting the compose file's `unless-stopped` with `on-failure:5`
+  > every 15 minutes via `docker update`. autoheal failed five times, exhausted
+  > that budget, and Docker gave up permanently.
+  >
+  > The distinction matters because it changes the fix. An explicit stop needs
+  > no policy change; a capped-out loop needs the cap gone. The guard now
+  > enforces `unless-stopped` instead, and both `autoheal` and `watchtower`
+  > read `unless-stopped:0` as of 19:40. Origin of the cap, for the record:
+  > `/home/tom/fix-nas-all.sh` installed it on 2026-06-15 as blast-radius
+  > control for a watchtower crash loop that the *same script run* had already
+  > fixed by disabling `WATCHTOWER_ROLLING_RESTART`. Background in
+  > `docs/qbittorrent-crash-fix.md`.
 - **The `media_ops_status.py` cron had been dead since 2026-06-10.** Its
   crontab line ran `.venv/bin/python …` with no `cd`, so from cron's
   `$HOME` it resolved to a path that does not exist. `ops-status.json` —
@@ -520,6 +539,27 @@ background with no pollable progress (§3.2).
    persisted as a literal `[]` in
    `.docker-config/jellyfin/ScheduledTasks/7738148f-….js`, which is strong
    evidence but not the same as having seen it come back empty.
+
+   > **Changed by `nas-c0`, 2026-09-01: watchtower will not do this restart.**
+   > `com.centurylinklabs.watchtower.enable=true` has been removed from the
+   > jellyfin service. Watchtower's stop → remove → create is not atomic: when
+   > the remove fails it logs `Failed=1` and moves on *without creating a
+   > replacement*, leaving no container at all. That happened to qbittorrent at
+   > 04:01 on 2026-09-01 and it did not exist for 13 hours
+   > (`docs/qbittorrent-crash-fix.md` §F). Relying on that pass to perform a
+   > wanted restart was betting the service on the failure mode.
+   >
+   > Caveat: the **running** container still carries the label until it is
+   > recreated, so tonight's 04:00 pass could still act on it if a new image
+   > exists. Recreating discharges the owed restart *and* retires the risk, in
+   > one step, whenever playback is idle:
+   >
+   > ```
+   > docker compose up -d jellyfin
+   > ```
+   >
+   > Not done here: Tom was mid-playback ("Animals Are Beautiful People") at
+   > 19:50.
 7. **`ruff check scripts` fails on 10 pre-existing files** (137 findings,
    134 auto-fixable) with the venv's ruff 0.15.14 — all in files untouched
    by this work, all cosmetic (import order, trailing whitespace). CI runs

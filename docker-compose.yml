@@ -692,7 +692,21 @@ services:
     memswap_limit: 10g
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
+      # 2026-09-01: watchtower auto-update deliberately removed. Its
+      # stop -> remove -> create cycle is NOT atomic: if the remove fails it
+      # logs Failed=1 and moves on WITHOUT creating a replacement, leaving no
+      # container at all. That is not hypothetical -- it happened to
+      # qbittorrent on 2026-09-01 04:01 ("tried to kill container, but did not
+      # receive an exit event"), which then simply did not exist for 13h until
+      # a human noticed. restart: unless-stopped cannot help; there is nothing
+      # left to restart. See docs/qbittorrent-crash-fix.md section F.
+      # Jellyfin is the worst service in the stack to lose that way, and it is
+      # also slow to stop, which is exactly the condition that makes the remove
+      # time out. Updates are now a deliberate bump:
+      #   docker compose pull jellyfin && docker compose up -d jellyfin
+      # NOTE: this does not pin the tag, so an update still has to be chosen
+      # rather than scheduled. If you want the qbittorrent treatment, pin the
+      # image tag too.
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
       interval: 60s

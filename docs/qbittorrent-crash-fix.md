@@ -3,6 +3,8 @@
 **Date:** 2026-09-01
 **Commit:** `9c13b9e fix(qbittorrent): grant CAP_KILL so shutdown is actually graceful`
 **Status:** fixed and verified; see [Known risks](#known-risks) for what is still open.
+**Related:** `docs/jellyfin-playback-audit.md` — the other half of the OOM story,
+and required reading before touching Jellyfin memory.
 
 ## Symptom
 
@@ -91,13 +93,30 @@ Sep 01 05:34:58  Killed process (jellyfin) anon-rss:23483348kB
 ```
 
 These were host-wide, not cgroup-constrained, so qBittorrent was a
-co-contributor rather than a bystander. **But do not let that framing bury the
-bigger number: ~23 GB of *anonymous* RSS in Jellyfin is not page cache, it is
-real allocation, and it is not normal for Jellyfin under any transcoding load.**
-Jellyfin was not merely "the largest RSS so it got picked" — it has its own
-memory bug, it fired four times in two days, and it is unaddressed by anything
-in this document. That is the next thing to chase, and it is a larger problem
-than the one fixed here. See `docs/jellyfin-playback-audit.md`.
+co-contributor rather than a bystander.
+
+**The Jellyfin side of this is solved — and `Sep 01 05:34:58` above is the last
+kernel OOM kill on this box.** None since. It was never a Jellyfin application
+leak: two heap dumps showed the managed .NET heap flat at 226–235 MB while
+`anon` swung 217 MB → 1.46 GB → 573 MB. The ~23 GB was two independent *native*
+mechanisms, both now mitigated in `docker-compose.yml`:
+
+1. **glibc malloc arena fragmentation** (dotnet/runtime#122027) — glibc sizes
+   its arena count from the *host's* core count, not the cgroup quota, so
+   `mem_limit` cannot restrain it. `MALLOC_ARENA_MAX=2` cut peak from >2.08 GB
+   to 1.56 GB on identical load, and finished in under half the time.
+2. **`memfd:doublemapper` accumulation** — .NET's W^X double-mapping of JIT'd
+   code (dotnet/runtime#89776, #121455), >1,000 mappings at a fresh restart and
+   growing independently of the arena cap. `DOTNET_EnableWriteXorExecute=0`
+   takes it to zero at no time cost.
+
+Full eight-pass record in `docs/jellyfin-playback-audit.md`; **read that before
+touching anything in this area** — several plausible-sounding causes are ruled
+out there with evidence (hardware transcoding, ffprobe, the #16729 realtime
+monitor cascade, a managed heap leak) and should not be revisited without new
+data. Note also its measurement lesson, which applies directly to the 21.1 GB
+figure below: `memory.current`/`mem_peak` include page cache, and the
+OOM-relevant number is `anon`.
 
 The "Physical memory usage limit" option was removed in 5.2.0, so it is not the
 lever. The lever is `DiskIOReadMode` / `DiskIOWriteMode`.
