@@ -240,13 +240,19 @@ Required in `.env`:
 - `API_KEY_PROWLARR` - Prowlarr API key (used by scripts)
 - `API_KEY_LIDARR` - Lidarr API key (used by scripts)
 - `API_KEY_SLSKD` - slskd API key (used by scripts)
+- `API_KEY_CLEANUPARR` - Cleanuparr API key (`X-Api-Key` header on `http://127.0.0.1:11011/api/...`).
+  Read from the `admin` user row in `${CONFIG_DIRECTORY}/cleanuparr/users.db`; regenerate in the UI
+  under Account, or via `POST /api/account/api-key/regenerate`. See `docs/cleanuparr-configuration.md`.
 - `PLAYLIST_GENERATOR_USERNAME`, `PLAYLIST_GENERATOR_PASSWORD` - basic-auth login for the playlist-generator app
 - `PLAYLIST_GENERATOR_DB_PASSWORD` - Postgres/pgvector password for playlist-generator-db
 - `LASTFM_API_KEY` - Last.fm API key for playlist-generator enrichment (read-only; `LASTFM_API_SECRET` optional)
 - `OPENAI_API_KEY`, `DISCOGS_TOKEN` - optional API keys for playlist-generator (app degrades gracefully without them)
 - `API_KEY_JELLYFIN`, `JELLYFIN_USER_ID` - used by playlist-generator's "Push to Jellyfin" export (creates a Jellyfin playlist for that user via the Jellyfin API)
 - `API_KEY_JELLYFIN_ARR` - dedicated Jellyfin API key used **only** by the Sonarr/Radarr/Lidarr "Update Library" connections, so it can be revoked independently of the scripts' key
-- `NAS_ALERT_WEBHOOK`, `NAS_ALERT_USER`, `NAS_ALERT_PASSWORD` - ntfy topic + basic-auth credentials for `scripts/stack_watchdog.py`. The self-hosted `ntfy` service runs `auth-default-access=deny-all`, so both publishing and subscribing need them. `stack_watchdog.py` falls back to `SLSKD_ALERT_WEBHOOK` if `NAS_ALERT_WEBHOOK` is unset, so one topic can serve both alerters.
+- `NAS_ALERT_WEBHOOK`, `NAS_ALERT_USER`, `NAS_ALERT_PASSWORD` - ntfy topic + basic-auth credentials used by `scripts/stack_watchdog.py` and `scripts/cron_job.py` to **publish**. This account is deliberately **write-only** — it cannot read the topic, so a leak of this box's `.env` does not expose alert history. `stack_watchdog.py` falls back to `SLSKD_ALERT_WEBHOOK` if `NAS_ALERT_WEBHOOK` is unset, so one topic can serve both alerters.
+- `NTFY_PHONE_USER`, `NTFY_PHONE_PASSWORD` - **read-only** account for the Android app and the browser. Cannot publish, so the credential typed into a phone (and backed up to Google) cannot inject fake alerts.
+- `NTFY_ADMIN_USER`, `NTFY_ADMIN_PASSWORD` - ntfy admin, for the web UI and for managing the other two accounts.
+- `NTFY_WEB_PUSH_PUBLIC_KEY`, `NTFY_WEB_PUSH_PRIVATE_KEY` - VAPID keypair for browser Web Push, generated once with `docker exec ntfy ntfy webpush keys`. **Regenerating them invalidates every existing browser subscription.** The public key is served to every browser at `/config.js` and is not secret; the private key is.
 - `NAS_HEARTBEAT_URL` - ping URL for the off-box dead-man's switch (`scripts/heartbeat.py`, healthchecks.io free tier). Unset until someone creates the check; `stack_watchdog.py` raises a standing warning while it is.
 
 ## General Development Principles

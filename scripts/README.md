@@ -722,7 +722,9 @@ python scripts/stack_watchdog.py --jellyfin-anon-mb 2048 --repeat-min 30
 python scripts/stack_watchdog.py --ignore recyclarr    # skip a service entirely
 ```
 
-Exit codes: `0` all healthy, `1` at least one alert active, `2` fatal (docker unreachable). Cron runs it `*/5` and swallows the exit code — the push is the delivery path, `logs/stack_watchdog.log` is the record. Environment: `NAS_ALERT_WEBHOOK` (falls back to `SLSKD_ALERT_WEBHOOK`), `NAS_ALERT_USER`, `NAS_ALERT_PASSWORD`.
+Exit codes: `0` all healthy, `1` at least one alert active, `2` fatal (docker unreachable). Cron runs it `*/5` — the push is the delivery path, `logs/stack_watchdog.log` is the record. Environment: `NAS_ALERT_WEBHOOK` (falls back to `SLSKD_ALERT_WEBHOOK`), `NAS_ALERT_USER`, `NAS_ALERT_PASSWORD`.
+
+**The ntfy instance runs three accounts, not one.** `watchdog` (what these scripts use) is **write-only** — it cannot read the topic, so a leak of this box's `.env` exposes no alert history. `phone` is **read-only** — the credential typed into an Android app and backed up to Google cannot inject fake alerts. `admin` is for the web UI. Anonymous access is denied for both reading and writing. Web Push is enabled so a browser notifies with no tab open; `NTFY_UPSTREAM_BASE_URL` is deliberately unset, because its only purpose is waking iOS devices through ntfy.sh's APNs relay, which would send a hash of every topic off the box.
 
 ### `jellyfin_library_scan.py`
 

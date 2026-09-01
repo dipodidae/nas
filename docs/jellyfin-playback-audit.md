@@ -139,6 +139,7 @@ reproducibility.
 | **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode | `scripts/aac_fallback_track.py` | n/a, additive |
 | **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
 | **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
+| **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
 | **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
 
 ---
@@ -623,10 +624,20 @@ should read ~1 and 0 respectively; if `doublemapper` starts climbing, the
 
 - Test delivery: `python scripts/stack_watchdog.py --self-test`.
 - See what it would say without notifying: `--dry-run`.
-- Phone setup: install ntfy, add subscription
-  `https://ntfy.<PUBLIC_DOMAIN>/nas-alerts`, authenticate with
-  `NAS_ALERT_USER` / `NAS_ALERT_PASSWORD` from `.env`. DNS and the wildcard
-  cert already cover the subdomain — nothing else to configure.
+- **Phone setup (Android):** install the ntfy app → *Settings → Manage users →
+  Add user*, server `https://ntfy.<PUBLIC_DOMAIN>`, username/password from
+  `NTFY_PHONE_USER` / `NTFY_PHONE_PASSWORD` in `.env`. Then *Subscribe to
+  topic* → `nas-alerts`, and switch the server from *ntfy.sh* to
+  *Use another server* → the same URL. DNS and the wildcard cert already cover
+  the subdomain.
+- **Browser:** open `https://ntfy.<PUBLIC_DOMAIN>`, sign in as
+  `NTFY_PHONE_USER`, subscribe to `nas-alerts` and allow notifications when
+  prompted. Web Push is enabled, so it notifies with no tab open.
+- **Three accounts, deliberately not one.** `watchdog` publishes and cannot
+  read (a leak of this box's `.env` exposes no alert history); `phone` reads
+  and cannot publish (the credential on a phone, backed up to Google, cannot
+  inject fake alerts); `admin` is for the web UI and user management. All nine
+  permission boundaries were verified — see the change log.
 - Silence a service the watchdog should not care about: add
   `--ignore <service>` to the cron line.
 
