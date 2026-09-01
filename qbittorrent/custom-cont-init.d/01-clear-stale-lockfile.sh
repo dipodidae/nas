@@ -51,6 +51,24 @@
 #
 # The ipc-socket next to the lockfile is removed only when its lockfile was
 # judged stale, for the same reason.
+#
+# LIMIT OF THE SAFETY PROPERTY - read before trusting it
+# ------------------------------------------------------
+# "A live instance's lock survives" holds for ONE container over this /config.
+# It does NOT hold for two, and pinning `hostname: qbittorrent` in compose is
+# what breaks it: PIDs in the lockfile are namespace-local, so a PID written by
+# container A means nothing when read inside container B, while the pinned
+# hostname makes rule 2 match instead of firing. B therefore judges A's live
+# lock stale and deletes it.
+#
+# This is not unique to this script - upstream's PID + hostname + machine-id
+# check has the same hole, and the unconditional `rm -f` this replaced was
+# strictly worse (it deleted in every case, single-container included). The
+# machine-id on line 5 is the only field that could tell two containers apart,
+# and neither upstream nor this script currently reads it.
+#
+# So: never point two containers at one qBittorrent /config. That was always
+# true; it is simply no longer defended against.
 
 shopt -s nullglob
 

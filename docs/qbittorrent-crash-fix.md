@@ -90,9 +90,14 @@ Aug 31 21:57:16  Killed process (jellyfin) anon-rss:22763820kB
 Sep 01 05:34:58  Killed process (jellyfin) anon-rss:23483348kB
 ```
 
-Jellyfin was the victim every time because it had the largest RSS, but these
-were host-wide, not cgroup-constrained — qBittorrent was a co-contributor, not a
-bystander.
+These were host-wide, not cgroup-constrained, so qBittorrent was a
+co-contributor rather than a bystander. **But do not let that framing bury the
+bigger number: ~23 GB of *anonymous* RSS in Jellyfin is not page cache, it is
+real allocation, and it is not normal for Jellyfin under any transcoding load.**
+Jellyfin was not merely "the largest RSS so it got picked" — it has its own
+memory bug, it fired four times in two days, and it is unaddressed by anything
+in this document. That is the next thing to chase, and it is a larger problem
+than the one fixed here. See `docs/jellyfin-playback-audit.md`.
 
 The "Physical memory usage limit" option was removed in 5.2.0, so it is not the
 lever. The lever is `DiskIOReadMode` / `DiskIOWriteMode`.
@@ -164,6 +169,15 @@ is not there.
 the process needed ~180 s to die while flushing 21 GB of page cache (that
 container scope recorded 249 GB written to disk over its life).
 
+**This generalises past qBittorrent.** The stop → remove → create sequence is
+non-atomic for every one of the 17 containers watchtower scans; any of them can
+be left deleted with no replacement. Removing the label fixes qbit and nothing
+else. The class is covered by `scripts/stack_watchdog.py`, which enumerates
+`docker compose config --services` and raises a `critical` alert when a defined
+service has no container at all — not merely when one is unhealthy. That
+distinction is the whole point: "unhealthy" and "does not exist" look identical
+to anything that only inspects running containers.
+
 ## What changed
 
 All in `docker-compose.yml` (qbittorrent service only) and the init script.
@@ -195,6 +209,38 @@ Otherwise it is left alone and qBittorrent decides for itself.
 Pinning the hostname makes rule 2 stop firing, which makes **rule 3
 load-bearing** — that is the rule that actually fires on this box now.
 
+### The two-container safety property is NOT proven
+
+This needs stating plainly, because the operating notes below tell you to trust
+the script's judgement.
+
+The rewrite was motivated by preserving the lock when a live instance holds it.
+That property holds **within one container** and is tested there. It does **not**
+hold across two containers sharing one `/config`, and pinning the hostname is
+what breaks it:
+
+- PIDs in the lockfile are **namespace-local**. A PID written by container A is
+  meaningless when read inside container B.
+- With `hostname: qbittorrent` pinned, both containers present the same
+  hostname, so rule 2 (the only cross-host signal) never fires.
+- Container B therefore sees a matching hostname and a PID that means nothing in
+  its own namespace, concludes "not a live `qbittorrent-nox`", and **deletes a
+  live peer's lock**.
+
+The standalone unit test passes because it is single-namespace, which is exactly
+the case that cannot expose this.
+
+This is not a regression introduced here — upstream's own
+PID + hostname + machine-id check has the same hole, and the previous
+unconditional `rm -f` was strictly worse (it deleted the lock unconditionally in
+*every* case, including single-container). The rewrite is still an improvement.
+But "a lock held by a live instance is preserved" is true for one container and
+unproven for two, and the machine-id line is the only field that could
+distinguish them — it is currently read by neither upstream nor this script.
+
+**Practical upshot:** never point two containers at one qBittorrent `/config`.
+That was always true; it is just no longer defended against.
+
 ## Verification
 
 | # | Test | Result |
@@ -216,8 +262,10 @@ rule:
 ```
 
 The script's five decision paths were also unit-tested standalone against
-synthetic lockfiles, including the safety case: **a lock held by a live
-`qbittorrent-nox` is preserved.**
+synthetic lockfiles, including the safety case: a lock held by a live
+`qbittorrent-nox` is preserved. Note that this test is **single-namespace**, so
+it proves the single-container case only — see
+[The two-container safety property is NOT proven](#the-two-container-safety-property-is-not-proven).
 
 Torrent count was 127 at the start of the session and 128 at the end; the *arr
 stack added one mid-session. Nothing was lost.
@@ -237,16 +285,31 @@ Safe to delete once you are satisfied the fix holds.
   could not be separated retroactively for a dead container, so "qbit
   contributed to the OOM" is a strong inference, not a direct measurement. The
   remedy is correct either way.
-- **`mem_limit: 4g` is new risk surface.** If qbit genuinely needs more, the
-  cgroup OOM-kills it — an ungraceful death, the exact failure this work
-  removed. Steady state is ~78 MiB and the old peak was cache-driven, so 4 g is
-  roughly 3× headroom, but it is worth watching.
+- **`mem_limit: 4g` — the OOM risk is smaller than it looks, and the real risk
+  is elsewhere.** A cgroup reclaims file-backed pages before it OOM-kills, so
+  the cache-driven growth that produced the 21.1 GB figure will *not* trip the
+  limit; it will just cap the cache. What can OOM-kill is anonymous growth, and
+  that sits at ~78 MiB steady state (with `memswap_limit == mem_limit` there is
+  no swap to spill into either). So 4 g is comfortable. The actual exposure is
+  the other direction: capping cache at 4 g while libtorrent 2.x is mmap-heavy
+  can stall on writeback under load. **That shows up as degraded torrent
+  throughput, not as a crash** — so watch throughput, not just the OOM counter.
 - **qBittorrent no longer auto-updates.** Deliberate. Bumping the tag is now a
   manual step.
-- **`nas-restart-guard`'s `on-failure:5` cap is still a silent-death trap** for
-  autoheal and watchtower. It warns to the journal and nothing reads the
-  journal. (`scripts/stack_watchdog.py`, added separately the same day, should
-  now cover this.)
+- **`nas-restart-guard`'s `on-failure:5` cap should be fixed, not just
+  monitored.** A supervisor that gives up permanently is worse than none: it is
+  what killed autoheal silently for five weeks. Origin: it was installed by
+  `/home/tom/fix-nas-all.sh` on 2026-06-15 after a hard freeze, as blast-radius
+  control for a watchtower crash loop that the *same script* root-caused and
+  fixed (`WATCHTOWER_ROLLING_RESTART` was incompatible with the stack's
+  dependencies). So the cap outlived the loop it was capping. That script's own
+  item 4 shows the author knew a permanent cap needs a "notice it disappeared"
+  companion and built one — as a journal warning, which nothing reads.
+  `scripts/stack_watchdog.py` now supplies that function properly, which is the
+  precondition for relaxing the cap. Suggested shape: keep the cap as the
+  default, exclude `autoheal` and `watchtower` (the two self-healing containers)
+  and give them `unless-stopped`. The restart-storm goal and `unless-stopped` on
+  those two are not in conflict.
 - **The fix is unproven against the real failure.** It was reproduced by
   simulation (SIGKILL) rather than by waiting for a natural watchtower recreate.
   Removing the watchtower label should mean that trigger never fires again, but
@@ -282,7 +345,9 @@ docker compose logs qbittorrent | grep init-qbit-lockfile
 
 **Do not** reintroduce an unconditional `rm -f` of the lockfile. If the script
 says it is keeping a lock, that is the safety property working — find out why a
-live `qbittorrent-nox` is holding it.
+live `qbittorrent-nox` is holding it. Conversely, if it says it is *removing* a
+lock, that judgement is only trustworthy while exactly one container is using
+this `/config`; see the caveat above.
 
 ## Stale documentation
 
