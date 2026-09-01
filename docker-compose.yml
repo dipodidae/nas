@@ -93,6 +93,18 @@ services:
       - ${CONFIG_DIRECTORY}/sonarr:/config
       - ${SHARE_DIRECTORY}/series:/tv
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      # 2026-09-01: single-mount view of the whole share, ADDED ALONGSIDE the
+      # per-library mounts above rather than replacing them. Hardlinks cannot
+      # cross a mount point even when both sides live on one filesystem, so with
+      # /tv and /downloads as separate bind mounts every import silently fell
+      # back to a full copy despite copyUsingHardlinks=True -- 0.96 TiB of
+      # duplication. Under /data both trees share one mount, so link() works.
+      # Verified by probe: `ln /downloads/... /tv/...` -> EXDEV,
+      #                    `ln /data/downloads/... /data/series/...` -> ok.
+      # The legacy mounts are kept deliberately: they make this reversible, and
+      # removing them is a separate step once the new paths have bedded in.
+      # See docs/arr-qbittorrent-pollution.md section 7.
+      - ${SHARE_DIRECTORY}:/data
     ports:
       - '127.0.0.1:8989:8989'
     restart: unless-stopped
@@ -139,6 +151,18 @@ services:
       - ${CONFIG_DIRECTORY}/radarr:/config
       - ${SHARE_DIRECTORY}/movies:/movies
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      # 2026-09-01: single-mount view of the whole share, ADDED ALONGSIDE the
+      # per-library mounts above rather than replacing them. Hardlinks cannot
+      # cross a mount point even when both sides live on one filesystem, so with
+      # /tv and /downloads as separate bind mounts every import silently fell
+      # back to a full copy despite copyUsingHardlinks=True -- 0.96 TiB of
+      # duplication. Under /data both trees share one mount, so link() works.
+      # Verified by probe: `ln /downloads/... /tv/...` -> EXDEV,
+      #                    `ln /data/downloads/... /data/series/...` -> ok.
+      # The legacy mounts are kept deliberately: they make this reversible, and
+      # removing them is a separate step once the new paths have bedded in.
+      # See docs/arr-qbittorrent-pollution.md section 7.
+      - ${SHARE_DIRECTORY}:/data
     ports:
       - '127.0.0.1:7878:7878'
     restart: unless-stopped
@@ -242,6 +266,24 @@ services:
       - ${CONFIG_DIRECTORY}/lidarr:/config
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
+      # 2026-09-01: single-mount view of the whole share, ADDED ALONGSIDE the
+      # per-library mounts above rather than replacing them. Hardlinks cannot
+      # cross a mount point even when both sides live on one filesystem, so with
+      # /tv and /downloads as separate bind mounts every import silently fell
+      # back to a full copy despite copyUsingHardlinks=True -- 0.96 TiB of
+      # duplication. Under /data both trees share one mount, so link() works.
+      # Verified by probe: `ln /downloads/... /tv/...` -> EXDEV,
+      #                    `ln /data/downloads/... /data/series/...` -> ok.
+      # The legacy mounts are kept deliberately: they make this reversible, and
+      # removing them is a separate step once the new paths have bedded in.
+      # See docs/arr-qbittorrent-pollution.md section 7.
+      # 2026-09-01: STAGED BUT NOT IN USE for lidarr. The repath was attempted and
+      # rolled back: Lidarr's `PUT /api/v1/artist/editor` with moveFiles=false wiped
+      # TrackFiles (150,187 rows -> 0) where Sonarr/Radarr repathed cleanly. The DB
+      # was restored from backup and lidarr's root folder is still /music, so it
+      # still copies rather than hardlinks. This mount is left in place ready for a
+      # safer retry -- see docs/arr-qbittorrent-pollution.md section X.
+      - ${SHARE_DIRECTORY}:/data
     ports:
       - '127.0.0.1:8686:8686'
     restart: unless-stopped

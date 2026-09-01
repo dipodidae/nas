@@ -1,8 +1,9 @@
 # qBittorrent pollution: what the *arrs leave behind, and why
 
 **Date:** 2026-09-01
-**Scope:** diagnosis only. Nothing was deleted, paused, or reconfigured. All API
-calls were reads.
+**Scope:** diagnosis pass, then an approved execution pass. See
+[§X Execution](#x-execution-2026-09-01-approved-and-applied) for what was
+actually changed — including one thing that went wrong and was rolled back.
 **Related:** `docs/qbittorrent-crash-fix.md` (same client, earlier the same day).
 
 ---
@@ -591,3 +592,116 @@ already fixed (`docs/jellyfin-playback-audit.md`).
 **The real benefit of this cleanup is disk: 533.6 GiB of junk, and separately
 0.96 TiB of duplication from the hardlink defect.** That is a genuine and large
 win. Memory is a rounding error and should not appear in the justification.
+
+
+---
+
+## X. Execution (2026-09-01) — approved and applied
+
+Approved scope: the conservative plan (41 torrents / 226.1 GiB), **plus** the
+hardlink restructure. The "do not restart containers" constraint was explicitly
+waived for the restructure.
+
+### Cleanup — done, clean
+
+| | |
+|---|---|
+| Removed | 41 torrents, 226.1 GiB |
+| Torrents 128 → | **88** (87 remaining + 1 new grab from the blocklist re-search) |
+| Total size 1331.1 GiB → | **1116.4 GiB** |
+| Errored / missingFiles after | **0** |
+| `stoppedUP` after | **0** (all 33 were in buckets D and F) |
+| Sonarr queue warnings 88 → | **7** |
+
+Buckets D and E went out through the *arr queue API with `blocklist=true`, so
+those releases are blocklisted and re-searched rather than silently dropped —
+`metaDL` rising 6 → 7 is that working. Bucket F went straight out of
+qBittorrent, since no *arr had a record to clean up.
+
+Manifest of exactly what was removed: `logs/qbit_cleanup_<ts>.json`.
+Pre-change backups: `/mnt/drive/backups/pre-cleanup-1788287701/`.
+
+### Hardlink restructure — done for Sonarr and Radarr
+
+`${SHARE_DIRECTORY}:/data` was **added alongside** the existing per-library
+mounts rather than replacing them, so the change is reversible. Root folders
+moved to `/data/series` and `/data/movies` via each app's bulk editor with
+`moveFiles=false`, and a remote path mapping (`qbittorrent:/downloads/` →
+`/data/downloads/`) makes the *arr resolve downloads under the same mount.
+
+Verified by probe, which is the whole point:
+
+```
+sonarr: ln /data/downloads/... -> /data/series/...  OK (nlink=2)
+radarr: ln /data/downloads/... -> /data/movies/...  OK (nlink=2)
+control: ln /downloads/...     -> /tv/...           still EXDEV
+```
+
+Integrity after repath: Sonarr 59/59 series, 1080 episode files, 2.51 TiB —
+all unchanged. Radarr 37/37 movies, 0.25 TiB — unchanged.
+
+**qBittorrent was not touched.** It does not need the unified mount: hardlinking
+happens inside the *arr containers, so the earlier day's fix stayed under
+observation with 0 restarts.
+
+**This prevents future duplication; it does not reclaim the existing 0.96 TiB.**
+Those library copies are already separate inodes. They collapse only as old
+torrents age out and new imports hardlink in their place.
+
+### Lidarr — attempted, broke it, rolled back
+
+**What happened.** The same bulk-editor call that Sonarr and Radarr handled
+correctly — `PUT /api/v1/artist/editor` with `rootFolderPath` and
+`moveFiles: false` — **emptied Lidarr's `TrackFiles` table: 150,187 rows → 0.**
+`Artists` was repathed correctly and `Albums`/`Tracks` survived, but every
+track-file registration was gone, so Lidarr reported 0.00 TiB on disk while
+still claiming a `trackFileCount` from stale statistics.
+
+**Detection.** The final verification pass showed Lidarr at `size=0.00 TiB`
+against 1.52 TiB before. Confirmed against the pre-change DB backup rather than
+assumed: backup 150,187 rows / 1.52 TiB, live 0 rows / 0.00 TiB.
+
+**Rollback.** Lidarr stopped, the broken DB preserved at
+`/mnt/drive/backups/pre-cleanup-1788287701/broken-after-repath/`, and
+`lidarr.db` restored from the pre-change backup (integrity check `ok` before
+use). Post-restore: 3334 artists, 1.52 TiB, 147,528 track files, root folder
+back to `/music`, health clean — byte-for-byte the pre-change state.
+
+**Cost of the rollback:** roughly 45 minutes of Lidarr activity between the
+backup at 20:35 and the restore. Lidarr runs on Slskd with a drip-fed backlog,
+so the practical loss is small, but it is not zero.
+
+**Lidarr is therefore still on the legacy layout and still copies rather than
+hardlinks.** That is the status quo, not a regression — but it is unfinished
+work, and it should not be retried with the same method.
+
+**Why it differs from Sonarr/Radarr — a guess, not a finding.** Lidarr is a
+much older fork of the *arr codebase and its editor endpoint likely treats a
+root-folder change as a move and unlinks track files when `moveFiles` is false,
+rather than rewriting paths in place. I did not read Lidarr's source to confirm
+this, and it should be verified before any retry.
+
+**Safer approach if you want Lidarr on `/data` later:** add the root folder,
+move a *single* artist, verify `TrackFiles` is intact for it, and only then
+proceed — or skip the editor entirely and rewrite `Artists.Path` plus
+`TrackFiles.Path` directly with Lidarr stopped, which is more invasive but has
+predictable semantics.
+
+### Not done: cleanuparr
+
+**Blocked, not skipped.** Cleanuparr's API returns **401** — its
+`auth_disable_auth_for_local_addresses` is `0`, so every config endpoint needs
+credentials I do not have. Enabling a deletion engine by writing to its SQLite
+behind its own auth would be both unreliable (it caches config) and the wrong
+call to make unattended, so it was left alone.
+
+**The three toggles that close the recurrence loop**, in the UI at
+`http://127.0.0.1:11011`, ideally with `dry_run` on first:
+
+| Module | Setting | Closes bucket |
+|---|---|---|
+| Content Blocker | enable; blacklist executable extensions | D — fake releases |
+| Queue Cleaner | enable; set stalled + `downloading metadata` strikes (both are `0`/disabled now) | E — dead swarms |
+| Download Cleaner | enable; add a qBittorrent seeding rule (`q_bit_seeding_rules` has 0 rows) | F — orphaned by deleted series |
+
+Until those are on, all three buckets will refill.
