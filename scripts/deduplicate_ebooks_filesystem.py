@@ -264,7 +264,7 @@ def select_best_file(files: list[Path], logger: logging.Logger) -> tuple[Path, l
         return (None, files)
 
     # Sort by priority (descending)
-    valid_files.sort(key=lambda f: get_file_priority(f), reverse=True)
+    valid_files.sort(key=get_file_priority, reverse=True)
 
     keeper = valid_files[0]
     to_remove = valid_files[1:]

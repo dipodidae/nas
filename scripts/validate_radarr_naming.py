@@ -3,11 +3,10 @@
 Validate and fix Radarr movie folder naming configuration.
 Run this after any Radarr config changes to ensure folders stay properly formatted.
 """
-import os
-import sys
 import json
+import os
 import subprocess
-import re
+import sys
 from pathlib import Path
 
 RADARR_API_KEY = os.getenv("API_KEY_RADARR")
@@ -31,21 +30,21 @@ def validate_naming_config() -> bool:
     config = get_naming_config()
     folder_format = config.get("movieFolderFormat", "")
     rename_enabled = config.get("renameMovies", False)
-    
+
     issues = []
-    
+
     if folder_format != EXPECTED_FOLDER_FORMAT:
         issues.append(f"Folder format mismatch:\n  Expected: {EXPECTED_FOLDER_FORMAT}\n  Current:  {folder_format}")
-    
+
     if not rename_enabled:
         issues.append("Movie renaming is DISABLED - should be enabled")
-    
+
     if issues:
         print("NAMING CONFIG ISSUES FOUND:", file=sys.stderr)
         for issue in issues:
             print(f"  - {issue}", file=sys.stderr)
         return False
-    
+
     print("✓ Naming configuration is correct")
     return True
 
@@ -54,10 +53,10 @@ def check_folder_names() -> int:
     if not os.path.exists(MOVIES_DIR):
         print(f"ERROR: Movies directory not found: {MOVIES_DIR}", file=sys.stderr)
         return 1
-    
+
     movies_path = Path(MOVIES_DIR)
-    broken_folders = [f for f in movies_path.iterdir() if f.is_dir() and '{' in f.name]
-    
+    broken_folders = [f for f in movies_path.iterdir() if f.is_dir() and "{" in f.name]
+
     if broken_folders:
         print(f"ERROR: Found {len(broken_folders)} folders with literal pattern text:", file=sys.stderr)
         for folder in broken_folders[:5]:
@@ -66,7 +65,7 @@ def check_folder_names() -> int:
             print(f"  ... and {len(broken_folders) - 5} more", file=sys.stderr)
         print("\nRun: python3 scripts/fix_radarr_folders.py", file=sys.stderr)
         return 1
-    
+
     print("✓ All movie folder names are clean")
     return 0
 
@@ -75,13 +74,13 @@ def main() -> int:
     if not RADARR_API_KEY:
         print("ERROR: API_KEY_RADARR environment variable not set", file=sys.stderr)
         return 1
-    
+
     print("Checking Radarr naming configuration...")
     config_ok = validate_naming_config()
-    
+
     print("\nChecking movie folder names...")
     folders_ok = check_folder_names() == 0
-    
+
     if config_ok and folders_ok:
         print("\n✓ All checks passed - Radarr naming is properly configured")
         return 0

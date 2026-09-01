@@ -36,7 +36,7 @@ def trigger_rescan() -> int:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
         print("✓ Jellyfin library rescan triggered")
         return 0
     except subprocess.CalledProcessError as e:

@@ -4,9 +4,9 @@ Monitor and enforce critical Radarr settings that affect folder naming.
 This prevents AutoConfig or manual changes from breaking naming again.
 """
 import json
-import sys
 import os
 import subprocess
+import sys
 
 RADARR_API_KEY = os.getenv("API_KEY_RADARR")
 RADARR_URL = "http://localhost:7878"
@@ -36,7 +36,7 @@ def set_radarr_config(endpoint: str, data: dict) -> bool:
         f"{RADARR_URL}/api/v3/config/{endpoint}",
         "--data-raw", json.dumps(data)
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.returncode == 0
 
 def main() -> int:
@@ -44,10 +44,10 @@ def main() -> int:
     if not RADARR_API_KEY:
         print("ERROR: API_KEY_RADARR not set", file=sys.stderr)
         return 1
-    
+
     issues_found = []
     fixes_applied = []
-    
+
     # Check naming config
     try:
         naming_config = get_radarr_config("naming")
@@ -57,18 +57,18 @@ def main() -> int:
                 issues_found.append(f"Naming.{key}: Expected {expected_value}, got {current_value}")
                 naming_config[key] = expected_value
                 fixes_applied.append(f"Naming.{key} corrected")
-        
+
         if fixes_applied:
             if set_radarr_config("naming", naming_config):
                 print("✓ Applied naming config fixes")
             else:
                 print("✗ Failed to apply naming fixes", file=sys.stderr)
                 return 1
-    
+
     except Exception as e:
         print(f"ERROR checking naming: {e}", file=sys.stderr)
         return 1
-    
+
     # Check media management config
     try:
         mm_config = get_radarr_config("mediamanagement")
@@ -78,18 +78,18 @@ def main() -> int:
                 issues_found.append(f"MediaManagement.{key}: Expected {expected_value}, got {current_value}")
                 mm_config[key] = expected_value
                 fixes_applied.append(f"MediaManagement.{key} corrected")
-        
+
         if "MediaManagement" in str(fixes_applied):
             if set_radarr_config("mediamanagement", mm_config):
                 print("✓ Applied media management fixes")
             else:
                 print("✗ Failed to apply media management fixes", file=sys.stderr)
                 return 1
-    
+
     except Exception as e:
         print(f"ERROR checking media management: {e}", file=sys.stderr)
         return 1
-    
+
     if issues_found:
         print(f"\n⚠️  Found and fixed {len(issues_found)} configuration issues:")
         for issue in issues_found:
