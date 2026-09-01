@@ -38,6 +38,15 @@
 >   the global task, converted the first AAC batch, fixed Bazarr's failing
 >   providers, and found two further silent failures nobody had noticed
 >   (§3.3).
+> - **Pass 9 (this revision)**: closed the three loose ends pass 8 left and
+>   reversed one of its own recommendations. Restarted `autoheal` after
+>   establishing *why* it was stopped (and fixed two timeout defects that
+>   would have made it harmful). Generalised the two silent-failure findings
+>   into a mechanism rather than two more fixes: every cron job is now wrapped
+>   so both its failures *and its silences* are pushed, and the crontab itself
+>   is linted continuously. Added the off-box heartbeat. And on the AAC
+>   rollout, Tom reversed direction on the evidence pass 8 gathered — see
+>   §3.6.
 
 ---
 
@@ -119,6 +128,18 @@ reproducibility.
 | **30** | **AAC fallback audio, first batch (Fargo Season 1, 10 files)** + `scripts/aac_fallback_track.py` | `${SHARE_DIRECTORY}/series/Fargo/Season 1`; originals at `${SHARE_DIRECTORY}/backups/aac-remux-originals/` | `mv` each original back over the converted file, then run `jellyfin_library_scan.py --library "TV Shows"` |
 | **31** | Jellyfin request logging (`.docker-config/jellyfin/logging.json`) — added for §3.1. File **deleted**; the running process keeps request logging until its next restart (see §5) | `.docker-config/jellyfin/logging.json` | Already deleted; the runbook in §4.1 says how to re-add it |
 | **32** | `scripts/jellyfin_mem_sample.py`: `datetime.timezone` → `datetime.UTC` (the file's only `ruff` failure) | `scripts/jellyfin_mem_sample.py` | Cosmetic; revert with `git checkout` once committed |
+| **33** | **`autoheal` restarted.** Stopped since 2026-07-29; cause established as collateral from a bare `docker compose stop` (shell history), not a decision about autoheal — its own log shows it had never restarted anything | `docker compose up -d autoheal` | `docker compose stop autoheal` |
+| **34** | **`AUTOHEAL_DEFAULT_STOP_TIMEOUT=150`** (was the image default of 10s). autoheal ignores compose's `stop_grace_period`; a 10s SIGTERM→SIGKILL on qbittorrent is the documented stale-lockfile trigger | `docker-compose.yml` (autoheal) | Delete the line (reverts to 10s) |
+| **35** | **`CURL_TIMEOUT=180`** (was 30). Must exceed the stop timeout, or autoheal logs a spurious failure and re-issues the restart every interval on top of the one in flight — measured, three overlapping requests | `docker-compose.yml` (autoheal) | Set back to 30 |
+| **36** | **`scripts/cron_job.py`** + all 23 scheduled jobs rewritten to use it. Pushes fatal exits; records `logs/cron-state/<job>.json` so the watchdog can alert on silence | crontab, `scripts/`, `logs/cron-state/` | Restore the crontab from `docs/jellyfin-config-backups/crontab-2026-09-01-pre-cron-wrapper.txt` |
+| **37** | **`scripts/heartbeat.py`** + cron `*/10` + `NAS_HEARTBEAT_URL` in `.env`/`.env.example`. Off-box dead-man's switch; the URL is still empty pending an account | crontab, `scripts/`, `.env` | Remove the cron line and the env var |
+| **38** | **Watchdog gained four checks**: `autoheal` health, off-box heartbeat configured, crontab lint, wrapped-cron-job freshness | `scripts/stack_watchdog.py` | Delete the four `check_*` calls in `main()` |
+| **39** | **`media_ops_status` cron no longer discards output** — it redirected to `/dev/null`, which is part of why three months of failure left nothing to find. Now `>> logs/media_ops_status.log` | crontab | Restore `>/dev/null 2>&1` (do not) |
+| **40** | **AAC disposition flip, 5 files** (Planet Earth S01 E01/E02/E04/E07/E09) — already had a stereo AAC track, only the default flag moved. Lossless, no re-encode, no size change | `${SHARE_DIRECTORY}/series/Planet Earth/Season 1`; originals under `backups/aac-remux-originals/` | `mv` each original back, then `jellyfin_library_scan.py --library "TV Shows"` |
+| **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode | `scripts/aac_fallback_track.py` | n/a, additive |
+| **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
+| **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
+| **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
 
 ---
 
@@ -422,6 +443,120 @@ nearly free and worth doing regardless.
   `proxy_read/send/connect_timeout`, so re-declaring any of them in a
   vhost is `nginx: [emerg] … directive is duplicate`, not an override.
 
+### 3.6 — Pass 9: the three loose ends, and one reversal
+
+**`autoheal` — why it was stopped, then restarted.** Established before
+touching it, because starting a supervisor that had been deliberately silenced
+would reintroduce whatever silenced it. Three lines of evidence say it was not
+a decision about autoheal at all:
+
+* its **entire** log is 42 lines, all startup banners — in five weeks of
+  running it never restarted anything, so it cannot have been stopped for
+  misbehaving;
+* shell history contains a bare `docker compose stop` (which stops every
+  service) followed by `docker compose start qbittorrent slskd` — only those
+  two came back. The dates fit: last autoheal banner 2026-07-29T17:20;
+* nothing in git log, `AGENTS.md`, `CLAUDE.md` or `docs/` says to keep it
+  down, and `CLAUDE.md` actively documents it as part of the design.
+
+It supervises only `qbittorrent` and `slskd`, and slskd's healthcheck is the
+Soulseek-*independent* web-UI spider `CLAUDE.md` mandates — so the documented
+restart-spiral hazard does not apply. Started.
+
+**Two defects found while proving it works**, both of the same shape as the
+`WATCHTOWER_TIMEOUT` fix already in the compose file:
+
+1. `AUTOHEAL_DEFAULT_STOP_TIMEOUT` was the image default of **10s**. autoheal
+   ignores compose's `stop_grace_period` entirely, so a restart of qbittorrent
+   would SIGKILL it after 10s — precisely the ungraceful kill that leaves the
+   stale lockfile. Set to 150s.
+2. With that raised, a deliberately-unhealthy probe container showed
+   `Restarting container … failed` every 30s. That is `CURL_TIMEOUT=30`
+   cutting off a call that blocks for the whole stop timeout. The restart
+   *does* still complete — the probe restarted at exactly t+150s — but
+   autoheal believed it had failed and fired **three overlapping restart
+   requests** in the meantime. For qbittorrent that is the pile-up that
+   creates the very lockfile it is trying to recover from. `CURL_TIMEOUT=180`.
+
+With both fixed, the probe was detected and restarted cleanly with no failure
+lines. Also verified in passing, because the env listing suggests otherwise:
+`dockerproxy` has `ALLOW_RESTARTS=0`, yet `POST /containers/<id>/restart`
+through it returns **204**. `POST=1` is what actually gates it in this build.
+Behaviour beats the env var; the compose comment claiming "CONTAINERS + POST is
+all autoheal needs" is correct.
+
+**Closing the class, not the two instances.** `autoheal` dead a month,
+`media_ops_status.py` dead three months — both "a thing that should be running
+isn't", and auditing the crontab for one specific bug only covers jobs that
+fail to *start*. Three mechanisms now, not two more fixes:
+
+* **`scripts/cron_job.py`** wraps all 23 jobs. A fatal exit pushes an ntfy
+  alert with the job name and stderr tail. Every run records
+  `logs/cron-state/<job>.json`, and the watchdog alerts when a job has not
+  *succeeded* within the window its own cron line declares — that is the half
+  that catches a job producing nothing at all. `--register` seeds the file so
+  a never-yet-run job is watched from the moment it is scheduled.
+  The exit-code contract matters: 1 means *partial* in this repo and several
+  scripts report real findings that way, so `--ok-codes` defaults to `0,1`.
+  Treating non-zero as failure would have alarmed constantly and been turned
+  off within a week.
+* **A crontab lint in the watchdog**, run every 5 minutes: a line using a
+  relative path without `cd /home/tom/nas`, or naming a script that does not
+  exist, is now a critical alert. Verified against the historical bad line —
+  it flags it — and against the live crontab, which is clean.
+* **`scripts/heartbeat.py`**, `*/10`, for the failure nothing on this host can
+  report: the host. It pings an off-box dead-man's switch, and pings `/fail`
+  instead if `stack_watchdog` has itself gone quiet, so a live box with dead
+  monitoring cannot keep the light green — the same circular gap that hid
+  `autoheal`.
+
+Verified: hc-ping.com is reachable from this box; a wrong ping URL exits 2 with
+`HTTP 400 — is the ping URL right?`; a DNS failure exits 2; a real reachable
+endpoint returns 0. **Still needs an account** — creating the check is not
+something a script can do, so `NAS_HEARTBEAT_URL` is empty and the watchdog
+raises a standing `heartbeat:unconfigured` warning until it is set. That nag is
+deliberate: this is the one remaining hole in coverage and it should keep
+saying so.
+
+Six crontab lines lost their `cd /home/tom/nas` during this pass's rewriting
+and were caught by the audit each time. That is the argument for the lint,
+made at my own expense.
+
+**AAC: rollout declined, and the survey is why.** Pass 8 gathered the numbers
+to justify a rollout; the numbers argued against one. 946 files need
+conversion, mostly **AC3 and E-AC3** rather than DTS — so the real finding is
+not "some files have awkward audio" but "most of this library cannot be Direct
+Played *by a browser*", and native clients handle all of it untouched. 32
+hours of conversion and a permanent stereo-default cost on every file, versus
+using the app. Tom's call, and the right one.
+
+Done instead: **the 5 disposition-flip-only episodes** (Planet Earth S01
+E01/E02/E04/E07/E09). Those already carried a stereo AAC track and were
+transcoding purely because DTS held the default flag. No encode, no size
+change, no trade-off — `aac_fallback_track.py` now detects this case
+automatically and `--flip-only` restricts a run to it. All five verified
+`DirectPlay: False → True` through the live StreamBuilder.
+
+**The 5.1 question, answered — and the answer is no.** If a 5.1 AAC default
+track direct-played, future conversions could keep surround and the
+stereo-default cost would vanish. Built one (Fargo S01E01, DTS 5.1 → AAC 5.1
+448k, flagged default) and asked the real StreamBuilder. The first result was
+`DirectPlay: True`, which is close to meaningless: my device profile placed no
+channel constraint on direct play. Re-tested with the `CodecProfile` that
+jellyfin-web actually builds from the browser's reported output channels:
+
+```text
+client reports max 2 channels -> DirectPlay=False DirectStream=False
+client reports max 6 channels -> DirectPlay=True  DirectStream=True
+```
+
+So a 5.1 AAC default **transcodes on any browser whose audio output is
+stereo** — which is the entire population this exercise exists to serve. It
+does not remove the trade-off, it relocates it. A listening test would not have
+found this, because on a stereo device the decision never reaches Chrome's
+decoder at all; the file is transcoded server-side first. Stereo AAC as default
+stands. Fargo S01E01 was restored to the stereo version and re-verified.
+
 ---
 
 ## 4. Runbook
@@ -493,7 +628,47 @@ should read ~1 and 0 respectively; if `doublemapper` starts climbing, the
 - Silence a service the watchdog should not care about: add
   `--ignore <service>` to the cron line.
 
-### 4.5 Scan one library by hand
+### 4.5 Why is this transcoding? Usually: use a native client
+
+For anything whose default audio is AC3, E-AC3, DTS or TrueHD — which is most
+of this library — a browser cannot Direct Play it and Jellyfin will remux the
+container and convert the audio. **Jellyfin Media Player, Findroid and Infuse
+all play those untouched.** That is the answer for the general case; converting
+files is the exception, for something specific that gets watched in a browser
+regularly.
+
+If you do want to convert a batch:
+
+```bash
+. .venv/bin/activate
+python scripts/aac_fallback_track.py --root "$SHARE_DIRECTORY/series/X"          # dry run
+python scripts/aac_fallback_track.py --root ... --flip-only --apply             # free ones only
+python scripts/aac_fallback_track.py --root ... --limit 10 --apply              # with encodes
+python scripts/jellyfin_library_scan.py --library "TV Shows"                    # then this
+```
+
+Do not reach for a 5.1 AAC track to avoid the stereo-default trade-off — it
+transcodes on any stereo-output browser anyway (§3.6).
+
+### 4.6 Adding a new cron job
+
+Wrap it, or it can die silently like two before it:
+
+```
+*/5 * * * * /usr/bin/flock -n /tmp/nas-<job>.lock /usr/bin/env bash -c "cd /home/tom/nas && \
+  . .venv/bin/activate && python scripts/cron_job.py --name <job> --max-age-min <N> -- \
+  python scripts/<job>.py >> logs/<job>.log 2>&1"
+```
+
+Rules, all of which have bitten: `cd /home/tom/nas` before any relative path;
+the wrapper goes **inside** `flock`; `--max-age-min` should be roughly three
+times the interval; use `--ok-codes 0` only for commands that do not follow
+this repo's 0/1/2 contract. Then `python scripts/cron_job.py --name <job>
+--max-age-min <N> --register` so it is watched before its first run. The
+watchdog lints the crontab every 5 minutes and will complain if you get the
+`cd` wrong.
+
+### 4.7 Scan one library by hand
 
 ```bash
 cd /home/tom/nas && . .venv/bin/activate
@@ -508,60 +683,38 @@ background with no pollable progress (§3.2).
 
 ## 5. Needs Tom
 
-1. **Approve or reject the AAC batch** (§3.4) before any further
-   conversion. The remaining scope is **946 files**, not the ~164 the
-   briefing implied — most of the library's default audio is AC3/E-AC3, not
-   just DTS. At ~2 min each that is roughly 32 hours of conversion, so this
-   is a real decision, and the stereo-default trade-off is the thing to
-   weigh. A cheap partial: 5 episodes need only a disposition flip.
-2. **Subscribe a phone to ntfy** (§4.4). Everything server-side is live and
-   verified, but nothing has actually buzzed a phone yet — that half cannot
-   be tested from here.
-3. **Bazarr credentials** (§3.5) — a working opensubtitles.com login and a
-   fresh addic7ed Cloudflare cookie would let both providers back on.
-4. **Blue Öyster Cult duplicate tracks** (§3.1) —
-   `/music/Blue Öyster Cult/1977 - Spectres/` holds two copies each of
-   tracks 04 and 08, differing only in smart-quote vs ASCII apostrophe.
-   Lidarr's pending rename would overwrite one with the other. Needs a
-   human to pick which copy to keep.
-5. **Uncommitted work.** `docker-compose.yml` is modified and
-   `docs/`, `scripts/jellyfin_mem_sample.py`, `scripts/stack_watchdog.py`,
-   `scripts/jellyfin_library_scan.py`, `scripts/lidarr_jellyfin_bridge.py`,
-   `scripts/aac_fallback_track.py` and their tests are untracked. Nothing
-   was committed from this pass, since `nas-c0` was committing concurrently
-   to the same file.
-6. **One Jellyfin restart is still owed.** `logging.json` is deleted but the
-   running process keeps request logging until it restarts (Tom was watching
-   something at the time, and interrupting playback was not worth it — the
-   cost is ~2 MB of extra log over nine hours). Watchtower's 04:00 pass will
-   do it. The same restart is also what would finally confirm the emptied
-   `RefreshLibrary` trigger survives a restart — the trigger list is
-   persisted as a literal `[]` in
-   `.docker-config/jellyfin/ScheduledTasks/7738148f-….js`, which is strong
-   evidence but not the same as having seen it come back empty.
+Short, and this is the whole list.
 
-   > **Changed by `nas-c0`, 2026-09-01: watchtower will not do this restart.**
-   > `com.centurylinklabs.watchtower.enable=true` has been removed from the
-   > jellyfin service. Watchtower's stop → remove → create is not atomic: when
-   > the remove fails it logs `Failed=1` and moves on *without creating a
-   > replacement*, leaving no container at all. That happened to qbittorrent at
-   > 04:01 on 2026-09-01 and it did not exist for 13 hours
-   > (`docs/qbittorrent-crash-fix.md` §F). Relying on that pass to perform a
-   > wanted restart was betting the service on the failure mode.
-   >
-   > Caveat: the **running** container still carries the label until it is
-   > recreated, so tonight's 04:00 pass could still act on it if a new image
-   > exists. Recreating discharges the owed restart *and* retires the risk, in
-   > one step, whenever playback is idle:
-   >
-   > ```
-   > docker compose up -d jellyfin
-   > ```
-   >
-   > Not done here: Tom was mid-playback ("Animals Are Beautiful People") at
-   > 19:50.
-7. **`ruff check scripts` fails on 10 pre-existing files** (137 findings,
-   134 auto-fixable) with the venv's ruff 0.15.14 — all in files untouched
-   by this work, all cosmetic (import order, trailing whitespace). CI runs
-   this gate, so it is presumably red. Not fixed here to keep this pass's
-   diff readable.
+1. **Create the healthchecks.io check** and put its ping URL in
+   `NAS_HEARTBEAT_URL`. Period 10 min, grace 20 min. Everything else about the
+   off-box heartbeat is built and verified — this is an account action no
+   script can do, and it is the one remaining hole in alerting coverage. The
+   watchdog raises a standing `heartbeat:unconfigured` warning until it is set.
+2. **Subscribe a phone to ntfy**: `https://ntfy.<PUBLIC_DOMAIN>/nas-alerts`,
+   credentials `NAS_ALERT_USER` / `NAS_ALERT_PASSWORD` from `.env`. DNS and the
+   wildcard cert already cover it. Server-side is verified end to end
+   (including a real container failure and its recovery); nothing has actually
+   buzzed a phone yet.
+3. **Bazarr credentials** — a working opensubtitles.com login and a fresh
+   addic7ed Cloudflare cookie. Both providers stay disabled until then;
+   credentials are still stored, so re-enabling is a toggle.
+4. **Blue Öyster Cult duplicate tracks** — `/music/Blue Öyster Cult/1977 -
+   Spectres/` holds two copies each of tracks 04 and 08, differing only in
+   apostrophe character. Lidarr's pending rename would overwrite one with the
+   other. Noted in `AGENTS.md` so a future session does not hit it blind, but
+   only you can pick which copy to keep.
+5. **`.sudo-pwd`** is now gitignored, but it is still a plaintext sudo password
+   in the repo root. Worth deleting or moving somewhere with 600 permissions.
+
+**Closed since pass 8:** the AAC rollout (declined; 5 free flips done, tool
+kept for future small batches), the 5.1 question (answered — it transcodes on
+stereo-output browsers, §3.6), autoheal (running, and two timeout defects
+fixed), the cron-silence class (wrapped + linted), and the ruff backlog (green).
+
+**In flight at the end of this pass:** the owed Jellyfin restart. It no longer
+happens by itself — jellyfin's watchtower label was removed on 2026-09-01 — and
+someone was mid-film, which was not worth interrupting for a 2 MB log saving.
+A watcher is waiting for playback to end and will then restart, confirm the
+emptied `RefreshLibrary` trigger comes back empty, and confirm request logging
+has stopped; results land in `logs/deferred_jellyfin_restart.log`. If it gives
+up (45-minute deadline) the restart is a manual `docker restart jellyfin`.

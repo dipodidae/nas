@@ -705,6 +705,10 @@ The thing that shouts. Nothing on this box reported failure before it existed: J
 2. **Restart churn** — a climbing `RestartCount` between runs is flapping even if the container is "up" at the moment the check fires. First run never alerts (no baseline).
 3. **Jellyfin anon-RSS** from `logs/jellyfin-mem.log` (see `jellyfin_mem_sample.py`). `anon` is the OOM-relevant number; `memory.current`/`mem_peak` include page cache and read high for benign reasons. A stale (>15 min) or `SAMPLE_FAILED` sampler is itself an alert — a monitor that quietly stops is worse than none.
 4. **Kernel OOM kills** from `journalctl -k` (readable unprivileged here; `dmesg` is not, under `kernel.dmesg_restrict`). Catches kills of *any* process, including ones that leave no trace in a container's log.
+5. **`autoheal` itself** — running, actually supervising something, and its restarts succeeding. A supervisor going quiet is invisible by construction: everything it watches stays healthy, so the only symptom is an absence.
+6. **That an off-box heartbeat is configured at all.** Nothing running on this host can report that this host is down.
+7. **The crontab, textually** — a line using a relative path without a `cd` into the repo cannot work from cron's `$HOME`, and a line naming a script that does not exist never will. Both are invisible in the job's output because there is none.
+8. **Every wrapped cron job** has succeeded within the window its own cron line declares (see `cron_job.py`).
 
 Delivery is **ntfy** — a plain `POST <topic-url>` with a text body is the whole publish contract, it needs no server-side application/token setup before the first alert can land, and this repo already spoke it (`SLSKD_ALERT_WEBHOOK`). Gotify would need a server plus per-application tokens first. The instance is self-hosted (compose service `ntfy`, `ntfy.<PUBLIC_DOMAIN>` via SWAG) so alert contents never leave the box; only the phone's subscription egresses. **Coverage limit:** the watchdog and ntfy run on the same host, so neither can tell you the host itself is down — that needs an off-box heartbeat, deliberately not built.
 
@@ -780,6 +784,42 @@ python scripts/aac_fallback_track.py --file /mnt/drive/series/X/Y.mkv --apply --
 ```
 
 Exit codes: `0` all processed, `1` partial, `2` fatal. Environment: `SHARE_DIRECTORY`, `PUID`, `PGID`. Not cron-driven — run it deliberately, in batches, and check the result.
+
+### `cron_job.py`
+
+Wraps a cron job so that **both** halves of failure are loud. A job that runs and exits fatal pushes an ntfy alert naming itself, its exit code and the tail of its stderr. A job that *stops running at all* produces no output to notice, so each run also writes `logs/cron-state/<name>.json` and `stack_watchdog.py` alerts when a job has not succeeded within the window its own cron line declares. That second half is what would have caught `media_ops_status.py`, dead since 2026-06-10 because its line ran `.venv/bin/python` with no `cd` — it failed at launch, produced nothing, and the ops dashboard served June data for three months.
+
+`--register` writes the state file without running anything, so a job that has never run once is still watched (staleness is measured from registration until the first success replaces it).
+
+**Exit codes are not "0 good, non-zero bad" here.** This repo's contract is 0 success / 1 partial / 2 fatal, and several scripts report a real finding as 1 — `slskd_login_watch.py` (logged out), `stack_watchdog.py` (alert active), `media_ops_status.py` (DEGRADED). So `--ok-codes` defaults to `0,1`; plain shell commands pass `--ok-codes 0`. The wrapper exits 0 for an acceptable code and re-raises the job's own code otherwise, which keeps cron's mail quiet for expected partials without swallowing real failures.
+
+**Put the wrapper inside `flock`, not outside.** `flock -n` exits 1 without running anything when the lock is held; outside the wrapper that would be recorded as a successful run and would refresh the freshness clock for a job that never executed.
+
+```bash
+python scripts/cron_job.py --name media-ops-status --max-age-min 30 -- \
+    .venv/bin/python scripts/media_ops_status.py --json-out /path/out.json
+python scripts/cron_job.py --name docker-prune --max-age-min 10380 --ok-codes 0 -- /bin/sh -c '...'
+python scripts/cron_job.py --name album-art --max-age-min 10380 --register
+```
+
+All 23 scheduled jobs are wrapped. `jellyfin_mem_sample.py` deliberately is not — `stack_watchdog.py` already alerts on a stale or failing sampler, and double-alerting one job is noise.
+
+### `heartbeat.py`
+
+The off-box half of the alerting. `stack_watchdog.py` and the ntfy instance both run **on** the host they watch, so a powered-off box, a wedged kernel, a dead NIC or a stopped cron daemon all produce the same thing: silence, indistinguishable from "all fine". This inverts it — the box reports that it is alive to an external dead-man's switch (healthchecks.io free tier), and that service raises the alarm when the reports stop.
+
+**A missed heartbeat cannot tell you what broke** — host, network, cron, or this script. That is fine and it is the point: the external service notices silence; everything attributable is already attributed from the inside.
+
+It does one thing more than a bare `curl`: before reporting "alive" it checks that `stack_watchdog` has succeeded recently, and pings `/fail` instead if not. A box that is up and networked with dead monitoring would otherwise keep the heartbeat green forever — the same circular gap that hid `autoheal` for a month.
+
+Ping failure is loud on purpose: a wrong URL (HTTP 400 from hc-ping.com, verified) or a DNS failure exits 2, which `cron_job.py` pushes. A silently-failing heartbeat is worse than none, because the dashboard elsewhere stays green.
+
+```bash
+python scripts/heartbeat.py --dry-run
+python scripts/heartbeat.py
+```
+
+Exit codes: `0` pinged alive; `1` a reported condition — no URL configured yet, or the local check failed and `/fail` was pinged; `2` the ping could not be delivered. Environment: `NAS_HEARTBEAT_URL`. Cron: `*/10`, wrapped. Until the URL is set, `stack_watchdog.py` raises a standing `heartbeat:unconfigured` warning so it cannot be quietly forgotten.
 
 ## 🧪 Testing & Linting
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,10 +43,9 @@ def _container(service, status="running", health=None, restarts=0, exit_code=0, 
 
 def test_healthy_stack_raises_nothing():
     containers = {"jellyfin": _container("jellyfin", health="healthy")}
-    alerts, restarts = check = wd.check_containers(["jellyfin"], containers, {}, set())
+    alerts, restarts = wd.check_containers(["jellyfin"], containers, {}, set())
     assert alerts == []
     assert restarts == {"jellyfin": 0}
-    assert check is not None
 
 
 def test_service_defined_but_no_container_alerts():
@@ -120,8 +121,6 @@ def test_memory_above_threshold_alerts(tmp_path):
 def test_stale_sampler_alerts(tmp_path):
     path = _mem_log(tmp_path, SAMPLE.format(anon="455.6"))
     old = time.time() - 3600
-    import os
-
     os.utime(path, (old, old))
     alerts = wd.check_jellyfin_memory(path, 4096.0, 15.0)
     assert [a.key for a in alerts] == ["jellyfin:sampler:stale"]
@@ -154,3 +153,154 @@ def test_oom_pattern_matches_real_kernel_lines():
     assert wd.OOM_PATTERN.search(killed)
     assert wd.OOM_PATTERN.search(constraint)
     assert not wd.OOM_PATTERN.search(benign)
+
+
+# --- autoheal (the supervisor itself) ---
+
+
+def _labeled(service, **labels):
+    c = _container(service)
+    c["Config"]["Labels"].update(labels)
+    return c
+
+
+def test_autoheal_down_is_critical():
+    containers = {"autoheal": _container("autoheal", status="exited")}
+    alerts = wd.check_autoheal(containers, "")
+    assert [a.key for a in alerts] == ["autoheal:down"]
+    assert alerts[0].severity == "critical"
+
+
+def test_autoheal_absent_entirely_is_critical():
+    alerts = wd.check_autoheal({}, "")
+    assert [a.key for a in alerts] == ["autoheal:down"]
+
+
+def test_autoheal_running_with_supervised_containers_is_quiet():
+    containers = {
+        "autoheal": _container("autoheal"),
+        "qbittorrent": _labeled("qbittorrent", autoheal="true"),
+    }
+    assert wd.check_autoheal(containers, "Monitoring containers for unhealthy status") == []
+
+
+def test_autoheal_supervising_nothing_alerts():
+    """Running, healthy, and completely pointless — no container wears the label."""
+    containers = {"autoheal": _container("autoheal"), "qbittorrent": _container("qbittorrent")}
+    alerts = wd.check_autoheal(containers, "")
+    assert [a.key for a in alerts] == ["autoheal:supervising-nothing"]
+
+
+def test_autoheal_restart_failures_alert():
+    """CURL_TIMEOUT < AUTOHEAL_DEFAULT_STOP_TIMEOUT produces exactly this line."""
+    containers = {
+        "autoheal": _container("autoheal"),
+        "qbittorrent": _labeled("qbittorrent", autoheal="true"),
+    }
+    logs = (
+        "01-09-2026 17:30:17 Container /qbittorrent (fb2a) found to be unhealthy - Restarting\n"
+        "01-09-2026 17:30:47 Restarting container fb2a failed\n"
+    )
+    alerts = wd.check_autoheal(containers, logs)
+    assert [a.key for a in alerts] == ["autoheal:restart-failing"]
+    assert "failed" in alerts[0].message
+
+
+# --- wrapped cron job freshness ---
+
+
+def _cron_state(tmp_path, name, **fields):
+    d = tmp_path / "cron-state"
+    d.mkdir(exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps(fields))
+    return d
+
+
+def test_fresh_cron_job_is_quiet(tmp_path):
+    d = _cron_state(tmp_path, "media-ops", max_age_min=30, last_success=time.time() - 60, last_exit=0)
+    assert wd.check_cron_jobs(d) == []
+
+
+def test_cron_job_that_stopped_succeeding_alerts(tmp_path):
+    d = _cron_state(tmp_path, "media-ops", max_age_min=30, last_success=time.time() - 3 * 3600, last_exit=0)
+    alerts = wd.check_cron_jobs(d)
+    assert [a.key for a in alerts] == ["cron:media-ops:stale"]
+    assert alerts[0].severity == "critical"
+    assert "last succeeded" in alerts[0].message
+
+
+def test_cron_job_that_never_ran_alerts_from_registration(tmp_path):
+    """The media_ops_status case: broken cron line, so no output at all to notice."""
+    d = _cron_state(tmp_path, "media-ops", max_age_min=30, registered=time.time() - 9 * 3600)
+    alerts = wd.check_cron_jobs(d)
+    assert [a.key for a in alerts] == ["cron:media-ops:stale"]
+    assert "never succeeded" in alerts[0].message
+    assert "has not run at all" in alerts[0].message
+
+
+def test_a_failing_job_still_shows_its_exit_code(tmp_path):
+    d = _cron_state(
+        tmp_path, "album-art", max_age_min=30, registered=time.time() - 5 * 3600,
+        last_run=time.time() - 60, last_exit=2,
+    )
+    alerts = wd.check_cron_jobs(d)
+    assert "last exit 2" in alerts[0].message
+
+
+def test_missing_state_dir_is_not_an_error(tmp_path):
+    assert wd.check_cron_jobs(tmp_path / "nope") == []
+
+
+def test_unreadable_state_file_alerts(tmp_path):
+    d = tmp_path / "cron-state"
+    d.mkdir()
+    (d / "broken.json").write_text("{not json")
+    assert [a.key for a in wd.check_cron_jobs(d)] == ["cron:broken:unreadable"]
+
+
+def test_state_without_max_age_is_skipped(tmp_path):
+    d = _cron_state(tmp_path, "legacy", last_success=time.time() - 99 * 3600)
+    assert wd.check_cron_jobs(d) == []
+
+
+# --- crontab lint (the media_ops_status class of bug) ---
+
+
+REPO = Path("/home/tom/nas")
+
+
+def test_relative_path_without_cd_is_flagged():
+    """The exact line that silently did nothing for three months."""
+    line = "*/5 * * * * .venv/bin/python scripts/media_ops_status.py --json-out /x >/dev/null 2>&1"
+    alerts = wd.lint_crontab(line, REPO)
+    assert [a.key.split(":")[1] for a in alerts] == ["no-cd"]
+    assert alerts[0].severity == "critical"
+
+
+def test_line_with_cd_is_accepted():
+    line = "0 1 * * * cd /home/tom/nas && . .venv/bin/activate && python scripts/album_art.py"
+    assert wd.lint_crontab(line, REPO) == []
+
+
+def test_missing_script_is_flagged(tmp_path):
+    line = "0 1 * * * cd " + str(tmp_path) + " && python scripts/nope.py"
+    alerts = wd.lint_crontab(line, tmp_path)
+    assert [a.key for a in alerts] == ["crontab:missing-script:scripts/nope.py"]
+
+
+def test_comments_and_blank_lines_are_ignored():
+    assert wd.lint_crontab("# scripts/whatever.py is mentioned here\n\n   \n", REPO) == []
+
+
+def test_alert_key_is_stable_across_processes():
+    """Keys must be deterministic or dedupe fails and the same alert re-notifies forever."""
+    line = "*/5 * * * * .venv/bin/python scripts/album_art.py"
+    first = [a.key for a in wd.lint_crontab(line, REPO)]
+    second = [a.key for a in wd.lint_crontab(line, REPO)]
+    assert first == second
+    assert first[0] == "crontab:no-cd:c16ebc0d"
+
+
+def test_absolute_paths_need_no_cd():
+    line = "0 3 * * 0 /usr/bin/docker image prune -f"
+    assert wd.lint_crontab(line, REPO) == []

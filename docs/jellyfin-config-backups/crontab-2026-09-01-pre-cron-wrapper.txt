@@ -1,0 +1,95 @@
+# NAS stack — operations crontab
+# All entries cd into /home/tom/nas first so the local venv + relative log
+# paths resolve. Cleanup scripts share /tmp/nas-tubifarry-cleanup.lock to
+# prevent overlapping runs.
+
+# --- daily ---
+# 01:00 — config archive to the 9.1T HDD (/mnt/drive/backups/nas-configs), keeps the 5 most recent
+0 1 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/config_backup.py --backup-dir /mnt/drive/backups/nas-configs --fast --no-checksum --retain 5 --exclude 'lidarr/MediaCover/**' --exclude 'jellyfin/data/metadata/**' >> logs/config_backup.log 2>&1"
+# 03:30 — force slskd to re-advertise the shared library to Soulseek peers
+30 3 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
+# 04:30 — post-Watchtower health check (Watchtower fires at 04:00 per WATCHTOWER_SCHEDULE)
+30 4 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/post_update_verifier.py >> logs/post_update_verifier.log 2>&1"
+
+# --- weekly ---
+# Sunday 02:00 — compress / truncate oversize log files inside CONFIG_DIRECTORY
+0 2 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/log_pruner.py >> logs/log_pruner.log 2>&1"
+
+# Sunday 03:00 — reclaim Docker disk: drop build cache unused for 7d and any
+# dangling images left by rebuilds. Build cache hit 62GB / 99 dangling images
+# before this existed. Only cost is a colder first rebuild of the week.
+0 3 * * 0 /usr/bin/env bash -c "/usr/bin/docker builder prune -af --filter until=168h && /usr/bin/docker image prune -f" >> /home/tom/nas/logs/docker_prune.log 2>&1
+
+# --- hourly Tubifarry/slskd hygiene (mutex-locked, must run in order) ---
+# :07 — drain Lidarr's importFailed queue; Tubifarry clears matching slskd records as it goes
+07 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/lidarr_queue_unstick.py >> logs/lidarr_queue_unstick.log 2>&1"
+# :22 — reap /downloads/complete/slskd/<dir> whose audio is fully represented under /music/
+22 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/slskd_complete_sweep.py >> logs/slskd_complete_sweep.log 2>&1"
+# :37 — direct slskd sweep picks up anything Lidarr never tracked (errored/rejected/cancelled transfers)
+37 * * * * /usr/bin/flock -n /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/slskd_cleanup.py >> logs/slskd_cleanup.log 2>&1"
+# :52 — reap Lidarr grabs wedged >12h at 0 bytes in slskd (remote peer never started): blocklist the dead release + cancel the slskd transfer (via Tubifarry) so monitor-sweep/drip re-source it from a live peer. Frees the in-flight count that otherwise parks the backlog drip. Shares the cleanup flock so it can't race slskd_cleanup/Tubifarry; --max-actions caps blast radius so a backlog drains over several runs.
+52 * * * * /usr/bin/flock -w 120 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/lidarr_stuck_download_reaper.py --stuck-hours 6 --max-actions 80 >> logs/lidarr_stuck_download_reaper.log 2>&1"
+# 05:30 — re-import orphaned slskd download folders that lost their Lidarr queue row (the 4th hygiene job); shares the cleanup flock so it can't race slskd_cleanup, 50min budget, rolling state so it only fingerprints new folders
+30 5 * * * /usr/bin/flock -w 600 /tmp/nas-tubifarry-cleanup.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/process_soulseek_imports.py --execute --skip-queue-tracked --accept-min-match 70 --min-track-fraction 0.5 --purge-not-upgrade --state logs/slsk_import_state.tsv --max-seconds 3000 >> logs/process_soulseek_imports.log 2>&1"
+# */15 — alert (never restart) if slskd has been logged out of Soulseek >10min; ghost-session cure is stop-15-30min, not restart
+*/15 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/slskd_login_watch.py --grace-min 10 --state logs/slskd_login_watch.json >> logs/slskd_login_watch.log 2>&1"
+# 5,20,35,50 — self-heal artists left with 0 monitored albums by bulk adds; gentle (5/run)
+5,20,35,50 * * * * /usr/bin/flock -n /tmp/nas-lidarr-monitor-sweep.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/lidarr_monitor_sweep.py --limit 5 --no-search >> logs/lidarr_monitor_sweep.log 2>&1"
+# 12,27,42,57 — self-throttling backlog drip: search a small batch of missing albums ONLY when slskd has spare *live* capacity (<80 in-flight; dead remotely-queued grabs >6h are excluded from the count so they no longer park the drip — see lidarr_stuck_download_reaper). Drains the 6k+ missing backlog without re-clogging. Own flock so it never overlaps itself.
+12,27,42,57 * * * * /usr/bin/flock -n /tmp/nas-lidarr-backlog-drip.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/lidarr_backlog_drip.py --threshold 80 --stale-queued-hours 6 --batch 20 --cooldown-hours 12 --search-delay 20 --state logs/lidarr_backlog_drip.json >> logs/lidarr_backlog_drip.log 2>&1"
+
+# --- playlist-generator: incremental library sync ---
+# Every 6h (:10) — scan new/changed music + run FULL enrichment pipeline (audio
+# included) ONLY if new files arrived. Gate is a cheap find -newer walk; empty
+# checks never touch the backend. flock-guarded so a long audio backfill can't
+# overlap the next tick or the weekly catch-up.
+10 */6 * * * /usr/bin/flock -n /tmp/nas-playlist-sync.lock /home/tom/nas/webapps/jellyfin-playlist-generator/cron-sync.sh >> /home/tom/nas/logs/playlist_sync.log 2>&1
+# Sunday 03:45 — unconditional catch-up: re-runs the pipeline even with no new
+# files, clearing any tracks left unenriched by a failed/interrupted run.
+45 3 * * 0 /usr/bin/flock -n /tmp/nas-playlist-sync.lock /home/tom/nas/webapps/jellyfin-playlist-generator/cron-sync.sh --catch-up >> /home/tom/nas/logs/playlist_sync.log 2>&1
+*/5 * * * * cd /home/tom/nas && .venv/bin/python scripts/media_ops_status.py --json-out /home/tom/nas/.docker-config/ops-status/ops-status.json >/dev/null 2>&1  # media-ops dashboard
+# Sunday 04:45 — backfill missing folder.jpg album covers (sacad, incremental: skips albums that already have one). After 04:30 post-update verifier, clear of the heavy hourly Tubifarry/slskd hygiene jobs.
+45 4 * * 0 /usr/bin/flock -n /tmp/nas-album-art.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/album_art.py --apply --overwrite-once --limit 300 >> logs/album_art.log 2>&1"
+
+# --- Jellyfin OOM investigation (docs/jellyfin-playback-audit.md) ---
+# Every minute — sample jellyfin container memory (cgroup memory.current + docker stats) for leak diagnosis. Self-rotating log, ~10MB cap.
+* * * * * /usr/bin/env bash -c "cd /home/tom/nas && /usr/bin/python3 scripts/jellyfin_mem_sample.py" >> /home/tom/nas/logs/jellyfin_mem_sample.err 2>&1
+
+
+# --- stack watchdog: the thing that shouts (docs/jellyfin-playback-audit.md) ---
+# Every 5 min — container health/exit/missing/flapping across the whole compose
+# stack, Jellyfin anon-RSS threshold (from the per-minute sampler's log), and
+# kernel OOM kills from journalctl -k. Pushes to the self-hosted ntfy at
+# ntfy.<PUBLIC_DOMAIN>/nas-alerts. Alerts de-duplicate via logs/stack_watchdog.json
+# and re-notify hourly while still active; recoveries are announced too.
+# Exit 1 just means "an alert is active", so cron mail stays quiet — the push is
+# the delivery path, the log is the record.
+*/5 * * * * /usr/bin/flock -n /tmp/nas-stack-watchdog.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && { /bin/date -Is; python scripts/stack_watchdog.py; } >> logs/stack_watchdog.log 2>&1 || true"
+
+# --- Jellyfin per-library scans (docs/jellyfin-playback-audit.md) ---
+# Replaces Jellyfin's global "Scan Media Library" scheduled task, whose trigger
+# list is now empty (it ran all three libraries every 12h). A library scan is the
+# largest memory event on this box — ~1.56GB peak anon-RSS — and Jellyfin's own
+# scan task is global-only, so scripts/jellyfin_library_scan.py drives the
+# per-library refresh endpoint instead and each library gets its own cadence.
+# All three *arr apps now genuinely refresh Jellyfin on import (verified 2026-09-01
+# by capturing the inbound POST; Sonarr/Radarr via their own mapFrom/mapTo, Lidarr
+# via scripts/lidarr_jellyfin_bridge.py), so these weekly passes are safety nets
+# for anything that lands on disk outside an *arr — not the primary path.
+# One library per day so two big scans never overlap.
+# Fri 05:05 — Movies.
+5 5 * * 5 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/jellyfin_library_scan.py --library Movies >> logs/jellyfin_library_scan.log 2>&1"
+# Sat 05:05 — TV Shows.
+5 5 * * 6 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/jellyfin_library_scan.py --library 'TV Shows' >> logs/jellyfin_library_scan.log 2>&1"
+# Sun 05:05 — Music. Deliberately *after* the 04:45 album_art.py cover backfill:
+# sacad writes folder.jpg straight to disk, which Lidarr never sees and therefore
+# never reports, so this scan is what actually gets new cover art into Jellyfin.
+5 5 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/jellyfin_library_scan.py --library Music >> logs/jellyfin_library_scan.log 2>&1"
+
+# --- Lidarr -> Jellyfin path-mapping bridge (docs/jellyfin-playback-audit.md) ---
+# Lidarr's own "Update Library" connection reaches Jellyfin and returns 204 but is
+# a silent no-op: it reports /music/... paths, Jellyfin's library is /data/movies/
+# music/..., and unmatched paths are dropped without a log line. Sonarr and Radarr
+# have mapFrom/mapTo fields for this; Lidarr's connection does not expose them, so
+# the mapping lives here. Offset from the watchdog's */5 so they don't collide.
+2-59/5 * * * * /usr/bin/flock -n /tmp/nas-lidarr-jf-bridge.lock /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/lidarr_jellyfin_bridge.py >> logs/lidarr_jellyfin_bridge.log 2>&1"

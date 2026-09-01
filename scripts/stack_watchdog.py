@@ -29,6 +29,20 @@ What it checks
 4. Kernel OOM kills, from `journalctl -k` (readable unprivileged here; `dmesg`
    is not, under kernel.dmesg_restrict). Catches kills of *any* process,
    including ones that leave no trace in a container's own logs.
+5. `autoheal` specifically — running, actually supervising something, and its
+   restarts succeeding. The supervisor going quiet is invisible by
+   construction: everything it watches stays healthy, so the only symptom is
+   an absence. It was stopped for over a month before anyone noticed.
+6. That an off-box heartbeat is configured at all (`heartbeat.py`). Nothing
+   running on this host can report that this host is down.
+7. The crontab itself, textually: a line using a relative path without a `cd`
+   into the repo cannot work from cron's `$HOME`, and a line naming a script
+   that does not exist never will. Both are invisible in the job's *output*
+   because there is none.
+8. Every cron job wrapped by `cron_job.py` has succeeded within the window its
+   own cron line declares. A job that runs and fails pushes its own alert
+   immediately; this catches the other half — a job whose cron line is broken
+   and which therefore produces nothing at all to notice.
 
 Delivery
 --------
@@ -78,6 +92,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -93,6 +108,7 @@ if "NAS_ALERT_WEBHOOK" not in os.environ:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATE = REPO_ROOT / "logs" / "stack_watchdog.json"
 DEFAULT_MEM_LOG = REPO_ROOT / "logs" / "jellyfin-mem.log"
+DEFAULT_CRON_STATE = REPO_ROOT / "logs" / "cron-state"
 
 # Jellyfin's own compose mem_limit is 10g. Healthy `anon` sits at 0.4-1.3GB and
 # the heaviest routine event (a full library scan) peaked at 1.56GB, so 4GB is
@@ -226,6 +242,184 @@ def check_containers(
       )
 
   return alerts, restarts
+
+
+def check_cron_jobs(state_dir: Path) -> list[Alert]:
+  """Alert on any wrapped cron job that has gone quiet for too long.
+
+  This is the half that catches a job which never runs at all. A job that runs
+  and fails pushes its own alert from `cron_job.py` immediately; a job whose
+  cron line is broken produces nothing — no output, no stderr, no exit code —
+  and the only evidence is a state file that stops being updated.
+  `media_ops_status.py` was in exactly that state for three months.
+
+  Freshness is measured from the last *success*, falling back to the
+  registration time so a job that has never once succeeded is still caught.
+  The window comes from the cron line's own `--max-age-min`, because the cron
+  line is the only place that knows the schedule.
+  """
+  if not state_dir.is_dir():
+    return []
+  alerts: list[Alert] = []
+  now = time.time()
+  for path in sorted(state_dir.glob("*.json")):
+    try:
+      state = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+      alerts.append(
+        Alert(f"cron:{path.stem}:unreadable", "warning", f"unreadable cron state file {path.name}")
+      )
+      continue
+    max_age = float(state.get("max_age_min") or 0)
+    if max_age <= 0:
+      continue
+    reference = state.get("last_success") or state.get("registered")
+    if not reference:
+      continue
+    age_min = (now - float(reference)) / 60.0
+    if age_min <= max_age:
+      continue
+    if state.get("last_success"):
+      what = f"last succeeded {age_min / 60:.1f}h ago"
+    else:
+      what = f"has never succeeded (registered {age_min / 60:.1f}h ago)"
+    detail = f"; last exit {state['last_exit']}" if "last_exit" in state else "; it has not run at all"
+    alerts.append(
+      Alert(
+        f"cron:{path.stem}:stale",
+        "critical",
+        f"cron job {path.stem} {what}, allowed {max_age / 60:.1f}h{detail}",
+      )
+    )
+  return alerts
+
+
+def lint_crontab(crontab: str, repo_root: Path) -> list[Alert]:
+  """Catch the class of crontab bug that cost three months, at install time.
+
+  `media_ops_status.py` ran `.venv/bin/python …` with no `cd`. From cron's
+  `$HOME` (/home/tom, which has no .venv) that resolves to nothing, fails
+  instantly, produces no output because the line also redirected to /dev/null,
+  and looks exactly like a job that is working. Nothing about the *result* of
+  such a job is observable — but the defect is plainly visible in the line
+  itself, so check the line.
+
+  Two rules, both purely textual:
+    * a line using a relative path must `cd` into the repo first;
+    * a script named on a line must actually exist.
+  """
+  alerts: list[Alert] = []
+  for raw in crontab.splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#"):
+      continue
+    body = line.split(None, 5)[-1] if len(line.split(None, 5)) > 5 else ""
+    uses_relative = any(tok in body for tok in (".venv/", "scripts/", "logs/"))
+    if uses_relative and f"cd {repo_root}" not in body:
+      alerts.append(
+        Alert(
+          f"crontab:no-cd:{zlib.crc32(body.encode()):08x}",
+          "critical",
+          f"crontab line uses a relative path without `cd {repo_root}` — it "
+          f"cannot work from cron's $HOME: {body[:160]}",
+        )
+      )
+    for token in body.split():
+      name = token.strip("\"';")
+      if name.startswith("scripts/") and name.endswith(".py") and not (repo_root / name).is_file():
+        alerts.append(
+          Alert(
+            f"crontab:missing-script:{name}",
+            "critical",
+            f"crontab references {name}, which does not exist",
+          )
+        )
+  return alerts
+
+
+def read_crontab() -> str:
+  code, out = _run(["crontab", "-l"])
+  return out if code == 0 else ""
+
+
+def check_heartbeat_configured() -> list[Alert]:
+  """Nag until the off-box dead-man's switch actually has a URL.
+
+  Everything else in this file runs on the same host it watches, so none of it
+  can report that the host is down. `heartbeat.py` closes that, but only once
+  someone creates the external check — an account action no script can do. An
+  unconfigured heartbeat is therefore a real, standing gap in coverage, and it
+  should keep saying so rather than being quietly forgotten.
+  """
+  if os.getenv("NAS_HEARTBEAT_URL", "").strip():
+    return []
+  return [
+    Alert(
+      "heartbeat:unconfigured",
+      "warning",
+      "NAS_HEARTBEAT_URL is unset — nothing off this box would notice if the host "
+      "died. Create a check at healthchecks.io and put its ping URL in .env",
+    )
+  ]
+
+
+def check_autoheal(containers: dict[str, dict], recent_logs: str) -> list[Alert]:
+  """Check the supervisor itself, not just the things it supervises.
+
+  `autoheal` sat stopped from 2026-07-29 to 2026-09-01 and nothing noticed:
+  every container it watches was healthy the whole time, so the only symptom
+  was an absence. Three ways it can be useless while looking fine:
+
+  * not running at all — nothing restarts an unhealthy container;
+  * running but no container carries the `autoheal=true` label, so it
+    supervises nothing;
+  * running, supervising, and its restarts are failing. That last one is not
+    hypothetical: with `CURL_TIMEOUT` shorter than
+    `AUTOHEAL_DEFAULT_STOP_TIMEOUT` the restart call is cut off mid-stop,
+    logged as a failure, and re-issued every interval on top of the one still
+    in flight.
+  """
+  entry = containers.get("autoheal")
+  if entry is None or str((entry.get("State") or {}).get("Status")) != "running":
+    return [
+      Alert(
+        "autoheal:down",
+        "critical",
+        "autoheal is not running — nothing is restarting unhealthy containers",
+      )
+    ]
+
+  alerts: list[Alert] = []
+  supervised = [
+    name
+    for name, c in containers.items()
+    if ((c.get("Config") or {}).get("Labels") or {}).get("autoheal") == "true"
+  ]
+  if not supervised:
+    alerts.append(
+      Alert(
+        "autoheal:supervising-nothing",
+        "warning",
+        "autoheal is running but no container carries the autoheal=true label",
+      )
+    )
+
+  failures = [ln for ln in recent_logs.splitlines() if "failed" in ln.lower()]
+  if failures:
+    alerts.append(
+      Alert(
+        "autoheal:restart-failing",
+        "warning",
+        f"autoheal restart failures ({len(failures)}): {failures[-1].strip()[:200]}",
+      )
+    )
+  return alerts
+
+
+def autoheal_logs(minutes: int = 15) -> str:
+  """Recent autoheal output. Empty string if it cannot be read."""
+  code, out = _run(["docker", "logs", "--since", f"{minutes}m", "autoheal"])
+  return out if code == 0 else ""
 
 
 def _parse_mem_line(line: str) -> dict[str, str]:
@@ -389,6 +583,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--state", type=Path, default=DEFAULT_STATE, help="State file path.")
   parser.add_argument("--mem-log", type=Path, default=DEFAULT_MEM_LOG, help="Sampler log path.")
   parser.add_argument(
+    "--cron-state-dir",
+    type=Path,
+    default=DEFAULT_CRON_STATE,
+    help="Directory of cron_job.py state files to check for staleness.",
+  )
+  parser.add_argument(
     "--jellyfin-anon-mb",
     type=float,
     default=DEFAULT_JELLYFIN_ANON_MB,
@@ -448,6 +648,11 @@ def main(argv: list[str] | None = None) -> int:
   alerts, restarts = check_containers(
     services, containers, state.get("restart_counts", {}), set(args.ignore)
   )
+  if "autoheal" not in set(args.ignore):
+    alerts += check_autoheal(containers, autoheal_logs())
+  alerts += check_cron_jobs(args.cron_state_dir)
+  alerts += check_heartbeat_configured()
+  alerts += lint_crontab(read_crontab(), REPO_ROOT)
   alerts += check_jellyfin_memory(args.mem_log, args.jellyfin_anon_mb, args.sampler_stale_min)
   oom_alerts, oom_cursor = check_kernel_oom(state.get("oom_cursor"))
   alerts += oom_alerts

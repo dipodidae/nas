@@ -1245,8 +1245,24 @@ services:
       - AUTOHEAL_CONTAINER_LABEL=autoheal
       - AUTOHEAL_INTERVAL=30
       - AUTOHEAL_START_PERIOD=60
+      # 2026-09-01: autoheal's restart uses its OWN stop timeout, which defaults
+      # to 10s and ignores compose's stop_grace_period entirely -- the same trap
+      # that WATCHTOWER_TIMEOUT above exists to close. qbittorrent needs up to
+      # 120s to flush torrents.db; a 10s SIGTERM->SIGKILL is precisely the
+      # ungraceful kill that leaves the stale lockfile documented in AGENTS.md.
+      # autoheal supervises qbittorrent and slskd, so match the longest
+      # stop_grace_period in the stack (120s) with headroom.
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=150
       - DOCKER_SOCK=tcp://dockerproxy:2375
-      - CURL_TIMEOUT=30
+      # Must exceed AUTOHEAL_DEFAULT_STOP_TIMEOUT above. autoheal's restart call
+      # blocks for the whole stop timeout, so a shorter curl timeout makes it log
+      # "Restarting container ... failed" and re-issue the restart every
+      # AUTOHEAL_INTERVAL while the first one is still in flight -- verified
+      # 2026-09-01 with a deliberately-unhealthy probe: the restart succeeded at
+      # exactly t+150s while autoheal had already logged three failures and fired
+      # three overlapping requests. For qbittorrent (stop_grace_period 120s) that
+      # is precisely the pile-up that leaves a stale lockfile.
+      - CURL_TIMEOUT=180
     depends_on:
       dockerproxy:
         condition: service_started
