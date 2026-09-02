@@ -40,6 +40,10 @@ services:
       # Paths are relative to THIS file (compose/), hence the ../ -- see
       # docs/decisions/0000-compose-layout.md.
       - ../webapps/4eva-rootpage/4eva-rootpage.root.conf:/config/nginx/site-confs/root.conf:ro
+      # Tracked proxy-conf: SWAG ships no lingarr sample, and a conf that lives
+      # only in gitignored .docker-config/ is enforced by nothing but the
+      # nightly backup. Same pattern as root.conf above. ADR-0021 companion.
+      - ../swag/proxy-confs/lingarr.subdomain.conf:/config/nginx/proxy-confs/lingarr.subdomain.conf:ro
       - ../nginx-cache:/var/cache/nginx:rw
     ports:
       - '443:443'

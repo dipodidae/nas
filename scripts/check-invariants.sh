@@ -712,6 +712,54 @@ for _svc in NGINX_SERVICES:
         ok("nginx-cap-kill", f"{_svc} holds KILL")
 
 # ==========================================================================
+# 18. Every swag=enable service has a proxy-conf
+# ==========================================================================
+# `swag=enable` is what publishes a service on its subdomain -- but only if a
+# matching *.subdomain.conf exists. lingarr carried the label with no conf from
+# the day it was added, so lingarr.${PUBLIC_DOMAIN} resolved to nothing and
+# nothing said so. Confs are looked for in the tracked swag/proxy-confs/ first,
+# then in the SWAG config dir; a conf in only the latter is a warning, because
+# it is gitignored and survives only via the nightly backup.
+#
+# A service can also be routed by a tracked conf bind-mounted into swag under
+# a different name -- 4eva-rootpage is the apex site and arrives as
+# site-confs/root.conf, not a subdomain conf. Those count as tracked, because
+# the point of the check is "the route lives in this repo", not "the route is
+# spelled <name>.subdomain.conf".
+_swag_dir = os.path.join(_conf, "swag", "nginx", "proxy-confs") if _conf else None
+_swag_mounts = [
+    os.path.basename(str(v.get("source", "")))
+    for v in (services.get("swag", {}).get("volumes") or [])
+    if str(v.get("target", "")).startswith("/config/nginx/")
+]
+_missing, _untracked = [], []
+for name, svc in sorted(services.items()):
+    lbls = svc.get("labels") or {}
+    if isinstance(lbls, list):
+        lbls = dict(x.split("=", 1) for x in lbls if "=" in x)
+    if lbls.get("swag") != "enable" or name == "swag":
+        continue
+    _tracked = (os.path.isfile(f"swag/proxy-confs/{name}.subdomain.conf")
+                or any(m.startswith(f"{name}.") for m in _swag_mounts))
+    _live = bool(_swag_dir) and os.path.isfile(
+        os.path.join(_swag_dir, f"{name}.subdomain.conf"))
+    if _tracked:
+        continue
+    (_untracked if _live else _missing).append(name)
+if _missing:
+    fail("swag-labels-are-routed", "ADR-0020",
+         f"{_missing} carry swag=enable with no proxy-conf anywhere. The label "
+         "is what publishes a subdomain, and without a matching "
+         "<service>.subdomain.conf it publishes nothing -- silently.")
+elif _untracked:
+    warn("swag-labels-are-routed", "ADR-0020",
+         f"{_untracked} are routed only by a conf in the gitignored SWAG config "
+         "dir. That rule is enforced by the nightly backup and nothing else. "
+         "Move it to swag/proxy-confs/ and bind-mount it, as lingarr does.")
+else:
+    ok("swag-labels-are-routed", "every swag=enable service has a tracked conf")
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"

@@ -280,12 +280,20 @@ playlist-generator-db ─(healthy)→ playlist-generator
 Every internal WebUI binds `127.0.0.1` only. The public surface is SWAG, plus
 the P2P ports and Jellyfin's LAN ports. Enforced by `make check`.
 
+A `swag=enable` label only publishes a subdomain if a matching
+`<service>.subdomain.conf` exists — `make check` asserts that every labelled
+service has one, because `lingarr` carried the label with no conf and quietly
+served SWAG's default page instead. Proxy-confs this repo owns live in
+`swag/proxy-confs/` and are bind-mounted read-only, so they are
+version-controlled rather than backup-controlled; the rest still live only in
+the gitignored SWAG config dir and `make check` warns about them by name.
+
 | URL | Service |
 |---|---|
 | `4eva.me` | `4eva-rootpage` (apex, via the mounted `root.conf`) |
 | `4eva.me/ops.html` | Live stack dashboard, fed by `media_ops_status.py` |
 | `jellyfin.` · `jellyseerr.` | Playback and requests |
-| `sonarr.` · `radarr.` · `lidarr.` · `bazarr.` · `prowlarr.` | The *arr suite |
+| `sonarr.` · `radarr.` · `lidarr.` · `bazarr.` · `prowlarr.` · `lingarr.` | The *arr suite |
 | `qui.` | qBittorrent UI (**qBittorrent's own subdomain is disabled**) |
 | `slskd.` | Soulseek daemon UI |
 | `cleanuparr.` · `lidarr-bulk.` · `playlist-generator.` · `ongehoord.` · `nextcloud.` · `ntfy.` | Rest |
@@ -626,8 +634,6 @@ Honest list of things that are wrong or unfinished, all tracked:
   parked. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md)
 - **Jellyfin's memory leak is not root-caused.** Three mitigations contain it;
   none fixes it. → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md)
-- **`lingarr` carries `swag=enable` but has no proxy-conf**, so
-  `lingarr.4eva.me` does not resolve to it. Reach it on `127.0.0.1:9876`.
 - **No update notification for `jellyfin` or `qbittorrent`.** Both are pinned
   and both are unlabelled, and Watchtower reports against the tag a container
   was started from — so a pinned tag is silent even if relabelled. Closing this
