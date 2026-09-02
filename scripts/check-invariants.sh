@@ -659,6 +659,27 @@ elif wt.get("image"):
     ok("watchtower-image-maintained", wt["image"])
 
 # ==========================================================================
+# 16. Jellyfin's tag is pinned too
+# ==========================================================================
+# Not for watchtower's sake any more (ADR-0020), but because a Jellyfin
+# regression is discovered mid-playback. An update must be chosen. ADR-0006.
+def _image_tag(image):
+    """Tag of an image ref, or '' if untagged. Handles a registry port and a
+    digest pin, neither of which a bare rpartition(':') survives."""
+    if "@" in image:
+        return "@" + image.rsplit("@", 1)[1]     # digest pin counts as pinned
+    last = image.rsplit("/", 1)[-1]
+    return last.rsplit(":", 1)[1] if ":" in last else ""
+
+jf_tag = _image_tag(services.get("jellyfin", {}).get("image", ""))
+if not jf_tag or jf_tag == "latest":
+    fail("jellyfin-tag-pinned", "ADR-0006",
+         f"jellyfin image must be a pinned tag, not '{jf_tag or '<none>'}'. "
+         "Bump it deliberately with `make pull-jellyfin`.")
+else:
+    ok("jellyfin-tag-pinned", jf_tag)
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"

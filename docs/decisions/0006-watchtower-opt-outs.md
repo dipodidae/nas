@@ -42,9 +42,18 @@ Slow, important services are updated by a deliberate
 `docker compose pull <svc> && docker compose up -d <svc>` instead —
 `make pull-jellyfin`, `make update-qbittorrent`.
 
-Note that jellyfin's tag is **not** pinned, so an update still has to be
-*chosen* rather than *scheduled*. If you want the qbittorrent treatment, pin
-the image tag too.
+**Amended 2026-09-02: jellyfin's tag is now pinned too**
+(`10.11.11ubu2604-ls47`, the digest that was already running, so applying it
+changed nothing). Both slow-to-stop services now behave identically — an update
+is chosen, never taken by surprise, because a Jellyfin regression is discovered
+mid-playback rather than on a Tuesday morning.
+
+The consequence is that pinning *and* the label omission above together make
+these two services completely invisible to Watchtower: an unlabelled container
+is never checked, and a pinned tag never reports an update even if relabelled.
+That is a real blind spot and it is accepted rather than overlooked — see
+ADR-0020 §"The notification blind spot this creates" for why closing it needs a
+version-aware watcher rather than a Watchtower setting.
 
 ## `WATCHTOWER_TIMEOUT=150s`
 

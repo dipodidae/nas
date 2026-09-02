@@ -241,7 +241,7 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 
 | Service | Image | Ports | wt | Notes |
 |---|---|---|---|---|
-| `jellyfin` | lscr.io/…/jellyfin | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
+| `jellyfin` | lscr.io/…/jellyfin **pinned** | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
 | `jellyseerr` | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056` | yes | Requests |
 | `nextcloud` | lscr.io/…/nextcloud | `127.0.0.1:8087` | yes | Whole share at `/external/*`. Log budget 25m/3 |
 
@@ -626,9 +626,6 @@ Honest list of things that are wrong or unfinished, all tracked:
   parked. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md)
 - **Jellyfin's memory leak is not root-caused.** Three mitigations contain it;
   none fixes it. → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md)
-- **Jellyfin's tag is not pinned** while qBittorrent's is, so `make
-  pull-jellyfin` takes whatever `:latest` is that day. A choice, not an
-  oversight. → [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md)
 - **`lingarr` carries `swag=enable` but has no proxy-conf**, so
   `lingarr.4eva.me` does not resolve to it. Reach it on `127.0.0.1:9876`.
 - **No update notification for `jellyfin` or `qbittorrent`.** Both are pinned

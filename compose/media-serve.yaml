@@ -14,7 +14,12 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-lsio
-    image: lscr.io/linuxserver/jellyfin:latest
+    # INVARIANT: tag is PINNED. An update must be chosen, never taken by
+    # surprise -- a Jellyfin regression surfaces mid-playback. Bump this
+    # deliberately with `make pull-jellyfin`, which waits for healthy.
+    # Consequence, accepted: pinned + unlabelled means Watchtower will never
+    # report a Jellyfin update. ADR-0006, ADR-0020.
+    image: lscr.io/linuxserver/jellyfin:10.11.11ubu2604-ls47
     container_name: jellyfin
     environment:
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
