@@ -29,6 +29,8 @@ Exit codes
   0  logged in, or logged out but still within the grace period
   1  logged out longer than the grace period (alert raised)
   2  fatal (config missing, slskd API unreachable/unparseable)
+     ...but exit 1 while slskd is still running its share scan, which is an
+     expected >2h window after a cold start (scripts/slskd_state.py)
 
 Environment
 -----------
@@ -54,6 +56,8 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+import slskd_state
 
 if "API_KEY_SLSKD" not in os.environ:
   try:
@@ -155,8 +159,20 @@ def main(argv: list[str] | None = None) -> int:
 
   state = fetch_login_state(host, api_key)
   if state is None:
-    print(f"ERROR: could not read slskd login state from {host}/api/v0/server", file=sys.stderr)
-    return 2
+    # See the note in lidarr_backlog_drip.py: while slskd is still running its
+    # share scan it has no HTTP listener at all, so "cannot read login state" is
+    # expected rather than a fault, and must not page anyone. ADR-0026.
+    rc = slskd_state.unreachable_exit_code()
+    if rc == 1:
+      print(
+        f"NOTE: slskd is still initializing (share scan); no login state at "
+        f"{host}/api/v0/server yet — not an alert",
+        file=sys.stderr,
+      )
+    else:
+      print(f"ERROR: could not read slskd login state from {host}/api/v0/server",
+            file=sys.stderr)
+    return rc
 
   now = time.time()
 

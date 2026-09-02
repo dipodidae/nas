@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as _dt
 import json
 import os
 import re
@@ -483,6 +484,52 @@ def check_media_storage(
   return alerts
 
 
+def check_stuck_starting(containers: dict[str, dict], max_min: float = 150.0) -> list[Alert]:
+  """Alert when a container has been health=starting for too long.
+
+  This exists because of a real trade-off, not for completeness. `slskd`'s
+  `start_period` has to exceed a full cold share scan (over 2 h at 177k files)
+  or autoheal restarts it mid-scan, the scan is marked suspect, the next start
+  force-rescans, and slskd is never up again -- a loop the compose comment for
+  that healthcheck describes at length (ADR-0009).
+
+  But a long `start_period` is a long BLIND window: Docker does not count
+  failures inside it, so a genuinely dead web server looks identical to a slow
+  one, and `autoheal` and `make verify-runtime` both stay quiet.
+
+  So the window is watched instead of shortened. This never restarts anything --
+  a restart is the one thing that makes the slskd case worse. It tells a human
+  that something has been starting for longer than starting should take, which
+  is the ADR-0009 pattern: observe the thing a restart cannot fix.
+  """
+  alerts: list[Alert] = []
+  now = _dt.datetime.now(_dt.UTC)
+  for name, info in sorted(containers.items()):
+    state = info.get("State") or {}
+    health = ((state.get("Health") or {}).get("Status") or "").lower()
+    if health != "starting":
+      continue
+    started = state.get("StartedAt") or ""
+    try:
+      began = _dt.datetime.fromisoformat(started.replace("Z", "+00:00"))
+    except ValueError:
+      continue
+    mins = (now - began).total_seconds() / 60
+    if mins < max_min:
+      continue
+    alerts.append(
+      Alert(
+        f"container:{name}:stuck-starting",
+        "warning",
+        f"{name} has been health=starting for {mins:.0f} min (over {max_min:.0f}). "
+        "Docker counts no failures inside start_period, so nothing else will "
+        "report this -- and for slskd a restart makes it strictly worse "
+        "(ADR-0009/ADR-0026). Check whether it is still making progress.",
+      )
+    )
+  return alerts
+
+
 def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
   """Ask the shaper whether it is doing its job, not whether it exists.
 
@@ -785,6 +832,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     metavar="SERVICE",
     help="Compose service to skip entirely (repeatable).",
   )
+  parser.add_argument(
+    "--starting-max-min",
+    type=float,
+    default=150.0,
+    metavar="MIN",
+    help=(
+      "Alert when a container has been health=starting this long (default 150). "
+      "Must exceed the longest legitimate start_period in the stack -- slskd's "
+      "is 4h for a cold share scan, and inside start_period Docker counts no "
+      "failures, so this is the only thing watching that window (ADR-0026)."
+    ),
+  )
   parser.add_argument("--dry-run", action="store_true", help="Print alerts, send nothing.")
   parser.add_argument(
     "--self-test",
@@ -826,6 +885,8 @@ def main(argv: list[str] | None = None) -> int:
   alerts += check_heartbeat_configured()
   alerts += check_wan_shaper()
   alerts += check_media_storage()
+  # Observation only -- see the docstring for why this is not a restart.
+  alerts += check_stuck_starting(containers, args.starting_max_min)
   alerts += lint_crontab(read_crontab(), REPO_ROOT)
   alerts += check_jellyfin_memory(args.mem_log, args.jellyfin_anon_mb, args.sampler_stale_min)
   oom_alerts, oom_cursor = check_kernel_oom(state.get("oom_cursor"))

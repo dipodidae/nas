@@ -196,15 +196,38 @@ services:
     # scan ran at EVERY start. On disk it is loaded at startup instead, so only
     # the first start after that change pays the cold scan.
     #
-    # 90m therefore covers the cold case with headroom, and costs nothing in the
-    # warm one: Docker ends start_period at the first successful probe, so a
-    # fast startup exits the window immediately rather than staying blind in it.
+    # 90m was measured off a completed run and was still not enough, because
+    # the SHARE GREW. On 2026-09-02 a forced rescan of 19,433 directories took
+    # 6,787,113ms = 113 min for 194,358 files -- slskd's own number, not an
+    # extrapolation. The 90m window expired at 19:54 with the scan at 92%, the
+    # container flipped to unhealthy, and only autoheal having been stopped by
+    # hand prevented the loop described above from starting again.
+    #
+    # There is also a SECOND path to a full scan that the on-disk cache does not
+    # cover, and it is the one that fired here. The cache restored fine:
+    #   Share cache successfully restored from backup
+    # and slskd then discarded it anyway:
+    #   Error initializing shares: Previous share scan was marked as suspect
+    #   Performing a forced re-scan of shares
+    # An interrupted scan records itself as suspect, so any restart mid-scan
+    # guarantees a full rescan on the next start -- which is exactly what makes
+    # the autoheal loop self-perpetuating rather than merely wasteful.
+    #
+    # 4h is 2.1x the measured 113 min, so it has room as the share grows, and it
+    # costs nothing in the warm case: Docker ends start_period at the first
+    # successful probe, so a fast startup leaves the window immediately.
+    #
+    # The trade-off is that a long window is a BLIND window -- Docker counts no
+    # failures inside it. That is covered by observation rather than by
+    # shortening it: scripts/stack_watchdog.py alerts on a container parked in
+    # health=starting past --starting-max-min, and never restarts one.
+    # `make check` asserts this value against a declared floor. ADR-0026.
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
       interval: 60s
       timeout: 10s
       retries: 5
-      start_period: 90m
+      start_period: 4h
 
   # FlareSolverr-compatible Cloudflare solver for Prowlarr's CF-protected
   # indexers (tagged `cloudflare` in Prowlarr).

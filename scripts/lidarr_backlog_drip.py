@@ -25,7 +25,9 @@ Exit codes
 ----------
   0 success (searched a batch, or intentionally idle: queue busy / nothing due)
   1 partial (the search command POST failed)
-  2 fatal (config missing, Lidarr/slskd unreachable, bad response shape)
+  1 partial (nothing done -- includes slskd still initializing its share scan,
+    which is expected for >2h after a cold start; see scripts/slskd_state.py)
+  2 fatal (config missing, Lidarr unreachable, slskd genuinely down, bad shape)
 
 Environment
 -----------
@@ -53,6 +55,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import slskd_state
 
 if "API_KEY_LIDARR" not in os.environ:
   try:
@@ -266,8 +270,18 @@ def main(argv: list[str] | None = None) -> int:
   try:
     downloads = _slskd_downloads(slskd_host, slskd_key)
   except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, OSError) as exc:
-    print(f"ERROR: slskd unreachable at {slskd_host}: {exc}", file=sys.stderr)
-    return 2
+    # Exit 1, not 2, while slskd is merely still coming up. A full cold share
+    # scan takes over two hours and slskd does not bind :5030 until it finishes,
+    # so this job legitimately cannot run for that whole window -- and exiting 2
+    # made cron_job.py push a priority-5 alert every tick of a routine,
+    # self-resolving startup. Exit 1 is inside its --ok-codes 0,1 default, so
+    # the log still records it and a genuinely broken slskd still shouts.
+    # ADR-0026.
+    rc = slskd_state.unreachable_exit_code()
+    reason = "still initializing (share scan)" if rc == 1 else "unreachable"
+    print(f"{'NOTE' if rc == 1 else 'ERROR'}: slskd {reason} at {slskd_host}: {exc}",
+          file=sys.stderr)
+    return rc
   inflight = count_inflight(downloads, stale_queued_hours=args.stale_queued_hours)
   if inflight >= args.threshold:
     print(f"idle: slskd in-flight {inflight} >= threshold {args.threshold} — holding off")

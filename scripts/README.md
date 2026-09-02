@@ -697,6 +697,18 @@ Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited
 
 Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 300`.
 
+### `slskd_state.py`
+
+A library, not a script. Answers one question for the cron jobs that talk to slskd: **is it unreachable because it is broken, or because it is still coming up?**
+
+slskd binds no HTTP listener at all while its share scan runs — `/proc/net/tcp6` inside the container is _empty_ — and a full forced rescan takes **113 minutes** (194,358 files, measured 2026-09-02). So every slskd-dependent job hits connection-reset for that whole window and used to exit `2`, which `cron_job.py` treats as fatal: a routine, expected, self-resolving startup produced priority-5 alerts with a skull at every cron tick. That is worse than no alerting, because it trains you to swipe it away.
+
+`unreachable_exit_code()` returns `1` (inside `cron_job.py`'s `--ok-codes 0,1`, so cron stays quiet and the log still records it) while slskd is initializing, and `2` when it is genuinely down. Used by `lidarr_backlog_drip.py` and `slskd_login_watch.py`.
+
+`is_initializing()` accepts **either** `health=starting` **or** a share-scan line in the recent container log, because each signal alone has a hole — and the incident proved it: the `start_period` expired while the scan was still at 92%, so at the moment it mattered the container said `unhealthy`, not `starting`. It reads the container _log_ rather than the API on purpose: the API is exactly what is unavailable. ADR-0026.
+
+**Still outstanding:** `slskd_cleanup.py`, `slskd_complete_sweep.py`, `process_soulseek_imports.py`, `slskd_incomplete_sweep.py` and `lidarr_stuck_download_reaper.py` should adopt this too. They run hourly or daily behind a flock, so they are quieter, but they have the same defect.
+
 ### `check-smart-freshness.py`
 
 Asserts that `scrutiny`'s SMART collector is still reporting, for `make verify-runtime` (daily cron, 06:15). Deliberately **not** in `check-invariants.sh`: a stale collector is a runtime fact, and the compose model can be perfectly correct while the collector has silently failed for a week — a monitoring tool that has stopped monitoring is worse than none, because the dashboard stays green.

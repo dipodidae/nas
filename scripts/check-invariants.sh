@@ -997,6 +997,60 @@ if "diun" in services:
                      "the manifest emitter could not render the compose model "
                      "(expected in CI without docker); currency unverified")
 
+
+# ==========================================================================
+# 22. An autoheal-monitored service's start_period must cover its worst
+#     documented cold start
+# ==========================================================================
+# autoheal turns a failing healthcheck into a restart. Inside start_period
+# Docker counts no failures, so start_period is the ONLY thing standing between
+# a slow initialization and an auto-restart of it.
+#
+# For slskd that restart is not merely unhelpful, it is self-perpetuating:
+# slskd does not bind :5030 until its share scan finishes, an interrupted scan
+# is recorded as SUSPECT, and the next start then force-rescans from 0% even
+# though the on-disk share cache restored fine. So restart -> suspect ->
+# full rescan -> restart is a loop in which slskd is never up again.
+#
+# It has happened twice at two different numbers. The stock 120s+5x60s failed at
+# ~9 min. Then 30m failed, because it was extrapolated from the first 39% while
+# those directories were still warm in page cache. Then 90m held -- until the
+# share grew: on 2026-09-02 a forced rescan of 19,433 directories / 180k files
+# was still running at 94% after 1h44m, the 90m window expired, and the
+# container flipped to unhealthy mid-scan. Only autoheal being stopped by hand
+# prevented the loop.
+#
+# Hence a DECLARED floor rather than a remembered one, with the measurement that
+# produced it. Raise the floor when a measured scan approaches it -- and read it
+# off a COMPLETED run, never extrapolate. ADR-0009, ADR-0026.
+START_PERIOD_FLOOR = {
+    "slskd": (
+        4 * 3600,
+        "a full forced share rescan measured 2h05m at 180k files on 2026-09-02; "
+        "an interrupted scan is marked suspect and forces another, so a restart "
+        "mid-scan never recovers",
+    ),
+}
+for _svc, (_floor, _why) in sorted(START_PERIOD_FLOOR.items()):
+    _sv = services.get(_svc)
+    if not _sv:
+        continue
+    _hc = _sv.get("healthcheck") or {}
+    _sp = _secs(_hc.get("start_period", "0"))
+    if _sp is None:
+        fail("start-period-floor", "ADR-0026",
+             f"{_svc}: unparseable healthcheck start_period "
+             f"{_hc.get('start_period')!r}; the floor cannot be verified.")
+    elif _sp < _floor:
+        fail("start-period-floor", "ADR-0026",
+             f"{_svc} start_period is {_sp}s, below the documented floor of "
+             f"{_floor}s. {_why}. Inside start_period Docker counts no failures, "
+             "so this value is the only thing preventing autoheal from "
+             "restarting a slow start -- and for this service a restart makes it "
+             "permanently worse.")
+    else:
+        ok("start-period-floor", f"{_svc} {_sp}s >= {_floor}s")
+
 # ==========================================================================
 # Report
 # ==========================================================================
