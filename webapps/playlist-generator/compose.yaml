@@ -25,6 +25,27 @@ services:
       service: svc-base
     image: pgvector/pgvector:pg16
     container_name: playlist-generator-db
+    # Measured 2026-09-02, not guessed: pid 1 already runs with
+    # CapEff 0000000000000000 because the entrypoint gosu's down to uid 999, so
+    # the running server needs nothing. These four are what the ENTRYPOINT needs
+    # before that hand-off: chown PGDATA (CHOWN), fix modes on files it does not
+    # own (FOWNER), and gosu's setuid/setgid pair. DAC_OVERRIDE is the one that
+    # is easy to miss and was found by trying without it: PGDATA is
+    # `drwx------ 999 1000`, the entrypoint walks it with `find` as root, and
+    # root's ability to ignore file modes IS CAP_DAC_OVERRIDE -- cap_drop: ALL
+    # takes it away, and the container then loops on
+    # "find: '/var/lib/postgresql/data': Permission denied" and never starts.
+    # No KILL: postgres's postmaster and its backends all run as the SAME uid
+    # (999), so signalling them crosses no uid boundary -- unlike nginx
+    # (ADR-0021). Verified by listing every postgres pid's uid. ADR-0018.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     environment:
       - POSTGRES_USER=playlist
       - POSTGRES_PASSWORD=${PLAYLIST_GENERATOR_DB_PASSWORD}
@@ -41,7 +62,6 @@ services:
     # INVARIANT: no watchtower label. Never auto-update a database engine out
     # from under its data -- a pg major bump needs a dump/restore, not a
     # recreate. Deliberately unlabeled. ADR-0006.
-    # KNOWN GAP: no cap_drop: ALL. ADR-0018.
 
   playlist-generator:
     extends:
