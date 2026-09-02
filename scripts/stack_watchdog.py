@@ -376,6 +376,16 @@ def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
   code, out = _run(["tc", "qdisc", "show", "dev", wan_if])
   if code != 0:
     return [Alert("wan:shaper:unreadable", "warning", f"cannot read qdisc on {wan_if}")]
+  marks_code, marks = _run(["sudo", "-n", "/home/tom/nas/scripts/wan_shaper.sh", "status"])
+  if marks_code == 0 and "wan_shaper-bulk" not in marks:
+    return [
+      Alert(
+        "wan:bulk-marks:missing",
+        "warning",
+        "CAKE is up but the DSCP bulk marks are gone — torrents are no longer "
+        "yielding to streams. Restore: sudo /home/tom/nas/scripts/wan_shaper.sh apply",
+      )
+    ]
   if "cake" not in out:
     return [
       Alert(

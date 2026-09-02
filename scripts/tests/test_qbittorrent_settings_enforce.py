@@ -46,26 +46,33 @@ def test_plan_pref_changes_returns_only_differing_keys():
   }
 
 
-def test_upload_limit_fits_the_shaped_pipe_alongside_a_remote_stream():
-  """The cap plus a remote Jellyfin stream must fit inside the CAKE shaper.
+def test_upload_limit_stays_below_the_real_line_rate():
+  """The cap's job is damage control when the shaper is missing, not reservation.
 
-  Before scripts/wan_shaper.sh existed the rule was "stay well under raw
-  capacity", because nothing was managing the modem's queue. Now CAKE shapes
-  internet egress to 28 Mbit and Jellyfin's RemoteClientBitrateLimit caps a
-  remote client at 8 Mbps, so the real constraint is a budget: seeding plus one
-  remote stream has to fit in the shaped pipe, or they compete for it.
+  scripts/wan_shaper.sh marks torrent egress CS1 so CAKE's Bulk tin makes it
+  yield automatically -- that is what protects a stream, and it scales to any
+  number of viewers. But `tc` state is lost on link-down, and there is a window
+  before stack_watchdog notices. During that window the cap is the only thing
+  standing between BitTorrent and the modem queue, so it must stay under the
+  measured line rate. The original defect was 33.55 Mbps on a ~31 Mbps link.
   """
-  shaped_egress_bps = 28_000_000        # scripts/wan_shaper.sh SHAPE_MBIT
-  remote_stream_bps = 8_000_000         # Jellyfin RemoteClientBitrateLimit
-  budget_bps = qbt.UPLOAD_LIMIT_BYTES_PER_SEC * 8 + remote_stream_bps
-  assert budget_bps <= shaped_egress_bps
-
-
-def test_upload_limit_is_not_above_the_measured_uplink():
-  """The original defect: a cap of 33.55 Mbps on a ~31 Mbps link is no cap."""
   measured_upstream_bps = 31_000_000
   cap_bps = qbt.UPLOAD_LIMIT_BYTES_PER_SEC * 8
   assert cap_bps < measured_upstream_bps
+
+
+def test_upload_limit_is_not_a_per_viewer_budget():
+  """Guards against reintroducing arithmetic that assumed exactly one viewer.
+
+  An earlier version asserted `cap + 8 Mbps <= 28 Mbit shaped`, which silently
+  encoded "there is one remote viewer". RemoteClientBitrateLimit is a per-stream
+  ceiling, not a server-wide aggregate -- verified against the live server, two
+  concurrent remote requests were each offered the full 8 Mbps -- so with five
+  users that budget was wrong. DSCP replaced it.
+  """
+  single_viewer_budget = 28_000_000 - 8_000_000
+  cap_bps = qbt.UPLOAD_LIMIT_BYTES_PER_SEC * 8
+  assert cap_bps > single_viewer_budget
 
 
 def test_plan_pref_changes_empty_when_already_correct():

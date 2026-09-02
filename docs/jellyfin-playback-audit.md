@@ -191,6 +191,61 @@ client was still asking for it. A full sweep of all 1115 library items found
 exactly one orphaned path, `tmp-audio-test/prototype.mkv`, left over from pass
 7's AAC prototype.
 
+**Third pass (2026-09-02, later): DSCP replaces the arithmetic.** The budget
+above — cap + 8 Mbps ≤ 28 Mbit — silently assumed **exactly one remote viewer**.
+`RemoteClientBitrateLimit` is a per-*stream* ceiling, not a server-wide
+aggregate: verified against the live server, two concurrent remote
+`PlaybackInfo` requests were each offered the full 8 Mbps. With five users the
+budget was simply wrong, and CAKE's flow fairness would have handed most of the
+link to whichever side had more flows.
+
+`scripts/wan_shaper.sh` now marks qBittorrent's and slskd's egress **DSCP CS1**,
+which files them in CAKE's Bulk tin. Measured, per-tin, on the live shaper:
+
+| | Bulk (torrents) | Best Effort (a stream) |
+|---|---|---|
+| torrents alone | **26.5 Mbps** | 0.6 |
+| one ordinary flow added | **5.0 Mbps** | **24.6 Mbps** |
+| again, with the cap at 25 | **1.76 Mbps** — exactly the 1750 Kbit threshold | **25.7 Mbps** |
+
+Torrents surrender the link the moment anything else wants it, and take it back
+when nothing does. That scales to one viewer or five with no arithmetic, so the
+qBittorrent cap went **20 → 25 Mbps**. Latency under contention: max 15 ms,
+jitter 0.9 ms.
+
+**A correction to the brief that changed the implementation.** The instruction
+was to mark *Gluetun's outer packets*, because WireGuard will not carry an inner
+DSCP mark. **There is no Gluetun** — the VPN sidecar was removed 2026-07-27 and
+qBittorrent is a plain `nas-network` member egressing over the home IP. So the
+marks go directly on the real packets, in `mangle POSTROUTING`, which runs
+before Docker's SNAT (the source is still the container address there, and SNAT
+does not disturb the DSCP field). The host does have a `wg0`, but it is an
+inbound remote-access server with one peer and **0 bytes transferred** — it
+carries nothing. If a tunnel is ever reintroduced, the outer-packet rule applies
+again and the script says so.
+
+**What the cap is now for.** Not reservation — damage control. `tc` state is
+lost on link-down and there is a window before the watchdog notices, so the cap
+must stay below the ~31 Mbps line rate. The original defect was 33.55 Mbps,
+i.e. 108% of the link. A test asserts the new invariant and a second test
+asserts the old per-viewer arithmetic is not reintroduced.
+
+**Why the cap reverted — not established, and the obvious theory is wrong.**
+The proposed explanation was that qBittorrent rewrites its config on shutdown,
+so an edit to a running container's conf gets overwritten. That cannot be what
+happened: the container has not restarted (`RestartCount: 0`, up since
+2026-09-01 16:29) and every change here was made through the WebUI API, never
+by editing the conf. The legacy `scripts/legacy/qbittorrent-scheduler.py` — which
+does set upload limits and would have been a good suspect — is not in the
+crontab, has no systemd timer and was not running. **I could not determine what
+reset it.** The hourly enforcement cron is therefore a backstop for an unknown
+cause rather than a known one, which is worth stating plainly.
+
+The *rule* stands regardless and is now in AGENTS.md: change service settings
+through the API, never by editing the config of a live container. That is what
+pass 2 recorded for Jellyfin's XML, and qBittorrent does rewrite its conf on
+exit — it simply is not the explanation here.
+
 **A dead end worth recording so nobody re-walks it.** The remote transcode's
 ffmpeg log carries 423 `Packet duration: -16 ... is out of range` warnings, and
 zero appear in the LAN audio-only transcode — an extremely tempting lead. It

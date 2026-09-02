@@ -317,12 +317,36 @@ def test_at_shorthand_lines_are_linted_too():
 
 def test_missing_cake_shaper_is_critical(monkeypatch):
     """tc state is lost on link-down, so its absence must be noisy."""
-    monkeypatch.setattr(wd, "_run", lambda *a, **k: (0, "qdisc mq 0: root\nqdisc pfifo_fast 0: parent :1"))
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "tc":
+            return 0, "qdisc mq 0: root\nqdisc pfifo_fast 0: parent :1"
+        return 0, "wan_shaper-bulk"
+
+    monkeypatch.setattr(wd, "_run", fake_run)
     alerts = wd.check_wan_shaper()
     assert [a.key for a in alerts] == ["wan:shaper:missing"]
     assert alerts[0].severity == "critical"
 
 
 def test_present_cake_shaper_is_quiet(monkeypatch):
-    monkeypatch.setattr(wd, "_run", lambda *a, **k: (0, "qdisc cake 20: parent 1:20 bandwidth 28Mbit"))
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "tc":
+            return 0, "qdisc cake 20: parent 1:20 bandwidth 28Mbit"
+        return 0, "-A POSTROUTING -s 172.30.0.4/32 --comment wan_shaper-bulk -j DSCP"
+
+    monkeypatch.setattr(wd, "_run", fake_run)
     assert wd.check_wan_shaper() == []
+
+
+def test_shaper_present_but_bulk_marks_gone_alerts(monkeypatch):
+    """CAKE without the CS1 marks bounds latency but stops torrents yielding."""
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        if cmd[0] == "tc":
+            return 0, "qdisc cake 20: parent 1:20 bandwidth 28Mbit"
+        return 0, "=== DSCP bulk marks ===\n  (none)"
+
+    monkeypatch.setattr(wd, "_run", fake_run)
+    assert [a.key for a in wd.check_wan_shaper()] == ["wan:bulk-marks:missing"]
