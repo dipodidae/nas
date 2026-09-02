@@ -178,7 +178,7 @@ if __name__ == "__main__":
 ### Adding New Services
 
 - Join network: `nas-network`
-- Include lightweight healthcheck: `curl -f http://localhost:port || exit 1`
+- Include a lightweight healthcheck — but **run its exact command inside the container before committing it.** Three images in this stack are distroless or minimal and break the obvious probe: both Beszel images have no `/bin/sh` at all (a `CMD-SHELL` probe fails with `stat /bin/sh: no such file or directory`), and `streamystats-jobs` is a compiled binary with a shell but no `node`/`wget`/`curl`/`nc` — a `fetch()` probe left it permanently `starting` while the server logged `status=running`. A healthcheck that cannot run does not fail loudly: it reports `unhealthy` forever while the service is fine, or — worse, if the broken command happens to exit 0 — `healthy` forever while it is not. Use each image's own health subcommand where one exists (`/beszel health --url …`, `/agent health`), or read the kernel socket table in exec form (`grep -q ":0BBD" /proc/net/tcp*` — port in hex, state `0A` = LISTEN). ADR-0028, ADR-0030.
 - Use linuxserver.io images where precedent exists (justify alternatives in comment)
 - Config volumes: `${CONFIG_DIRECTORY}/<service>:/config`
 - Never hard-code user paths or secrets—use env vars
