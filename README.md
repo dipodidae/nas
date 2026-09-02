@@ -150,7 +150,7 @@ boundaries and `depends_on` only resolves within a project.
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
 │   └── storage.yaml              # nextcloud
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
-├── docs/decisions/               # 29 ADRs — the incident history
+├── docs/decisions/               # 30 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
 └── qbittorrent/custom-cont-init.d/   # LSIO init hook, bind-mounted read-only
 ```
@@ -675,6 +675,16 @@ The pre-split `docker-compose.yml` is recoverable:
 ## Known gaps
 
 Honest list of things that are wrong or unfinished, all tracked:
+
+- **Nothing sweeps the library for monitored-but-missing media, and the obvious
+  tool is disqualified.** Cleanuparr handles the clean side; the fill side is
+  covered only by Sonarr's and Radarr's own built-in periodic searches plus the
+  two music-specific cron jobs. `Huntarr` was evaluated and **rejected**: its
+  upstream was archived on 2026-02-23 after unauthenticated auth bypasses that
+  leaked stored passwords and **every integrated \*arr API key**, and no image
+  is pullable any more. The requirement for a replacement is an actively
+  maintained upstream with credentials that cannot be read unauthenticated.
+  → [ADR-0029](docs/decisions/0029-huntarr-rejected.md)
 
 - **Update notification now covers pinned tags, and applying an update is still
   manual on purpose.** `diun` watches every image in the compose model from a

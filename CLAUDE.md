@@ -9,7 +9,7 @@ Single-host homelab NAS stack: **one** Compose project split across many files (
 ## Authoritative docs — read these first
 
 - `AGENTS.md` — full conventions (Python style, shell style, Docker Compose rules, env var contract, exit codes). Treat as binding.
-- `docs/decisions/` — 29 ADRs holding the incident history that used to live as inline comments in `docker-compose.yml`. The compose files now carry only a one-line `INVARIANT:` plus an ADR pointer. **If a line says `INVARIANT:`, read the ADR before changing it.** Start at `docs/decisions/README.md`.
+- `docs/decisions/` — 30 ADRs holding the incident history that used to live as inline comments in `docker-compose.yml`. The compose files now carry only a one-line `INVARIANT:` plus an ADR pointer. **If a line says `INVARIANT:`, read the ADR before changing it.** Start at `docs/decisions/README.md`.
 - `.github/copilot-instructions.md` — short-form version of the same rules.
 - `README.md` — service table, ports, setup walkthrough.
 - `scripts/README.md` — per-script flags, exit codes, and the operational workflows (backup, audit, log prune, post-update verify, qBittorrent kickstart, Prowlarr priority management).
