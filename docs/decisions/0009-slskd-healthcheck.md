@@ -57,3 +57,27 @@ The autoheal comment now says so, and points here.
 
 A login-aware healthcheck on the autoheal path. Not for slskd, not for any
 service whose recovery requires *staying down*.
+
+## Amendment 2026-09-02 — `start_period` must outlast a full share scan
+
+The same failure shape as the login spiral, reached from a different direction:
+an autoheal restart that cannot fix the condition and actively prevents
+recovery.
+
+slskd does not bind `:5030` until its startup share scan completes — the probe
+gets `connection refused`, not a slow answer. This library is 19,433 shared
+directories and the scan takes about 18 minutes. The healthcheck was
+`start_period: 120s` with `retries: 5` at `interval: 60s`, so the container was
+marked unhealthy at roughly 9 minutes, autoheal restarted it, and the scan began
+again at 0%. Measured on 2026-09-02: autoheal restarted slskd every ~9 minutes
+for over an hour, each restart at 30-40% of the scan, and slskd was never once
+reachable in that window.
+
+`start_period` is now `30m` — the measurement plus headroom for a growing
+library. The accepted cost is that a genuinely dead slskd goes undetected for
+half an hour, which this ADR already tolerates: for slskd, staying down is
+usually the cure rather than the emergency.
+
+The general rule, which the next service inherits: **`start_period` is a
+property of the slowest legitimate startup, not a round number.** A probe that
+fires before the service can possibly answer converts autoheal into a treadmill.

@@ -177,12 +177,23 @@ services:
     # re-collides with slsknet's ghost session and perpetuates the 5000ms
     # login-timeout spiral. Login state is watched alert-only by
     # scripts/slskd_login_watch.py, which never restarts. ADR-0009.
+    #
+    # INVARIANT: start_period must exceed a FULL share scan. slskd does not
+    # bind :5030 until the scan finishes -- the probe gets "connection
+    # refused", not a slow answer. 19,433 shared directories take ~18 min here
+    # (measured 2026-09-02). With the old 120s + 5x60s the container went
+    # unhealthy at ~9 min, autoheal restarted it, and the scan began again from
+    # 0% -- a permanent loop in which slskd is never up and the scan never
+    # completes. 30m is that measurement with headroom for a growing library.
+    # The cost is that a genuinely dead slskd goes undetected for 30 min, which
+    # ADR-0009 already accepts: leaving slskd down is usually the cure, never
+    # the emergency.
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
       interval: 60s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 30m
 
   # FlareSolverr-compatible Cloudflare solver for Prowlarr's CF-protected
   # indexers (tagged `cloudflare` in Prowlarr).
