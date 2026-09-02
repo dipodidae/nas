@@ -25,7 +25,7 @@ If unsure: prefer explicitness over cleverness.
 
 | Domain          | Convention                                                                                                                                          |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Orchestration   | `docker-compose.yml` single source; keep service keys alphabetized inside each service block where practical (volumes/env/ports logically grouped). |
+| Orchestration   | One Compose project split across `compose.yaml` (name/network/`include:` only), `compose/*.yaml` and `webapps/*/compose.yaml`. Shared service shape comes from `compose/_fragments.yaml` via `extends`; per-service exceptions stay local next to the comment explaining them. Run `make check` after any change. See `docs/decisions/0000-compose-layout.md`. |
 | Images          | Prefer `lscr.io/linuxserver/*` where already used. Pin with `:latest` unless security/compat requires digest (offer rationale if changing).         |
 | Networking      | Single custom bridge network `nas-network`. New services join it unless host mode is strictly required (explain).                                   |
 | Healthchecks    | Always add a `HEALTHCHECK` using lightweight `curl -f` (or process probe). Interval 30–60s, retries 3, timeout ≤10s.                                |

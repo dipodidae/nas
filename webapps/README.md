@@ -24,7 +24,10 @@ own directory and the repo root stays clean.
 
 ## docker-compose service template
 
-Add the service to `~/nas/docker-compose.yml` matching the existing hardening
+Add a `compose.yaml` next to the app's Dockerfile (`webapps/<app>/compose.yaml`) and
+list it in `~/nas/compose.yaml`'s `include:`. `include` resolves each file's relative
+paths against its own directory, which is why `build.context: .` works there.
+Extend `../../compose/_fragments.yaml` for the hardening
 pattern (security_opt, cap_drop, 127.0.0.1 binding, healthcheck, logging cap).
 Minimal template for a Node-style app listening on `:3000`:
 
@@ -146,7 +149,8 @@ Notes:
 From `~/nas`:
 
 ```bash
-# 1. Add the service block to docker-compose.yml (see template above).
+# 1. Add webapps/<app>/compose.yaml and include it from compose.yaml (template above).
+# 1b. Verify: make lint && make check
 # 2. Build and start it. --build picks up Dockerfile changes.
 docker compose up -d --build <appname>
 
