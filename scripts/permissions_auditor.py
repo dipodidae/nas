@@ -218,16 +218,23 @@ def deduce_roots(args) -> tuple[list[Path], list[str]]:
     elif not share_path.exists():
       notes.append(f"SHARE_DIRECTORY set but missing: {share_path}")
 
-  # 4. Fallback: parse docker-compose.yml for explicit mounted config subdirs if root not found
+  # 4. Fallback: parse the compose files for explicit mounted config subdirs if
+  # root not found. The stack was split from a single docker-compose.yml into
+  # compose.yaml + compose/*.yaml + webapps/*/compose.yaml, so read them all.
   if not roots:
-    compose_file = Path("docker-compose.yml")
-    if compose_file.exists():
+    compose_files = [
+      *sorted(Path("compose").glob("*.yaml")),
+      *sorted(Path("webapps").glob("*/compose.yaml")),
+    ]
+    if compose_files:
       try:
         import re
 
-        content = compose_file.read_text(encoding="utf-8")
+        content = "\n".join(
+          f.read_text(encoding="utf-8") for f in compose_files if f.exists()
+        )
         # Match lines like: - ${CONFIG_DIRECTORY}/sonarr:/config
-        matches = re.findall(r"\$\{CONFIG_DIRECTORY}/([\w.-]+)/:*/config", content)
+        matches = re.findall(r"\$\{CONFIG_DIRECTORY}/([\w.-]+):/config", content)
         # Deduce potential base directories (guess common ones)
         candidate_bases = [
           Path("/mnt/drive/.docker-config"),

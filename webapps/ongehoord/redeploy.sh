@@ -68,13 +68,13 @@ log "Building image (nas/ongehoord:latest)"
 # runs the RUN steps on the host network, which reaches the CDNs fine. `--load`
 # materialises the image into the local docker image store so the compose
 # `up --no-build` below can use it. Context/dockerfile/tag mirror the compose
-# service definition (docker-compose.yml `ongehoord.build`).
+# service definition (webapps/ongehoord/compose.yaml `ongehoord.build`).
 docker buildx build --network=host --allow network.host --load \
   -t nas/ongehoord:latest \
   -f "${SCRIPT_DIR}/Dockerfile" "${SCRIPT_DIR}"
 
 log "Recreating container"
-docker compose -f "${REPO_ROOT}/docker-compose.yml" up -d --force-recreate --no-build ongehoord
+docker compose -f "${REPO_ROOT}/compose.yaml" up -d --force-recreate --no-build ongehoord
 
 log "Waiting for healthcheck"
 for _ in $(seq 1 40); do

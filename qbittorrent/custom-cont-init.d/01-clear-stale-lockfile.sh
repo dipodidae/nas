@@ -24,7 +24,7 @@
 #     which changes on every recreate, so QLockFile sees an unfamiliar hostname,
 #     cannot prove the lock is stale, and refuses to start. Fixed in 5.2.2
 #     (PR #24363). Also mitigated here by pinning `hostname: qbittorrent` in
-#     docker-compose.yml so the hostname is stable across recreates.
+#     compose/media-download.yaml so the hostname is stable across recreates.
 #
 # When qbit refuses to start, qbittorrent-nox exits immediately, s6 restarts it
 # about once a second, and the container sits at "Up (unhealthy)" forever. The

@@ -76,6 +76,10 @@ def labels(svc):
 # ADR-0006. (Kept here rather than as an x- field in the compose files: a
 # service-level x- key shows up in `docker compose config` and risks
 # perturbing the config hash that decides whether `up -d` recreates. ADR-0000.)
+# Services that pull an image but must not be auto-updated. Locally-built
+# services are NOT listed here: "has a build: section" already proves
+# watchtower cannot pull it, so that opt-out is derived rather than declared
+# (which means a newly-added local project needs no edit to this list).
 WATCHTOWER_OPTOUT = {
     "qbittorrent":           "pinned tag; watchtower's non-atomic recreate deleted it for 13h",
     "jellyfin":              "worst service to lose to a failed recreate; slow to stop",
@@ -83,11 +87,10 @@ WATCHTOWER_OPTOUT = {
     "watchtower":            "must not self-update",
     "autoheal":              "control plane",
     "playlist-generator-db": "never auto-update a database engine under its data",
-    "4eva-rootpage":         "locally-built image; watchtower cannot pull it",
-    "lidarr-bulk":           "locally-built image; watchtower cannot pull it",
-    "ongehoord":             "locally-built image; watchtower cannot pull it",
-    "playlist-generator":    "locally-built image; watchtower cannot pull it",
 }
+
+def is_locally_built(svc):
+    return "build" in services[svc]
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
 # Warned about on every run so it cannot quietly become the convention.
@@ -186,15 +189,20 @@ for svc in ("qbittorrent", "jellyfin"):
 
 for svc in sorted(services):
     labelled = labels(svc).get(WT) == "true"
-    if labelled and svc in WATCHTOWER_OPTOUT:
+    if labelled and is_locally_built(svc):
+        fail("watchtower-optout", "ADR-0006",
+             f"{svc} is locally built (has a build: section) but carries the "
+             "watchtower enable label. Watchtower cannot pull a local image, so "
+             "the label buys nothing and adds recreate risk.")
+    elif labelled and svc in WATCHTOWER_OPTOUT:
         fail("watchtower-optout", "ADR-0006",
              f"{svc} is on the documented opt-out list "
              f"({WATCHTOWER_OPTOUT[svc]}) but carries the enable label.")
-    elif not labelled and svc not in WATCHTOWER_OPTOUT:
+    elif not labelled and not is_locally_built(svc) and svc not in WATCHTOWER_OPTOUT:
         fail("watchtower-coverage", "ADR-0006",
-             f"{svc} has no watchtower label and is not on the documented "
-             "opt-out list in this script. Either label it, or add it to "
-             "WATCHTOWER_OPTOUT with a reason so 'deliberate' is "
+             f"{svc} has no watchtower label, is not locally built, and is not "
+             "on the documented opt-out list in this script. Either label it, "
+             "or add it to WATCHTOWER_OPTOUT with a reason so 'deliberate' is "
              "distinguishable from 'forgotten'.")
 
 # ==========================================================================

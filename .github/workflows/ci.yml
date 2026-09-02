@@ -26,7 +26,7 @@ jobs:
           echo 'QBITTORRENT_USER=dummy' >> .env
           echo 'QBITTORRENT_PASS=dummy_pass' >> .env
           echo 'WATCHTOWER_SCHEDULE=0 0 4 * * *' >> .env
-      - name: Validate docker-compose.yml
+      - name: Validate the compose model
         run: docker compose config > /dev/null
 
   lint-js:

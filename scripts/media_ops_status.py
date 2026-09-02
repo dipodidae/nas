@@ -14,7 +14,7 @@ Sources gathered
 4. qBittorrent — best-effort login + torrent count on :8080 (via gluetun).
 5. Cron log freshness — ``~/nas/logs/*.log`` mtime age + last non-empty line.
 
-Port map (confirmed against docker-compose.yml)
+Port map (confirmed against the compose files under compose/)
 -----------------------------------------------
   sonarr   8989   /api/v3/health  /api/v3/queue
   radarr   7878   /api/v3/health  /api/v3/queue

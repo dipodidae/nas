@@ -15,7 +15,7 @@ looks instead: one cron-driven script, four checks, one push notification.
 
 What it checks
 --------------
-1. Every service defined in docker-compose.yml exists as a container, is
+1. Every service defined in the compose files exists as a container, is
    running, and is not `unhealthy`. A service defined but *never created* is
    caught too — `autoheal` was absent from this stack for over a month and
    nothing noticed, because "not unhealthy" and "not there at all" look
@@ -160,7 +160,7 @@ def _run(cmd: list[str], timeout: int = 60) -> tuple[int, str]:
 
 
 def defined_services() -> list[str] | None:
-  """Service names from docker-compose.yml. None if compose can't be read."""
+  """Service names from the merged compose model. None if compose can't be read."""
   code, out = _run(["docker", "compose", "config", "--services"], timeout=120)
   if code != 0:
     return None
@@ -211,7 +211,7 @@ def check_containers(
         Alert(
           f"container:{service}:missing",
           "critical",
-          f"{service}: defined in docker-compose.yml but no container exists",
+          f"{service}: defined in the compose files but no container exists",
         )
       )
       continue
