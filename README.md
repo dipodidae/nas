@@ -518,6 +518,9 @@ print(sum(1 for p in r if p and not os.path.exists(p)),'of',len(r),'unresolvable
 
 Expect `0 of N`. → [ADR-0015](docs/decisions/0015-bazarr-no-data-mount.md)
 
+Bazarr tracks only movies that **have a file** — 24 of Radarr's 37 — so a lower
+count there is correct, not a sync fault.
+
 ### Host-wide OOM kills
 
 ```bash
@@ -619,12 +622,5 @@ Honest list of things that are wrong or unfinished, all tracked:
   oversight. → [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md)
 - **`lingarr` carries `swag=enable` but has no proxy-conf**, so
   `lingarr.4eva.me` does not resolve to it. Reach it on `127.0.0.1:9876`.
-- **Bazarr knows about 24 movies against Radarr's 37.** A sync question, not a
-  path question — all 24 resolve correctly.
-- **Nine `.env` variables are set but referenced nowhere** (`RYM_SCRAPE_*`,
-  `PLEX_IDENTIFIER`, `PLEX_SERVER_NAME`, `OVERSEERR_PUBLISHED_URL`,
-  `DEEPL_API_KEY`, `JELLYFIN_CACHE_DIRECTORY`, `API_KEY_BAZARR`,
-  `API_KEY_LAZYLIBRARIAN`). Listed at the bottom of `.env.example` so their
-  absence is a decision.
 - **No off-box backup of `${CONFIG_DIRECTORY}`.** `config_backup.py` writes to
   `/mnt/drive/backups/`, which is the same host and the same box.
