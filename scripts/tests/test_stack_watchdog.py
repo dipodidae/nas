@@ -310,3 +310,19 @@ def test_at_shorthand_lines_are_linted_too():
     """@daily/@reboot are valid cron and must not be a blind spot in the lint."""
     assert wd.lint_crontab("@daily .venv/bin/python scripts/album_art.py", REPO)
     assert wd.lint_crontab("@daily cd /home/tom/nas && python scripts/album_art.py", REPO) == []
+
+
+# --- WAN shaper ---
+
+
+def test_missing_cake_shaper_is_critical(monkeypatch):
+    """tc state is lost on link-down, so its absence must be noisy."""
+    monkeypatch.setattr(wd, "_run", lambda *a, **k: (0, "qdisc mq 0: root\nqdisc pfifo_fast 0: parent :1"))
+    alerts = wd.check_wan_shaper()
+    assert [a.key for a in alerts] == ["wan:shaper:missing"]
+    assert alerts[0].severity == "critical"
+
+
+def test_present_cake_shaper_is_quiet(monkeypatch):
+    monkeypatch.setattr(wd, "_run", lambda *a, **k: (0, "qdisc cake 20: parent 1:20 bandwidth 28Mbit"))
+    assert wd.check_wan_shaper() == []

@@ -65,7 +65,19 @@ DEFAULT_QBT_HOST = "http://localhost:8080"
 # If the connection ever changes, re-measure before changing this: throttle
 # qBittorrent, then watch /sys/class/net/<wan>/statistics/tx_bytes during a
 # multi-stream upload. Keep the cap near half of what you measure.
-UPLOAD_LIMIT_BYTES_PER_SEC = 1_874_944  # 1831 KiB/s; qBittorrent rounds to whole KiB, so match it or enforcement never converges
+UPLOAD_LIMIT_BYTES_PER_SEC = 2_499_584  # 2441 KiB/s = 20 Mbps; qBittorrent rounds to whole KiB,
+# so match its rounded value or enforcement never converges. Raised from an
+# emergency 15 Mbps once scripts/wan_shaper.sh was managing the queue: with
+# CAKE in charge, 16.9 Mbps of real seeding measured 0% loss and 2.3 ms jitter
+# (max RTT 21 ms), versus 5% loss and 127 ms unshaped. 20 leaves 8 Mbps of the
+# 28 Mbps shaped pipe for a remote Jellyfin stream, which is what Jellyfin's
+# RemoteClientBitrateLimit is set to. Re-measure before raising further.
+
+# 50 upload slots on a ~31 Mbps uplink is ~0.6 Mbps each: the queue depth
+# problem is the *number of concurrent flows* competing for one bottleneck, not
+# only the aggregate rate. Behind the cap above, 6 slots is ~2.5 Mbps each and
+# leaves a far shallower queue for CAKE to manage.
+MAX_UPLOAD_SLOTS = 6
 
 DESIRED_PREFS = {
   "auto_tmm_enabled": True,
@@ -74,6 +86,7 @@ DESIRED_PREFS = {
   "temp_path_enabled": True,
   "temp_path": "/downloads/incomplete/qbittorrent",
   "up_limit": UPLOAD_LIMIT_BYTES_PER_SEC,
+  "max_uploads": MAX_UPLOAD_SLOTS,
 }
 
 

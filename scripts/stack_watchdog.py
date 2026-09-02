@@ -35,6 +35,8 @@ What it checks
    an absence. It was stopped for over a month before anyone noticed.
 6. That an off-box heartbeat is configured at all (`heartbeat.py`). Nothing
    running on this host can report that this host is down.
+   And that the CAKE egress shaper is still installed — `tc` state does not
+   survive a link-down, and without it the uplink is an unmanaged FIFO again.
 7. The crontab itself, textually: a line using a relative path without a `cd`
    into the repo cannot work from cron's `$HOME`, and a line naming a script
    that does not exist never will. Both are invisible in the job's *output*
@@ -362,6 +364,30 @@ def read_crontab() -> str:
   return out if code == 0 else ""
 
 
+def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
+  """The CAKE shaper must be present, or bufferbloat comes straight back.
+
+  Without it the only queue on the path is the ISP modem's dumb FIFO, which
+  BitTorrent fills: measured 5% packet loss and 127 ms latency spikes, enough
+  to make remote Jellyfin playback stutter continuously. `tc` state is not
+  persistent — it is lost on link-down and on any `tc qdisc del` — so its
+  absence is silent and needs watching, not assuming.
+  """
+  code, out = _run(["tc", "qdisc", "show", "dev", wan_if])
+  if code != 0:
+    return [Alert("wan:shaper:unreadable", "warning", f"cannot read qdisc on {wan_if}")]
+  if "cake" not in out:
+    return [
+      Alert(
+        "wan:shaper:missing",
+        "critical",
+        f"no CAKE shaper on {wan_if} — uplink is unmanaged again, expect packet "
+        "loss under load. Restore: sudo systemctl restart wan-shaper.service",
+      )
+    ]
+  return []
+
+
 def check_heartbeat_configured() -> list[Alert]:
   """Nag until the off-box dead-man's switch actually has a URL.
 
@@ -679,6 +705,7 @@ def main(argv: list[str] | None = None) -> int:
     alerts += check_autoheal(containers, autoheal_logs())
   alerts += check_cron_jobs(args.cron_state_dir)
   alerts += check_heartbeat_configured()
+  alerts += check_wan_shaper()
   alerts += lint_crontab(read_crontab(), REPO_ROOT)
   alerts += check_jellyfin_memory(args.mem_log, args.jellyfin_anon_mb, args.sampler_stale_min)
   oom_alerts, oom_cursor = check_kernel_oom(state.get("oom_cursor"))

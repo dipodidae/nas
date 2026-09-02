@@ -117,6 +117,80 @@ The audio codec is irrelevant once a bitrate cap forces a video transcode.
 with the same ping test: **0% loss, max RTT 37 ms, jitter 5.2 ms**, while
 qBittorrent still uploads 16 Mbps.
 
+**The fix, second pass (2026-09-02).** Capping qBittorrent stopped the loss but
+treated a queueing problem as a rate problem. The queue formed in the ISP modem,
+upstream of anything that could manage it, so the real fix is to move the
+bottleneck into a queue we own:
+
+- **`scripts/wan_shaper.sh`** installs CAKE on internet-bound egress at
+  **28 Mbit** (~90% of the measured 31), under a `wan-shaper.service` systemd
+  unit so it survives reboots, with `stack_watchdog.py` alerting if the qdisc
+  ever disappears (`tc` state does not survive a link-down).
+  **The non-obvious part:** `enp88s0` carries LAN *and* internet traffic — the
+  gateway and every client share `192.168.2.0/24` — so shaping the whole
+  interface would also cap LAN traffic at the uplink rate, and this box serves
+  40 GB remuxes that direct-play at ~48 Mbps. An HTB root therefore splits
+  egress into an unshaped LAN class and a shaped internet class; only the
+  latter gets CAKE. Verified by class counters: LAN traffic lands in `1:10`
+  (ceil 10 Gbit), internet in `1:20` (28 Mbit).
+- The router is a **KPN Experia Box** with no SQM of any kind, which is why
+  this has to live on the host.
+
+**Then the cap went back up, on evidence.** With CAKE managing the queue the
+emergency 15 Mbps was too conservative. Measured across three caps, three
+samples each, recording the *actual* upload rate because peer demand varies:
+
+| cap | best-loaded sample | loss | max RTT | jitter |
+|---|---|---|---|---|
+| unshaped, 33.55 | 23.4 Mbps | **5%** | 127 ms | 25.8 ms |
+| 15 | 3.6 Mbps | 0% | 22 ms | 2.0 ms |
+| **20** | **16.9 Mbps** | **0%** | **21 ms** | **2.3 ms** |
+| 25 | 10.2 Mbps | 0% | 28 ms | 4.3 ms |
+
+**0% loss at every shaped cap.** 20 Mbps is the setting: 16.9 Mbps of real
+seeding at 21 ms max RTT, and it leaves exactly the 8 Mbps that Jellyfin's
+`RemoteClientBitrateLimit` allows a remote client — seeding plus one remote
+stream fits the 28 Mbit pipe. A test asserts that budget so it cannot drift.
+
+**µTP was tested and rejected — the expected fix made it worse.** LEDBAT is
+designed for exactly this, so it should have helped. At comparable load
+(~7-8 Mbps):
+
+| | max RTT | jitter |
+|---|---|---|
+| TCP+uTP | 20.2 / 19.6 / 12.6 ms | 1.6 / 1.5 / 0.3 ms |
+| uTP only | 24.9 / **58.6** / **54.9** ms | 2.4 / **8.5** / **7.9** ms |
+
+Plausibly because LEDBAT targets ~100 ms of queuing delay while CAKE already
+holds it near 5 ms, so its delay controller has nothing to aim at. Reverted to
+TCP+uTP. Upload slots were cut 50 → 6 (~0.6 → ~3 Mbps each): fewer concurrent
+flows means a shallower queue for CAKE to manage.
+
+**And the remote side is now capped server-side.** Jellyfin's
+`RemoteClientBitrateLimit` was `0` (unlimited), which is why a remote client
+could negotiate its own 4.14 Mbps and get a stream it could not sustain. Set to
+**8 Mbps**, server-wide so it covers all five users. Verified against the live
+server that it applies to remote requests only — a `PlaybackInfo` through SWAG
+carrying a public `X-Forwarded-For` comes back
+`VideoBitrate=7808000 + AudioBitrate=192000` = exactly 8 Mbps with
+`TranscodeReasons=ContainerBitrateExceedsLimit`, while the same request from
+the LAN is offered the full 13.2 Mbps.
+
+**Hardware encoding verified, not assumed** — this is where pass 1's VAAPI work
+finally earns its place, as the right fix for the actual problem rather than the
+reported one. `vainfo` in the container reports the Intel iHD driver 25.4.6 with
+`VAProfileH264High : VAEntrypointEncSlice`, and running Jellyfin's own VAAPI
+recipe at the new 8 Mbps target sustains **365 fps / 14.3× realtime** — software
+x264 at this profile would be a fraction of that and would saturate the CPU.
+
+**A live scare that turned out not to be one.** Three ffmpeg invocations failed
+with exit 254 this morning, which looked like transcoding being broken. It was
+not: `Error opening input: No such file or directory` — the *Star City* series
+had been deleted (gone from disk, from Sonarr and from Jellyfin) and a stale
+client was still asking for it. A full sweep of all 1115 library items found
+exactly one orphaned path, `tmp-audio-test/prototype.mkv`, left over from pass
+7's AAC prototype.
+
 **A dead end worth recording so nobody re-walks it.** The remote transcode's
 ffmpeg log carries 423 `Packet duration: -16 ... is out of range` warnings, and
 zero appear in the LAN audio-only transcode — an extremely tempting lead. It
@@ -228,6 +302,11 @@ reproducibility.
 | **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
 | **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
 | **47** | **qBittorrent upload cap 33.55 → 15 Mbps** (`up_limit` 4194304 → 1874944 B/s). The old value was 108% of the link's entire ~31 Mbps upstream, saturating the modem queue: 5% packet loss, 127 ms latency spikes. This is the root cause of the remote stutter (§0) | qBittorrent prefs, and pinned in `DESIRED_PREFS` in `scripts/qbittorrent_settings_enforce.py` | `curl -b <cookie> -d "limit=4194304" .../api/v2/transfer/setUploadLimit` and revert the constant |
+| **48** | **CAKE egress shaper** on internet-bound traffic at 28 Mbit, LAN exempt via an HTB split. `scripts/wan_shaper.sh` + `wan-shaper.service` (enabled), watched by `stack_watchdog.py` | new script, systemd unit | `sudo systemctl disable --now wan-shaper.service` |
+| **49** | **qBittorrent cap raised 15 → 20 Mbps** once CAKE was managing the queue, and **upload slots 50 → 6**. Both pinned in `DESIRED_PREFS`, with a test asserting cap + 8 Mbps remote stream ≤ 28 Mbit shaped | `scripts/qbittorrent_settings_enforce.py` | Edit the two constants |
+| **50** | **`qbittorrent_settings_enforce.py` on cron** (hourly, :47). The live cap was observed drifting back to UNLIMITED with the repo pin untouched — pinning is necessary but something has to re-assert it | crontab | Remove the cron line |
+| **51** | **µTP-only tested and rejected** — measurably worse jitter than TCP+uTP once CAKE is in place. No change left in effect | — | n/a, reverted |
+| **52** | **Jellyfin `RemoteClientBitrateLimit` 0 → 8 Mbps**, server-wide. Remote clients can no longer negotiate a bitrate the link cannot sustain | Jellyfin `/System/Configuration` | `POST` with `RemoteClientBitrateLimit: 0`; pre-change backup in `docs/jellyfin-config-backups/` |
 | **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200 | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env` | Delete the `ntfy — *` connections in each *arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
 | **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
 | **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
