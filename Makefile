@@ -22,7 +22,7 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 
 .PHONY: help check lint config bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
-        submodules install-hooks verify-runtime
+        submodules install-hooks verify-runtime backup-offsite
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -212,3 +212,6 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	     | grep -iE 'unhealthy|exited|restarting' || true); \
 	  if [ -z "$$u" ]; then echo "    none"; else echo "$$u" | sed 's/^/    !!! /'; rc=1; fi; \
 	exit $$rc
+
+backup-offsite: ## Push the newest local config backup off this box (restic)
+	@scripts/offsite_backup.sh --apply
