@@ -71,7 +71,7 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	@# permission bits and fail with `Permission denied` on influxdb's config.
 	@# Docker's default -- auto-creating the bind-mount source as root:root --
 	@# is correct there. Do not add it to this loop. ADR-0023.
-	@for d in qui ntfy diun; do \
+	@for d in qui ntfy diun beszel beszel-agent; do \
 	  p="$(CONFIG_DIRECTORY)/$$d"; \
 	  echo "==> $$p -> $(PUID):$(PGID)"; \
 	  mkdir -p "$$p"; \

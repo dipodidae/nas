@@ -38,3 +38,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0025](0025-watchtower-retired.md)                 | Watchtower retired; dockerproxy narrowed to what autoheal alone needs       |
 | [0026](0026-slskd-start-period-and-alert-noise.md) | slskd start_period must outlast a forced rescan; a startup must not page    |
 | [0027](0027-qui-cross-seed-prerequisites.md)       | qui cross-seed: the filesystem grant is the risk; ext4 has no reflink       |
+| [0028](0028-beszel-trend-lines.md)                 | Beszel trend lines; its agent must NOT use host networking here             |

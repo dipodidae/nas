@@ -21,6 +21,54 @@
     service: bazarr
   watch_repo: false
 
+# beszel
+#   plain semver tags
+- name: henrygd/beszel:0.18.8
+  metadata:
+    service: beszel
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - '^\d+\.\d+\.\d+$'
+  exclude_tags:
+    - '^latest$'
+    - '^nightly$'
+    - '^develop(ment)?$'
+    - '^edge$'
+    - '^main$'
+    - '^master$'
+    - '^unstable$'
+    - '^beta$'
+    - '^rc'
+    - '-rc'
+    - '^dev$'
+    - '-dev$'
+
+# beszel-agent
+#   plain semver tags; keep in lockstep with the hub
+- name: henrygd/beszel-agent:0.18.8
+  metadata:
+    service: beszel-agent
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - '^\d+\.\d+\.\d+$'
+  exclude_tags:
+    - '^latest$'
+    - '^nightly$'
+    - '^develop(ment)?$'
+    - '^edge$'
+    - '^main$'
+    - '^master$'
+    - '^unstable$'
+    - '^beta$'
+    - '^rc'
+    - '-rc'
+    - '^dev$'
+    - '-dev$'
+
 # byparr
 - name: ghcr.io/thephaseless/byparr:latest
   metadata:

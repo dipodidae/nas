@@ -332,6 +332,102 @@ services:
       disable: true
     # Watchtower-opt-out: control plane. ADR-0006.
 
+  # Historical CPU / RAM / disk / per-container trend lines -- the one thing the
+  # six existing monitoring layers lack. They all answer "is it broken NOW":
+  # healthchecks, autoheal, the watchdog, verify-runtime, the ops dashboard,
+  # ntfy. None of them can show a sawtooth, which is why five Jellyfin OOM kills
+  # in 48h were found by accident rather than by looking. ADR-0028.
+  beszel:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: henrygd/beszel:0.18.8
+    container_name: beszel
+    # INVARIANT: no LSIO root init; ${CONFIG_DIRECTORY}/beszel must already be
+    # ${PUID}:${PGID}. `make bootstrap`. ADR-0014.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    volumes:
+      - ${CONFIG_DIRECTORY}/beszel:/beszel_data
+    ports:
+      - '127.0.0.1:8090:8090' # hub UI; no public surface, reach it over SSH
+    networks:
+      - nas-network
+    # No swag=enable and no proxy-conf: this adds no public surface. No autoheal
+    # label either -- a dashboard is not worth an auto-restart path (ADR-0009).
+    healthcheck:
+      # Exec form with the hub's OWN health command, because this image is
+      # DISTROLESS -- there is no /bin/sh in it, so every CMD-SHELL healthcheck
+      # fails with `stat /bin/sh: no such file or directory` and the container
+      # reports unhealthy while being perfectly fine. Measured, not guessed.
+      test: [CMD, /beszel, health, --url, 'http://localhost:8090']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # The collector. Reaches Docker ONLY through dockerproxy -- ADR-0013 holds,
+  # and the endpoint set narrowed in ADR-0025 already covers it (listing
+  # containers and reading their stats are both CONTAINERS reads, so this
+  # service required no re-widening).
+  #
+  # DELIBERATE DEVIATION from upstream, and the reason is worth reading before
+  # "fixing" it: Beszel's own docs say the agent MUST use `network_mode: host`
+  # to collect network-interface stats. It does not use host networking here,
+  # because doing so would break two rules at once -- AGENTS.md forbids host
+  # networking, and a host-networked agent cannot resolve `dockerproxy` by
+  # service DNS, so it would force publishing dockerproxy on the host, which
+  # ADR-0013 explicitly refuses. The cost is NIC stats; CPU, memory, disk and
+  # per-container metrics all work. The WAN link -- the only interesting one --
+  # is already measured by scripts/wan_shaper.sh, which watches qdisc AND rate
+  # AND DSCP marks rather than just whether an interface exists. ADR-0028.
+  beszel-agent:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: henrygd/beszel-agent:0.18.8
+    container_name: beszel-agent
+    user: '${PUID:-1000}:${PGID:-1000}'
+    environment:
+      - LISTEN=45876
+      - HUB_URL=http://beszel:8090
+      # The hub DIALS the agent over SSH on LISTEN, so the agent only needs the
+      # hub's public key to authorise it. TOKEN is deliberately absent: it is
+      # for the agent-dials-hub WebSocket topology, the agent here never reads
+      # it, and `make check` correctly rejects a credential-shaped env var that
+      # the process inside does not use (ADR-0011).
+      - KEY=${BESZEL_KEY}
+      - DOCKER_HOST=tcp://dockerproxy:2375
+      # Beszel's Docker API timeout defaults to ~2.1s, which a busy box exceeds
+      # -- and a timed-out poll shows up as a GAP in the graph, i.e. exactly the
+      # thing this service exists to provide.
+      - DOCKER_TIMEOUT=10s
+    volumes:
+      # Read-only, and for disk stats only. The media disk is the one worth
+      # trending: 4.6 TB with no redundancy and no SMART (ADR-0023).
+      #
+      # `downloads` rather than the whole share ON PURPOSE. statfs reports
+      # WHOLE-FILESYSTEM totals regardless of which subdirectory is mounted, so
+      # this yields byte-identical numbers while not handing a metrics agent
+      # read access to every film and album on the disk. Verified: the agent
+      # still logs `Detected disk name=sda1 device=/dev/sda1`.
+      - ${SHARE_DIRECTORY}/downloads:/extra-filesystems/media:ro
+      - ${CONFIG_DIRECTORY}/beszel-agent:/var/lib/beszel-agent
+    depends_on:
+      beszel:
+        condition: service_started
+      dockerproxy:
+        condition: service_started
+    networks:
+      - nas-network
+    healthcheck:
+      # Same distroless constraint as the hub: exec form, the agent's own
+      # health command. There is no shell and no `nc` in this image.
+      test: [CMD, /agent, health]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # Push alerting for scripts/ and for diun/scrutiny. Self-hosted so
   # alert contents never leave the box; deny-all because the topic sits on a
   # public subdomain. Coverage limit: the watchdog and ntfy share this host, so

@@ -14,7 +14,7 @@ project, one reverse proxy, one 10 TB disk.
 | Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0                |
 | Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                           |
 | Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe (42 % worn, SMART-watched) |
-| Services        | 27 (4 built locally; ALL watched by diun, 5 manual-update)      |
+| Services        | 29 (4 built locally; ALL watched by diun, 7 manual-update)      |
 | Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01       |
 
 ---
@@ -52,7 +52,7 @@ make bootstrap      # creates nas-network and pre-chowns the two config dirs
                     # them crash-loop on `permission denied`. ADR-0014.
 
 make lint           # does the compose model even render?
-make check          # 42 invariant assertions
+make check          # 43 invariant assertions
 
 docker compose up -d 4eva-rootpage      # swag depends_on it being healthy
 docker compose up -d swag               # get TLS working first
@@ -150,7 +150,7 @@ boundaries and `depends_on` only resolves within a project.
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
 │   └── storage.yaml              # nextcloud
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
-├── docs/decisions/               # 28 ADRs — the incident history
+├── docs/decisions/               # 29 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
 └── qbittorrent/custom-cont-init.d/   # LSIO init hook, bind-mounted read-only
 ```
@@ -205,14 +205,16 @@ listed with its reason in `MANUAL_UPDATE_ONLY` in the checker.
 
 ### Control plane — `compose/infra.yaml`
 
-| Service       | Image                         | Ports            | wt     | Notes                                                                                                                        |
-| ------------- | ----------------------------- | ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `swag`        | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                           |
-| `dockerproxy` | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
-| `autoheal`    | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                     |
-| `ntfy`        | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                  |
-| `diun`        | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md) |
-| `scrutiny`    | ghcr.io/analogj/scrutiny      | `127.0.0.1:8086` | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md) |
+| Service        | Image                         | Ports            | wt     | Notes                                                                                                                        |
+| -------------- | ----------------------------- | ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `swag`         | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                           |
+| `dockerproxy`  | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
+| `autoheal`     | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                     |
+| `ntfy`         | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                  |
+| `beszel`       | henrygd/beszel                | `127.0.0.1:8090` | **NO** | Trend lines: CPU/RAM/disk/per-container history [ADR-0028](docs/decisions/0028-beszel-trend-lines.md)                        |
+| `beszel-agent` | henrygd/beszel-agent          | —                | **NO** | Collector. **No host networking** — see the ADR before "fixing" that                                                         |
+| `diun`         | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md) |
+| `scrutiny`     | ghcr.io/analogj/scrutiny      | `127.0.0.1:8086` | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md) |
 
 ### Download path — `compose/media-download.yaml`
 
@@ -318,8 +320,8 @@ ssh -L 8989:127.0.0.1:8989 <host>    # then http://localhost:8989
 
 ## Rules that will bite you
 
-These are asserted mechanically by `scripts/check-invariants.sh` — **42
-assertions** over 27 services, run by `make check`, by the pre-commit hook, and
+These are asserted mechanically by `scripts/check-invariants.sh` — **43
+assertions** over 29 services, run by `make check`, by the pre-commit hook, and
 by CI so a violation cannot merge. Each failure prints the ADR that explains why
 the rule exists — **read it before changing the rule.** Compose lines carrying
 `INVARIANT:` are the same contract.

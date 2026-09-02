@@ -112,6 +112,8 @@ MANUAL_UPDATE_ONLY = {
     "playlist-generator-db": "never bump a database engine under its data",
     "scrutiny":              "omnibus bundles InfluxDB; same rule as playlist-generator-db",
     "diun":                  "the thing that reports updates should not take one by surprise",
+    "beszel":                "PocketBase DB under the metric history; bump it deliberately",
+    "beszel-agent":          "must stay in lockstep with the hub it reports to",
 }
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
@@ -1103,6 +1105,49 @@ if "qui" in services and "qbittorrent" in services:
                  "UI has no business reading the media libraries.")
         else:
             ok("qui-data-alignment", f"/downloads -> {_qui_dl} on both")
+
+
+# ==========================================================================
+# 24. Nothing uses host networking, privileged mode, or host PID/IPC
+# ==========================================================================
+# AGENTS.md forbids all of these without justification, and there is currently
+# no justification anywhere in the stack. Asserted rather than trusted because
+# the pressure to add one is real and arrives with an upstream doc attached:
+# Beszel's own documentation says its agent MUST use `network_mode: host` to
+# collect network-interface stats. It does not, here, and the reasoning is worth
+# keeping because it is not just "the rule says no":
+#
+#   a host-networked container cannot resolve `dockerproxy` by service DNS, so
+#   it would force publishing the Docker API proxy on the host -- which ADR-0013
+#   refuses outright. Following the upstream layout would have broken TWO rules
+#   to gain NIC stats, and the only interesting interface (the WAN link) is
+#   already measured properly by scripts/wan_shaper.sh.
+#
+# ADR-0028.
+_bad_net, _bad_priv, _bad_ns = [], [], []
+for svc, sv in sorted(services.items()):
+    if str(sv.get("network_mode", "")).startswith(("host", "container:")):
+        _bad_net.append(f"{svc}={sv['network_mode']}")
+    if sv.get("privileged"):
+        _bad_priv.append(svc)
+    for key in ("pid", "ipc", "userns_mode", "uts"):
+        if str(sv.get(key, "")).startswith("host"):
+            _bad_ns.append(f"{svc}.{key}={sv[key]}")
+if _bad_net:
+    fail("no-host-namespaces", "ADR-0028",
+         f"{_bad_net} use host/container networking. It removes the network "
+         "isolation every other service has, and it breaks service DNS -- so a "
+         "host-networked container cannot reach dockerproxy and would force "
+         "publishing the Docker API on the host (ADR-0013 refuses that).")
+elif _bad_priv:
+    fail("no-host-namespaces", "ADR-0001",
+         f"{_bad_priv} request privileged mode, which defeats cap_drop: ALL "
+         "entirely. Grant measured capabilities instead, as scrutiny does.")
+elif _bad_ns:
+    fail("no-host-namespaces", "ADR-0001",
+         f"{_bad_ns} share a host namespace.")
+else:
+    ok("no-host-namespaces", f"{len(services)} services, all isolated")
 
 # ==========================================================================
 # Report
