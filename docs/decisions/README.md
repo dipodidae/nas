@@ -41,3 +41,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0028](0028-beszel-trend-lines.md)                 | Beszel trend lines; its agent must NOT use host networking here             |
 | [0029](0029-huntarr-rejected.md)                   | Huntarr rejected: archived upstream, unauthenticated \*arr API-key leak     |
 | [0030](0030-streamystats.md)                       | Streamystats: 3 containers, own VectorChord DB (not pgvector), API-only     |
+| [0031](0031-considered-and-rejected.md)            | Compose UIs, second notifiers/cleaners, socket mounts, Dozzle, Gatus        |

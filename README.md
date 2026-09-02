@@ -150,7 +150,7 @@ boundaries and `depends_on` only resolves within a project.
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
 │   └── storage.yaml              # nextcloud
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
-├── docs/decisions/               # 31 ADRs — the incident history
+├── docs/decisions/               # 32 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
 └── qbittorrent/custom-cont-init.d/   # LSIO init hook, bind-mounted read-only
 ```
