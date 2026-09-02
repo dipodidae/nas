@@ -40,3 +40,7 @@ vpn-configs/
 # in the repo root on 2026-09-01 — one `git add -A` away from a sudo password
 # in the history.
 .sudo-pwd
+
+# local, non-committed compose tweaks (see docs/decisions/0000-compose-layout.md)
+compose.override.yaml
+compose.override.yml

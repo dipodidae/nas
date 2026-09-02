@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+#
+# check-invariants.sh -- assert the things this stack has learned the hard way.
+#
+# Every check here corresponds to an incident. Each failure prints the ADR that
+# explains why the invariant exists, so a future change can read the reasoning
+# instead of rediscovering it. Run via `make check`; also wired as a
+# pre-commit hook.
+#
+# Exit codes follow the repo convention (AGENTS.md):
+#   0  all invariants hold
+#   1  one or more invariants violated
+#   2  fatal -- could not render the compose model at all
+#
+# Usage:
+#   scripts/check-invariants.sh            # check
+#   scripts/check-invariants.sh --verbose  # also list each passing check
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 2
+
+VERBOSE=0
+[ "${1:-}" = "--verbose" ] || [ "${1:-}" = "-v" ] && VERBOSE=1
+
+if ! docker compose config -q 2>/dev/null; then
+  echo "FATAL: 'docker compose config' failed -- the compose model does not render." >&2
+  docker compose config -q
+  exit 2
+fi
+
+VERBOSE=$VERBOSE python3 - <<'PY'
+import json, os, re, subprocess, sys
+
+try:
+    raw = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    model = json.loads(raw)
+except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+    print(f"FATAL: could not render the compose model: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+services = model["services"]
+verbose = os.environ.get("VERBOSE") == "1"
+
+failures = []
+warnings = []
+passes = []
+
+def fail(check, adr, msg):
+    failures.append((check, adr, msg))
+
+def ok(check, msg=""):
+    passes.append((check, msg))
+
+def warn(check, adr, msg):
+    warnings.append((check, adr, msg))
+
+def env_of(svc):
+    return services[svc].get("environment") or {}
+
+def caps(svc):
+    return set(services[svc].get("cap_add") or [])
+
+def labels(svc):
+    return services[svc].get("labels") or {}
+
+# --------------------------------------------------------------------------
+# Documented waivers. Every entry needs a reason and an ADR. Shrink this list;
+# never grow it without a decision record.
+# --------------------------------------------------------------------------
+
+# Services deliberately NOT labelled for watchtower. This list is what lets the
+# checker tell "deliberately unlabeled" from "someone forgot the label".
+# ADR-0006. (Kept here rather than as an x- field in the compose files: a
+# service-level x- key shows up in `docker compose config` and risks
+# perturbing the config hash that decides whether `up -d` recreates. ADR-0000.)
+WATCHTOWER_OPTOUT = {
+    "qbittorrent":           "pinned tag; watchtower's non-atomic recreate deleted it for 13h",
+    "jellyfin":              "worst service to lose to a failed recreate; slow to stop",
+    "dockerproxy":           "watchtower must not restart its own dependency",
+    "watchtower":            "must not self-update",
+    "autoheal":              "control plane",
+    "playlist-generator-db": "never auto-update a database engine under its data",
+    "4eva-rootpage":         "locally-built image; watchtower cannot pull it",
+    "lidarr-bulk":           "locally-built image; watchtower cannot pull it",
+    "ongehoord":             "locally-built image; watchtower cannot pull it",
+    "playlist-generator":    "locally-built image; watchtower cannot pull it",
+}
+
+# KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
+# Warned about on every run so it cannot quietly become the convention.
+CAP_DROP_WAIVER = {
+    "playlist-generator":    "ADR-0018 -- nginx needs NET_BIND_SERVICE; set not yet determined",
+    "playlist-generator-db": "ADR-0018 -- pg entrypoint chowns PGDATA; set not yet determined",
+}
+
+# Ports that are public on purpose. Anything else must bind 127.0.0.1.
+PUBLIC_PORT_ALLOWLIST = {
+    443:  "SWAG HTTPS",
+    80:   "SWAG HTTP (ACME + redirect)",
+    8096: "Jellyfin HTTP (LAN clients)",
+    8920: "Jellyfin HTTPS (LAN clients)",
+    7359: "Jellyfin auto-discovery (UDP)",
+    1900: "Jellyfin DLNA/SSDP (UDP)",
+    6881: "qBittorrent BitTorrent inbound (router-forwarded)",
+    50300: "slskd Soulseek inbound (router-forwarded)",
+}
+
+# Services whose role legitimately involves holding a credential.
+SECRET_OK = {
+    "swag", "slskd", "qui", "ntfy", "lidarr-bulk", "ongehoord",
+    "playlist-generator", "playlist-generator-db", "watchtower",
+}
+
+# Env vars that must NOT appear on a given service, whatever else changes.
+ENV_DENY = {
+    "qbittorrent": (
+        {"QBITTORRENT_USER", "QBITTORRENT_PASS"},
+        "ADR-0011 -- the LSIO image never reads them (linuxserver#228) and "
+        "they only leak into `docker inspect`. They belong in .env for scripts/.",
+    ),
+}
+
+SECRET_PAT = re.compile(r"PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|_PASS\b|_KEY\b|CREDENTIAL", re.I)
+
+# ==========================================================================
+# 1. qBittorrent image tag is pinned, and >= 5.2.2
+# ==========================================================================
+img = services.get("qbittorrent", {}).get("image", "")
+tag = img.rpartition(":")[2] if ":" in img else ""
+if not tag or tag == "latest":
+    fail("qbit-tag-pinned", "ADR-0005",
+         f"qbittorrent image must be a pinned tag, not '{tag or '<none>'}': {img}")
+else:
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", tag)
+    if not m:
+        fail("qbit-tag-pinned", "ADR-0005",
+             f"cannot parse a qBittorrent version out of tag '{tag}' -- "
+             "the >=5.2.2 floor cannot be verified")
+    else:
+        ver = tuple(int(x) for x in m.groups())
+        if ver < (5, 2, 2):
+            fail("qbit-version-floor", "ADR-0005",
+                 f"qBittorrent {'.'.join(map(str, ver))} < 5.2.2: upstream #24357 "
+                 "makes a recreate unable to prove its lockfile is stale, so qbit "
+                 "refuses to start. Fixed by #24363 in 5.2.2.")
+        else:
+            ok("qbit-tag-pinned", f"{tag} (>= 5.2.2)")
+
+# ==========================================================================
+# 2. qBittorrent has KILL, and does NOT have FOWNER/FSETID
+# ==========================================================================
+qc = caps("qbittorrent")
+if "KILL" not in qc:
+    fail("qbit-cap-kill", "ADR-0004",
+         "qbittorrent is missing cap_add: KILL. s6 runs as root and must signal "
+         "qbittorrent-nox (uid 1000); without CAP_KILL every SIGTERM is refused "
+         "with EPERM and Docker SIGKILLs after stop_grace_period. Measured "
+         "120.3s vs 6.2s.")
+else:
+    ok("qbit-cap-kill")
+
+widened = qc & {"FOWNER", "FSETID"}
+if widened:
+    fail("qbit-cap-narrow", "ADR-0004",
+         f"qbittorrent has {sorted(widened)}, which was verified NOT needed. "
+         "KILL alone is sufficient -- do not widen the grant.")
+else:
+    ok("qbit-cap-narrow")
+
+# ==========================================================================
+# 3. Watchtower labels: qbittorrent and jellyfin must carry none; every other
+#    opt-out must be a documented one, and everything else must be labelled.
+# ==========================================================================
+WT = "com.centurylinklabs.watchtower.enable"
+for svc in ("qbittorrent", "jellyfin"):
+    if WT in labels(svc):
+        fail("watchtower-optout", "ADR-0006",
+             f"{svc} carries the watchtower enable label. Its non-atomic "
+             "stop->remove->create leaves NO container when the remove fails "
+             "(qbittorrent, 13h, 2026-09-01). Update it by hand instead.")
+    else:
+        ok("watchtower-optout", f"{svc} unlabelled")
+
+for svc in sorted(services):
+    labelled = labels(svc).get(WT) == "true"
+    if labelled and svc in WATCHTOWER_OPTOUT:
+        fail("watchtower-optout", "ADR-0006",
+             f"{svc} is on the documented opt-out list "
+             f"({WATCHTOWER_OPTOUT[svc]}) but carries the enable label.")
+    elif not labelled and svc not in WATCHTOWER_OPTOUT:
+        fail("watchtower-coverage", "ADR-0006",
+             f"{svc} has no watchtower label and is not on the documented "
+             "opt-out list in this script. Either label it, or add it to "
+             "WATCHTOWER_OPTOUT with a reason so 'deliberate' is "
+             "distinguishable from 'forgotten'.")
+
+# ==========================================================================
+# 4. mem_limit implies memswap_limit == mem_limit
+# ==========================================================================
+found_mem = False
+for svc, sv in sorted(services.items()):
+    ml, msl = sv.get("mem_limit"), sv.get("memswap_limit")
+    if ml is None:
+        if msl is not None:
+            fail("memswap-pairing", "ADR-0001",
+                 f"{svc} sets memswap_limit without mem_limit.")
+        continue
+    found_mem = True
+    if str(msl) != str(ml):
+        fail("memswap-pairing", "ADR-0007",
+             f"{svc}: memswap_limit ({msl}) != mem_limit ({ml}). Without the "
+             "pair it can balloon into host swap and thrash everything else "
+             "before finally being killed.")
+    else:
+        ok("memswap-pairing", f"{svc} {int(ml)//2**30}g == {int(ml)//2**30}g")
+if not found_mem:
+    warn("memswap-pairing", "ADR-0007/0008",
+         "no service sets mem_limit -- qbittorrent's 4g and jellyfin's 10g "
+         "backstops appear to have been removed. Intentional?")
+
+# ==========================================================================
+# 5. Every published port is loopback-bound or explicitly public
+# ==========================================================================
+for svc, sv in sorted(services.items()):
+    for p in sv.get("ports") or []:
+        host_ip = p.get("host_ip", "")
+        target = p.get("target")
+        pub = p.get("published")
+        if host_ip in ("127.0.0.1", "::1"):
+            continue
+        try:
+            pubn = int(str(pub).split("-")[0])
+        except (TypeError, ValueError):
+            pubn = target
+        if pubn in PUBLIC_PORT_ALLOWLIST:
+            ok("port-exposure", f"{svc} :{pubn} public ({PUBLIC_PORT_ALLOWLIST[pubn]})")
+        else:
+            fail("port-exposure", "ADR-0001",
+                 f"{svc} publishes :{pubn} on all interfaces "
+                 f"(host_ip={host_ip or 'unset'}). Internal WebUIs must bind "
+                 "127.0.0.1 -- the public surface is SWAG. Add it to "
+                 "PUBLIC_PORT_ALLOWLIST only if it is meant to be reachable "
+                 "from the LAN or the internet.")
+
+# ==========================================================================
+# 6. cap_drop: ALL and no-new-privileges everywhere
+# ==========================================================================
+for svc, sv in sorted(services.items()):
+    sec = sv.get("security_opt") or []
+    if "no-new-privileges:true" not in sec:
+        fail("no-new-privileges", "ADR-0001",
+             f"{svc} is missing security_opt: no-new-privileges:true.")
+    dropped = {c.upper() for c in (sv.get("cap_drop") or [])}
+    if "ALL" not in dropped:
+        if svc in CAP_DROP_WAIVER:
+            warn("cap-drop-all", "ADR-0018",
+                 f"{svc} does not drop capabilities ({CAP_DROP_WAIVER[svc]})")
+        else:
+            fail("cap-drop-all", "ADR-0001",
+                 f"{svc} is missing cap_drop: ALL. Add it with a selective "
+                 "cap_add, or add a waiver with an ADR if it genuinely cannot.")
+
+# ==========================================================================
+# 7. Capped json-file logging everywhere
+# ==========================================================================
+for svc, sv in sorted(services.items()):
+    lg = sv.get("logging") or {}
+    opts = lg.get("options") or {}
+    if lg.get("driver") != "json-file":
+        fail("log-capped", "ADR-0001",
+             f"{svc} logging driver is {lg.get('driver') or '<unset>'}, "
+             "expected json-file.")
+    elif not (opts.get("max-size") and opts.get("max-file")):
+        fail("log-capped", "ADR-0001",
+             f"{svc} json-file logging is missing max-size and/or max-file -- "
+             "an uncapped container log will fill the disk.")
+
+# ==========================================================================
+# 8. sonarr/radarr/lidarr (and bazarr) mount ${SHARE_DIRECTORY}:/data
+# ==========================================================================
+DATA_REQUIRED = {
+    "sonarr": "ADR-0002", "radarr": "ADR-0002",
+    "lidarr": "ADR-0003",   # staged but must stay mounted
+    "bazarr": "ADR-0015",   # needed for path resolution, not hardlinks
+}
+for svc, adr in sorted(DATA_REQUIRED.items()):
+    targets = {v.get("target") for v in (services.get(svc, {}).get("volumes") or [])}
+    if "/data" not in targets:
+        fail("data-mount", adr,
+             f"{svc} does not mount the share at /data. Hardlinks cannot cross "
+             "a mount point (0.96 TiB of duplication), and bazarr additionally "
+             "resolves the /data/... paths the *arrs report.")
+    else:
+        ok("data-mount", f"{svc} -> /data")
+
+# ==========================================================================
+# 9. dockerproxy is the only thing touching the Docker socket
+# ==========================================================================
+holders = sorted(
+    svc for svc, sv in services.items()
+    if any("docker.sock" in str(v.get("source", "")) for v in (sv.get("volumes") or []))
+)
+if holders != ["dockerproxy"]:
+    extra = [h for h in holders if h != "dockerproxy"]
+    if extra:
+        fail("docker-sock", "ADR-0013",
+             f"{extra} mount /var/run/docker.sock. Only dockerproxy may -- the "
+             "socket is root on the host. Route through tcp://dockerproxy:2375.")
+    if "dockerproxy" not in holders:
+        fail("docker-sock", "ADR-0013",
+             "dockerproxy does not mount the Docker socket; watchtower and "
+             "autoheal have no route to the Docker API.")
+else:
+    ok("docker-sock", "dockerproxy only")
+
+# ==========================================================================
+# 10. No secret-shaped env on a container that has no business holding one
+# ==========================================================================
+for svc, (denied, why) in ENV_DENY.items():
+    present = denied & set(env_of(svc))
+    if present:
+        fail("env-secrets", "ADR-0011",
+             f"{svc} sets {sorted(present)}. {why}")
+    else:
+        ok("env-secrets", f"{svc} clean of {sorted(denied)}")
+
+for svc in sorted(services):
+    if svc in SECRET_OK:
+        continue
+    leaked = sorted(k for k in env_of(svc) if SECRET_PAT.search(k))
+    if leaked:
+        fail("env-secrets", "ADR-0011",
+             f"{svc} carries secret-shaped env {leaked} but is not on the "
+             "SECRET_OK list. A container gets a credential only if the process "
+             "inside it actually reads one; otherwise it is just sitting in "
+             "`docker inspect`. Add it to SECRET_OK if this is legitimate.")
+
+# ==========================================================================
+# Report
+# ==========================================================================
+GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
+if not sys.stdout.isatty():
+    GREEN = RED = YELLOW = DIM = RESET = ""
+
+if verbose:
+    for check, msg in passes:
+        print(f"{GREEN}  ok{RESET}   {check:22} {DIM}{msg}{RESET}")
+
+for check, adr, msg in warnings:
+    print(f"{YELLOW}  WARN{RESET} {check:22} [{adr}] {msg}")
+
+for check, adr, msg in failures:
+    print(f"{RED}  FAIL{RESET} {check:22} [{adr}] {msg}")
+
+n_checks = len(passes) + len(failures)
+print()
+if failures:
+    print(f"{RED}invariant check FAILED{RESET}: {len(failures)} violation(s), "
+          f"{len(warnings)} warning(s), across {len(services)} services.")
+    print("Read the ADR named on each line before changing the invariant. "
+          "docs/decisions/")
+    sys.exit(1)
+
+print(f"{GREEN}invariants hold{RESET}: {n_checks} assertions over "
+      f"{len(services)} services, {len(warnings)} warning(s).")
+if warnings:
+    print(f"{DIM}Warnings are known gaps with an ADR, not exemptions.{RESET}")
+sys.exit(0)
+PY
