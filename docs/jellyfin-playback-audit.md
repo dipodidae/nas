@@ -3,6 +3,10 @@
 > **Revision history** (kept per standing instructions — corrections earn
 > their space):
 >
+> *Only the newest entry is marked `current`. If you are adding a pass, clear
+> the previous one's marker — three entries once claimed to be "this revision"
+> at the same time, in the one document meant to orient someone cold.*
+>
 > - **Pass 1**: enabled VAAPI hardware transcoding, declared it "the fix."
 >   Wrong — the session never encoded video at all (`-codec:v:0 copy`,
 >   direct stream; only DTS audio was transcoded). VAAPI accelerates neither.
@@ -28,7 +32,7 @@
 >   fallback track. Reported Sonarr's import notification as verified and
 >   Radarr's/Lidarr's as "blocked on stalled downloads, not a config
 >   failure."
-> - **Pass 8 (this revision)**: **corrects pass 7's central conclusion.**
+> - **Pass 8**: **corrects pass 7's central conclusion.**
 >   The *arr → Jellyfin "Update Library" notifications were not merely
 >   unverified for Radarr and Lidarr — they were *broken for all three*, in
 >   a way pass 7's verification method could not have detected, and the
@@ -38,7 +42,7 @@
 >   the global task, converted the first AAC batch, fixed Bazarr's failing
 >   providers, and found two further silent failures nobody had noticed
 >   (§3.3).
-> - **Pass 9 (this revision)**: closed the three loose ends pass 8 left and
+> - **Pass 9**: closed the three loose ends pass 8 left and
 >   reversed one of its own recommendations. Restarted `autoheal` after
 >   establishing *why* it was stopped (and fixed two timeout defects that
 >   would have made it harmful). Generalised the two silent-failure findings
@@ -53,7 +57,7 @@
 >   capacity, saturating the uplink queue and costing 5% packet loss. See §0.
 >   Nine passes had been debugging the wrong machine; the earlier work fixed a
 >   real OOM problem that was simply not the reported symptom.
-> - **Pass 11 (2026-09-02)**: replaced the static bandwidth budget with DSCP
+> - **Pass 11 (2026-09-02, current)**: replaced the static bandwidth budget with DSCP
 >   marking so torrents yield automatically; split the qBittorrent cap into
 >   shaped and degraded values because one number could not be both a capacity
 >   target and a safety net; made the shaper answer for its own behaviour after
@@ -413,9 +417,15 @@ the exposure getting worse and does nothing about the exposure itself, because
 git history is public and permanent. **A published credential must be rotated.**
 The `.env` file is gitignored and is the only place secrets belong.
 
-While in there: `.sudo-pwd` was mode **664** — group- and world-readable, in the
-repository root, containing a sudo password. Now `600`, and gitignored since
-2026-09-01.
+While in there: `.sudo-pwd` was mode **664** — group- and world-readable, in
+the repository root, containing a sudo password. **It has since been deleted.**
+The pattern that replaced it was already in the repo: `/etc/sudoers.d/nas-ops`
+grants exactly what automation needs — `wan_shaper.sh apply|status|check|clear`
+and a read-only diagnostic set (`smartctl`, `iptables -t mangle -S/-L`,
+`systemctl status/list-units`, `tune2fs -l`) — passwordless, and nothing else.
+Verified before deleting the file: every grant works, and `sudo cat /etc/shadow`
+is refused. Adding to that file is the correct way to give automation a new root
+capability; restoring a stored password is not.
 
 ---
 
@@ -436,6 +446,68 @@ error` lines in the last six hours. The read-only case is the one to fear —
 ext4 does it on error by default, and at that point every *arr import fails
 while every container still reports healthy. That is the same failure shape as
 everything else in this document.
+
+**The NVMe wear turned out to be the memory bug, already fixed.** The raw
+numbers look alarming — 42% used, **31.4 TB written**, of which ~572 GB is swap
+*since boot* — and a first reading suggests an unexplained memory-pressure
+problem measured in terabytes of flash. Checked against actual uptime rather
+than assumed:
+
+| | |
+|---|---|
+| uptime at measurement | **9.1 days**, so 572 GB = **63 GB/day** of swap writes |
+| lifetime average, all writes | 31.4 TB over 9,789 powered-on hours = **77 GB/day** |
+| so swap is | **82% of everything ever written to this SSD** |
+| current swapout rate | **0 pages over a 420 s window** — but see the caveat below |
+
+**Caveat, because the first reading here was overstated.** A 60-second sample
+showed 0 pages and that was written up as "swapping has stopped". The cumulative
+counter then moved **2.3 GB between two readings ~40 minutes apart**, so it is
+*bursty*, not stopped. Re-measured over 420 s: 0 pages again. The burst window
+contained no stack activity that explains it — `playlist-sync` last ran at 00:10,
+twelve hours earlier — but it did contain a `du -sh` walk over 79 GB of backups
+and other diagnostics of mine, which is the kind of page-cache pressure that
+evicts anonymous pages. Best current reading: **idle at rest, brief bursts under
+heavy filesystem walks.** Do not treat "0 over a minute" as proof of anything;
+this counter needs a long window.
+
+All six OOM kills in this boot fall between 2026-08-30 10:15 and 2026-09-01
+05:34 — *before* `MALLOC_ARENA_MAX` and `DOTNET_EnableWriteXorExecute` went in
+on the afternoon of 09-01. Nothing has been OOM-killed since, and the sustained
+swapout rate is now zero. **The 572 GB is attributable to the Jellyfin
+native-memory leak of §1**, not a second
+mystery: the same bug, seen through a different instrument.
+
+That reframes the memory work. At 77 GB/day the remaining 43 TB of endurance is
+~1.5 years; at the post-fix ~14 GB/day it is ~8. **The arena/W^X fix bought
+roughly six and a half years of SSD life as a side effect**, which nobody had
+connected to it. The wear already spent is spent; the cause is closed.
+
+Residual swap (6.6 GB, `user.slice`) is occupancy, not churn — mostly the stale
+VS Code Server below. It costs nothing ongoing.
+
+**Backups: one premise corrected, one confirmed.** The concern was that backups
+live on the disk they would be needed to recover from. Checked per device:
+
+| | live copy | backup copy | verdict |
+|---|---|---|---|
+| service configs | NVMe (`.docker-config`) | USB (`backups/nas-configs`) | **two devices — correct as-is** |
+| Bazarr config (row 43) | NVMe | USB | two devices, fine |
+| **AAC originals (row 30)** | **USB** | **USB** | **one device — no protection from disk loss** |
+
+So the config backups are already on a different physical device from what they
+restore. The AAC originals are not, and that is real: "originals preserved"
+protects against a bad conversion, not against losing the drive.
+
+Worth knowing before deciding what to do with those 79 GB: **the original DTS
+track survives byte-identical inside every converted file** (`ffprobe` shows
+`dts 6ch` + `aac 2ch default`). The separate originals therefore protect only
+against a defect in the container remux — which is now well tested — and not
+against audio loss. That makes them much lower value than the folder name
+suggests.
+
+The media itself remains the real exposure: **4.7 TB on one USB disk with no
+redundancy and no SMART.** That is a size problem, not a scripting one.
 
 **Noted, not acted on:**
 
@@ -565,6 +637,7 @@ reproducibility.
 | **60** | **Media-drive watchdog checks**: mount present, not remounted read-only, free space, kernel I/O/USB/EXT4 errors. Added because the USB bridge refuses SMART under every `smartctl -d` type, so no disk-health signal exists | `scripts/stack_watchdog.py` | Delete `check_media_storage` and its call |
 | **61** | **`.sudo-pwd` permissions 664 → 600** — it was group- and world-readable | host filesystem | `chmod 664` (do not) |
 | **62** | **Exposed credential rotated** — see §0.5. `PLAYLIST_GENERATOR_PASSWORD` had been public on GitHub since 2026-05-26; rotated and verified, hardcoded secrets scrubbed from four tracked files | `.env`, `scripts/legacy/qbittorrent-scheduler.py`, `scripts/deduplicate_ebooks*.py`, `scripts/EBOOK_DEDUPLICATION_README.md` | n/a — never restore a published credential |
+| **63** | **`.sudo-pwd` deleted**, replaced by `/etc/sudoers.d/nas-ops`: `wan_shaper.sh apply\|status\|check\|clear` plus a read-only diagnostic set, passwordless, nothing else. No secret on disk | host `/etc/sudoers.d/nas-ops` | `rm` the sudoers file; do **not** restore a stored password |
 
 ---
 
@@ -1178,34 +1251,32 @@ background with no pollable progress (§3.2).
 
 ## 5. Needs Tom
 
-Short, and this is the whole list.
+1. **The stale VS Code Server** (§0.6) — 5.5 GB of swap, 499 MB resident, zero
+   established connections since 2026-09-01. `kill 306070` reclaims it. Left
+   alone because it is your editor session.
+2. **79 GB of AAC originals** (§0.6) — they sit on the same disk as the files
+   they protect, so they guard against a bad remux, not disk loss. And the
+   original DTS track survives byte-identical *inside* every converted file, so
+   they do not protect the audio either. Reclaimable if you want the space.
+3. **The media has no second copy.** 4.7 TB on one USB disk, no redundancy, no
+   SMART. The watchdog now detects failure (row 60); nothing survives it. A size
+   problem, and the only item here that needs money rather than a script.
+4. **Blue Öyster Cult duplicate tracks** — two copies each of tracks 04 and 08
+   differing only in apostrophe character; Lidarr's pending rename would
+   overwrite one with the other. Noted in `AGENTS.md`; only you can pick.
+5. **Bazarr credentials** — a working opensubtitles.com login and a fresh
+   addic7ed Cloudflare cookie. Both providers stay disabled, credentials
+   retained, so it is a toggle.
+6. **The playlist pipeline takes 10.7 h and then fails** (§3.6) with `"Stream
+   closed without a completion signal"`. The `flock` works correctly; the
+   6-hourly schedule is a fiction. Belongs to playlist-generator, not here.
+7. **One orphaned Jellyfin row** — `tmp-audio-test/prototype.mkv`. Both delete
+   routes 404 because its parent library GUID is gone; removing it needs SQLite
+   surgery with Jellyfin stopped. Agreed to leave it.
 
-1. **The stale VS Code Server** holding 5.5 GB of swap (§0.6) — zero
-   connections since 2026-09-01. `kill 306070` reclaims it, but it is your
-   editor session so I left it alone.
-2. **Blue Öyster Cult duplicate tracks** — `/music/Blue Öyster Cult/1977 -
-   Spectres/` holds two copies each of tracks 04 and 08, differing only in
-   apostrophe character. Lidarr's pending rename would overwrite one with the
-   other. Noted in `AGENTS.md`; only you can pick which copy to keep.
-3. **Bazarr credentials** — a working opensubtitles.com login and a fresh
-   addic7ed Cloudflare cookie would let both providers back on. They stay
-   disabled with credentials retained, so it is a toggle.
-4. **`.sudo-pwd` still exists**, now `600` and gitignored. A plaintext sudo
-   password on disk is a deliberate trade-off for unattended host work; worth
-   deciding whether you still want it there.
-5. **The playlist pipeline takes 10.7 hours and then fails** (§3.6) with
-   `"Stream closed without a completion signal"`. The `flock` is working
-   correctly and the schedule is a fiction — a 6-hourly job that runs for 10.7 h
-   effectively runs twice a day. That belongs to playlist-generator, not here.
-6. **One orphaned Jellyfin row** — `tmp-audio-test/prototype.mkv`, from pass 7's
-   prototype. Both delete routes return 404 because its parent library GUID no
-   longer exists; removing it needs SQLite surgery with Jellyfin stopped, which
-   is disproportionate for one invisible row. Agreed to leave it.
-
-**Closed since pass 8:** the AAC rollout (declined; the 5 free flips done), the
-5.1 question (answered — it transcodes on stereo-output browsers), autoheal
-(running, two timeout defects fixed), the cron-silence class (wrapped + linted),
-the ruff backlog, the owed Jellyfin restart, the remote stutter itself (§0), the
-per-viewer budget (replaced by DSCP), the shaper's self-check, the 85% rate
-question (rejected on data), and the off-box heartbeat — now configured and
-drilled in both directions, alive *and* `/fail`, rather than only the happy path.
+**Closed:** the remote stutter (§0), the exposed credential (§0.5), the NVMe
+wear question (§0.6 — it was the memory bug, already fixed), `.sudo-pwd`
+(deleted, replaced by scoped sudoers), the off-box heartbeat (configured and
+drilled both directions), the per-viewer budget (replaced by DSCP), the shaper's
+self-check, the 85% rate question (rejected on data), the AAC rollout, the 5.1
+question, autoheal, the cron-silence class, and the ruff backlog.
