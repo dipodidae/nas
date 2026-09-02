@@ -39,6 +39,7 @@ import argparse
 import http.cookiejar
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -65,31 +66,57 @@ DEFAULT_QBT_HOST = "http://localhost:8080"
 # If the connection ever changes, re-measure before changing this: throttle
 # qBittorrent, then watch /sys/class/net/<wan>/statistics/tx_bytes during a
 # multi-stream upload. Keep the cap near half of what you measure.
-UPLOAD_LIMIT_BYTES_PER_SEC = 3_124_224  # 3051 KiB/s = 25 Mbps; qBittorrent rounds
-# to whole KiB, so match its rounded value or enforcement never converges.
+# Two caps, because one number cannot do two jobs.
 #
-# This number is no longer a bandwidth *reservation*. scripts/wan_shaper.sh marks
-# qBittorrent's egress DSCP CS1, which puts it in CAKE's Bulk tin: measured, it
-# uses ~14 Mbps when the link is idle and collapses to 1.76 Mbps -- exactly the
-# 6.25% Bulk threshold -- the moment any other flow appears, handing 25.7 Mbps to
-# that flow. Yielding is automatic and scales to any number of viewers, so there
-# is nothing to reserve arithmetically.
+# SHAPED: what qBittorrent may use while scripts/wan_shaper.sh is in place. Its
+# egress is marked DSCP CS1, so CAKE's Bulk tin makes it collapse to 1.76 Mbps
+# (the 6.25% threshold) the instant any other flow appears. Yielding is
+# automatic, so this is a pure capacity number, not a reservation.
+UPLOAD_LIMIT_BYTES_PER_SEC = 3_124_224  # 3051 KiB/s = 25 Mbps
 #
-# What the cap still does is bound the damage if the shaper is ever absent -- tc
-# state does not survive a link-down, and there is a window before the watchdog
-# notices. So it must stay BELOW the ~31 Mbps real line rate. The original defect
-# was a cap of 33.55 Mbps, i.e. 108% of the link, which is not a cap at all.
+# DEGRADED: what it may use when the shaper is GONE. `tc` state is lost on
+# link-down, and nothing then stands between BitTorrent and the modem queue.
+# 25 Mbps unshaped would land in the same range as the original defect -- the
+# 33.55 Mbps cap produced 23.4 Mbps of real upload and 5% packet loss. 15 Mbps
+# unshaped was measured at 16.1 Mbps upload with 0% loss and 37 ms max RTT, so
+# it is a validated fallback rather than a guess.
+UPLOAD_LIMIT_DEGRADED_BYTES_PER_SEC = 1_874_944  # 1831 KiB/s = 15 Mbps
+
+# 50 upload slots on a ~31 Mbps uplink is ~0.6 Mbps each: the queue depth
+# problem is the *number of concurrent flows* competing for one bottleneck, not
+# only the aggregate rate. 6 slots is ~4 Mbps each and leaves a far shallower
+# queue for CAKE to manage.
 MAX_UPLOAD_SLOTS = 6
 
-DESIRED_PREFS = {
+WAN_IF = "enp88s0"
+
+BASE_PREFS = {
   "auto_tmm_enabled": True,
   "category_changed_tmm_enabled": True,
   "save_path_changed_tmm_enabled": True,
   "temp_path_enabled": True,
   "temp_path": "/downloads/incomplete/qbittorrent",
-  "up_limit": UPLOAD_LIMIT_BYTES_PER_SEC,
   "max_uploads": MAX_UPLOAD_SLOTS,
 }
+
+
+def shaper_present(wan_if: str = WAN_IF) -> bool:
+  """True when the CAKE egress shaper is installed. Reading tc needs no root."""
+  try:
+    out = subprocess.run(
+      ["tc", "qdisc", "show", "dev", wan_if], capture_output=True, text=True, timeout=15, check=False
+    )
+  except (OSError, subprocess.TimeoutExpired):
+    return False
+  return out.returncode == 0 and "cake" in out.stdout
+
+
+def desired_prefs(shaped: bool) -> dict:
+  """Settings to enforce, with the upload cap chosen by the shaper's state."""
+  return {
+    **BASE_PREFS,
+    "up_limit": UPLOAD_LIMIT_BYTES_PER_SEC if shaped else UPLOAD_LIMIT_DEGRADED_BYTES_PER_SEC,
+  }
 
 
 def plan_pref_changes(current: dict, desired: dict) -> dict:
@@ -98,6 +125,17 @@ def plan_pref_changes(current: dict, desired: dict) -> dict:
   Pure. Keys absent from ``current`` count as differing (will be set).
   """
   return {k: v for k, v in desired.items() if current.get(k) != v}
+
+
+def describe_drift(current: dict, changes: dict) -> str:
+  """Render what each drifted setting was found at, not just what it will become.
+
+  The upload cap reverted once with the repo pin intact and the cause was never
+  established -- the container had not restarted in the window and alt-speed was
+  off. Logging the *observed* value timestamps the next occurrence and says what
+  it reverted to, which is the difference between diagnosing it and guessing.
+  """
+  return ", ".join(f"{k}: found {current.get(k)!r} -> setting {v!r}" for k, v in sorted(changes.items()))
 
 
 def collect_unmanaged_hashes(torrents: list[dict]) -> list[str]:
@@ -205,13 +243,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ERROR: cannot read qBittorrent state: {exc}", file=sys.stderr)
     return 2
 
-  pref_changes = plan_pref_changes(prefs, DESIRED_PREFS)
+  shaped = shaper_present()
+  pref_changes = plan_pref_changes(prefs, desired_prefs(shaped))
   unmanaged = collect_unmanaged_hashes(torrents)
   unmanaged_set = set(unmanaged)
   targets = summarize_targets([t for t in torrents if t.get("hash") in unmanaged_set], categories)
 
   print("=== qBittorrent settings enforce ===" + ("  [DRY RUN]" if args.dry_run else ""))
-  print(f"pref changes: {pref_changes or 'none'}")
+  print(f"wan shaper: {'present' if shaped else 'MISSING -> degraded upload cap'}")
+  print(f"pref changes: {describe_drift(prefs, pref_changes) if pref_changes else 'none'}")
   print(f"torrents to auto-manage: {len(unmanaged)} of {len(torrents)}")
   for path, n in sorted(targets.items()):
     print(f"  -> {path}: {n}")

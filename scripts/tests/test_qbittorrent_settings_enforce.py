@@ -35,7 +35,7 @@ def test_plan_pref_changes_returns_only_differing_keys():
     "up_limit": 4194304,
     "unrelated": "x",
   }
-  desired = qbt.DESIRED_PREFS
+  desired = qbt.desired_prefs(shaped=True)
   changes = qbt.plan_pref_changes(current, desired)
   assert changes == {
     "auto_tmm_enabled": True,
@@ -76,8 +76,8 @@ def test_upload_limit_is_not_a_per_viewer_budget():
 
 
 def test_plan_pref_changes_empty_when_already_correct():
-  current = dict(qbt.DESIRED_PREFS)
-  assert qbt.plan_pref_changes(current, qbt.DESIRED_PREFS) == {}
+  current = dict(qbt.desired_prefs(shaped=True))
+  assert qbt.plan_pref_changes(current, qbt.desired_prefs(shaped=True)) == {}
 
 
 # ---- collect_unmanaged_hashes --------------------------------------------
@@ -118,3 +118,24 @@ def test_summarize_targets_counts_by_target_path():
     "/downloads/complete/radarr": 1,
     "(default save path)": 1,
   }
+
+
+def test_degraded_cap_applies_when_the_shaper_is_gone():
+  """One number cannot be both a capacity target and a safety net.
+
+  Unshaped, the 25 Mbps capacity figure lands in the same range as the original
+  defect: a 33.55 Mbps cap produced 23.4 Mbps of real upload and 5% packet loss.
+  So when CAKE is absent the enforcer drops to the 15 Mbps value, which was
+  measured unshaped at 0% loss.
+  """
+  shaped = qbt.desired_prefs(shaped=True)["up_limit"]
+  degraded = qbt.desired_prefs(shaped=False)["up_limit"]
+  assert degraded < shaped
+  assert degraded == qbt.UPLOAD_LIMIT_DEGRADED_BYTES_PER_SEC
+
+
+def test_degraded_cap_is_a_measured_value_not_a_guess():
+  """15 Mbps unshaped measured 0% loss / 37 ms max; it must stay under half the link."""
+  measured_upstream_bps = 31_000_000
+  degraded_bps = qbt.UPLOAD_LIMIT_DEGRADED_BYTES_PER_SEC * 8
+  assert degraded_bps / measured_upstream_bps < 0.55

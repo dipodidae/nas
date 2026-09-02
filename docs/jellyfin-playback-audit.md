@@ -246,6 +246,58 @@ through the API, never by editing the config of a live container. That is what
 pass 2 recorded for Jellyfin's XML, and qBittorrent does rewrite its conf on
 exit — it simply is not the explanation here.
 
+**Fourth pass: the cap had two incompatible jobs.** It was doing duty as both a
+capacity target (while the shaper works) and a safety net (when it does not),
+and 25 Mbps cannot be both. Unshaped, 25 lands in the same range as the original
+defect — the 33.55 Mbps cap produced 23.4 Mbps of real upload and 5% loss. So it
+is now two numbers, chosen by observation rather than by schedule:
+
+| shaper state | cap | basis |
+|---|---|---|
+| CAKE present | **25 Mbps** | pure capacity; DSCP makes it yield automatically |
+| CAKE missing | **15 Mbps** | measured unshaped at 16.1 Mbps upload, 0% loss, 37 ms max |
+
+`qbittorrent_settings_enforce.py` reads `tc qdisc show` (no root needed) and
+picks the cap accordingly; it now runs at `*/5`, not hourly, because an hour of
+unmanaged uplink is an hour of 5% packet loss. The watchdog still alerts
+separately — it observes, the enforcer acts. Verified by deleting the qdisc for
+real, with a dead-man restore armed:
+
+```text
+qdisc deleted -> watchdog: [CRITICAL] wan:shaper:missing
+                 enforcer: wan shaper: MISSING -> degraded upload cap
+                           up_limit: found 3124224 -> setting 1874944   (25 -> 15 Mbps)
+qdisc restored -> enforcer: wan shaper: present
+                           up_limit: found 1874944 -> setting 3124224   (15 -> 25 Mbps)
+```
+
+**The revert: both named candidates ruled out, cause still unknown.**
+
+- *Container recreate.* `RestartCount: 0` proves nothing — it is per-container,
+  so a `compose up -d` yields a fresh container reading zero. Checked properly:
+  the container **was** recreated (Created 2026-09-01 18:22:01, Started 18:29:53
+  — a 472 s gap, which is the peer session's `compose up -d` building images
+  between the two). But both timestamps are ~15 h *before* the 09:55 change, and
+  the container Id never changed afterwards. A recreate happened; not in the
+  window that matters.
+- *Alternative rate limits.* `up_limit` itself read `UNLIMITED`, with
+  `alt_up_limit` UNLIMITED, `scheduler_enabled` False and `speedLimitsMode` 0.
+  Not a masked value.
+
+So it stays unknown — but the **next** occurrence is now diagnosable rather than
+guessable: the enforcer logs the value it *found*, not just what it set
+(`up_limit: found 0 -> setting 3124224`), timestamped every five minutes.
+
+**Playlist-sync: the flock is fine, the pipeline is not.** Verified `flock -n`
+genuinely refuses a second holder (exit 1), and the log shows a single run —
+start 00:10:01, exit 1 after **38,432 s (10.7 h)**, `"Stream closed without a
+completion signal"`. So runs are not overlapping; one run legitimately outlasts
+its own 6-hourly interval, which means the flock correctly skips the next two
+ticks and the job effectively runs about twice a day. Widening the staleness
+window to 24 h stops a duplicate alert, not the problem — the failure itself
+still pushes its own `cron:playlist-sync:failed`. The pipeline taking 10.7 hours
+and then failing is a playlist-generator problem, untouched here.
+
 **A dead end worth recording so nobody re-walks it.** The remote transcode's
 ffmpeg log carries 423 `Packet duration: -16 ... is out of range` warnings, and
 zero appear in the LAN audio-only transcode — an extremely tempting lead. It
