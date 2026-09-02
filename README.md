@@ -650,9 +650,11 @@ Honest list of things that are wrong or unfinished, all tracked:
   files), not a Watchtower setting. → [ADR-0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)
 - **The off-box config backup is built but not yet pointed anywhere.**
   `scripts/offsite_backup.sh` is written, tested end to end against a local
-  repository (retention proven to prune, restore verified byte-identical), and
-  its cron entry is installed **commented out**. Two operator actions close it:
-  `sudo apt-get install -y restic`, and a `RESTIC_REPOSITORY` in `.env`. Then
-  uncomment the `#PENDING-DESTINATION` line in `crontab -e`.
+  repository (retention proven to prune, restore verified byte-identical),
+  restic 0.18.1 is installed, and the cron entry is installed **commented out**.
+  One action closes it: set `RESTIC_REPOSITORY` in `.env` (and the `AWS_*` keys
+  for an S3-compatible destination), `restic init`, then uncomment the
+  `#PENDING-DESTINATION` line in `crontab -e`. Until then the script exits `2`
+  saying so, rather than pretending to have a backup.
 - **Media is not backed up at all.** 4.6 T under `${SHARE_DIRECTORY}`, by
   choice. The off-box backup above covers **config only**.
