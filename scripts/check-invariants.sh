@@ -680,6 +680,38 @@ else:
     ok("jellyfin-tag-pinned", jf_tag)
 
 # ==========================================================================
+# 17. An nginx whose master and workers differ in uid needs CAP_KILL
+# ==========================================================================
+# nginx's master runs as root and forks workers as another uid (`user abc;` in
+# swag, `user www-data;` in playlist-generator). Linux allows kill() across a
+# uid boundary only with CAP_KILL -- being root is not enough. Without it:
+#   * `nginx -s reload` forks new workers but cannot retire the old ones, so
+#     stale-config workers accumulate on every reload;
+#   * a graceful stop cannot signal workers, so the container is SIGKILLed at
+#     the end of its grace period.
+# Same mechanism as ADR-0004 (s6 signalling qbittorrent-nox across a uid
+# boundary). Verified by probe, not inference: `kill -0 <worker>` from root
+# inside swag returned EPERM on 2026-09-02. ADR-0021.
+NGINX_SERVICES = ("swag", "playlist-generator")
+for _svc in NGINX_SERVICES:
+    _s = services.get(_svc)
+    if not _s:
+        continue
+    _drop = [str(c).upper() for c in (_s.get("cap_drop") or [])]
+    _add = [str(c).upper().removeprefix("CAP_") for c in (_s.get("cap_add") or [])]
+    if "ALL" not in _drop:
+        continue        # cap-drop-all check owns this case
+    if "KILL" not in _add:
+        fail("nginx-cap-kill", "ADR-0021",
+             f"{_svc} drops ALL capabilities and does not add KILL, but its "
+             "nginx master runs as root while its workers run as another uid. "
+             "kill() across a uid boundary needs CAP_KILL; root alone is "
+             "refused with EPERM. `nginx -s reload` will fork new workers and "
+             "leak the old ones, and a graceful stop will end in SIGKILL.")
+    else:
+        ok("nginx-cap-kill", f"{_svc} holds KILL")
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"

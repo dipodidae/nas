@@ -21,6 +21,12 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
+      # INVARIANT: nginx's master is root and its workers run as uid 1000
+      # (`user abc;`). kill() across a uid boundary needs CAP_KILL -- root is
+      # not enough. Without it `nginx -s reload` leaks stale-config workers and
+      # a graceful stop ends in SIGKILL. Verified by probe: kill -0 against a
+      # worker returned EPERM on 2026-09-02. ADR-0021.
+      - KILL
     environment:
       - VALIDATION=dns
       - DNSPLUGIN=cloudflare
