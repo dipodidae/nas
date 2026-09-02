@@ -21,8 +21,14 @@ fan-out both look like "anon went up". So each sample now records
   children_rss=<bytes>  summed RSS of those children -- charged to the SAME
                         cgroup as the server, so it is part of mem_current but
                         NOT part of the server's own anon
-  scanning=<yes|no|NA>  whether a library-scan task is running, from the
-                        Jellyfin API's ScheduledTasks state
+  scanning=<yes|no|NA>  whether a library scan is running, checked by BOTH
+                        mechanisms -- the RefreshLibrary scheduled task AND
+                        each virtual folder's RefreshStatus. The second is
+                        required, not belt-and-braces: this host scans via
+                        jellyfin_library_scan.py's per-library
+                        POST /Items/{id}/Refresh, which leaves the scheduled
+                        task Idle, so a ScheduledTasks-only probe would have
+                        read "no scan" through every real scan
 Without `scanning`, correlating peaks against the Fri/Sat/Sun 05:05 cron is
 guesswork about a task whose real start and end times are not in the cron line.
 
@@ -265,33 +271,59 @@ def _child_processes() -> tuple[int, int, int | None]:
     return ffprobe, ffmpeg, None if unreadable else rss_kb * 1024
 
 
-def _scan_running() -> str:
-    """'yes' / 'no' / 'NA' -- is a Jellyfin library-scan task running?
-
-    Asks the API rather than inferring from the cron schedule: the cron line
-    says when a scan is TRIGGERED, not when it is still going, and a scan that
-    overruns is exactly the case worth catching. NA rather than a guess when
-    the key is missing or Jellyfin is unreachable, so a broken probe is
-    distinguishable from a quiet server.
-    """
+def _jellyfin_get(path: str):
+    """GET a Jellyfin API path as parsed JSON, or None. Never raises."""
     key = os.environ.get("API_KEY_JELLYFIN_ARR") or os.environ.get("API_KEY_JELLYFIN")
     if not key:
-        return "NA"
+        return None
     try:
         req = urllib.request.Request(
-            "http://127.0.0.1:8096/ScheduledTasks",
+            f"http://127.0.0.1:8096{path}",
             headers={"Authorization": f'MediaBrowser Token="{key}"'},
         )
         with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
-            tasks = json.load(resp)
+            return json.load(resp)
     except (OSError, ValueError):
-        return "NA"
-    for task in tasks if isinstance(tasks, list) else []:
-        name = str(task.get("Key", "")) + " " + str(task.get("Name", ""))
-        is_scan = "RefreshLibrary" in name or "Scan Media Library" in name
-        if is_scan and str(task.get("State", "")).lower() == "running":
-            return "yes"
-    return "no"
+        return None
+
+
+def _scan_running() -> str:
+    """'yes' / 'no' / 'NA' -- is a library scan running, by EITHER mechanism?
+
+    Two sources, because this host uses the one that the obvious source cannot
+    see. `scripts/jellyfin_library_scan.py` drives the per-library
+    `POST /Items/{id}/Refresh` endpoint, and that leaves the `RefreshLibrary`
+    SCHEDULED TASK reporting `Idle` -- the script's own docstring says so. A
+    probe that only read ScheduledTasks would therefore have recorded
+    `scanning=no` through every scan this box actually runs, forever, while
+    looking like a working field. So `RefreshStatus` on each virtual folder is
+    checked as well, which is what the per-library refresh does move.
+
+    Asked of the API rather than inferred from the cron schedule: the cron line
+    records when a scan is TRIGGERED, not whether it is still going, and an
+    overrunning scan is exactly the case worth catching. NA rather than a guess
+    when the API is unreachable, so a broken probe stays distinguishable from a
+    quiet server.
+    """
+    seen = False
+
+    tasks = _jellyfin_get("/ScheduledTasks")
+    if isinstance(tasks, list):
+        seen = True
+        for task in tasks:
+            name = f"{task.get('Key', '')} {task.get('Name', '')}"
+            is_scan = "RefreshLibrary" in name or "Scan Media Library" in name
+            if is_scan and str(task.get("State", "")).lower() == "running":
+                return "yes"
+
+    folders = _jellyfin_get("/Library/VirtualFolders")
+    if isinstance(folders, list):
+        seen = True
+        for folder in folders:
+            if str(folder.get("RefreshStatus", "")).lower() not in ("", "idle"):
+                return "yes"
+
+    return "no" if seen else "NA"
 
 
 def main() -> int:

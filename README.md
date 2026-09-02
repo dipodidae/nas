@@ -682,8 +682,16 @@ Honest list of things that are wrong or unfinished, all tracked:
 <svc>`, or `make pull-jellyfin` / `make update-qbittorrent`.
   → [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md)
 
-- **Jellyfin's memory leak is not root-caused.** Three mitigations contain it;
-  none fixes it. → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md)
+- **Jellyfin's memory blowup is narrowed, not proven fixed.** The ffprobe
+  fan-out hypothesis is **eliminated**: all six OOM kills named a single
+  `task=jellyfin` process holding 22.8–24.0 GB of anonymous memory, and **zero**
+  of them coincided with a library scan. No recurrence in 30 h and peak anon is
+  down from 23 GB to 2.20 GB, so `mem_limit` is reclassified as defence in depth
+  and `MALLOC_ARENA_MAX` + W^X are the probable fix. What is still missing is an
+  A/B: the sampler's history starts after the mitigations landed, and proving
+  causation means provoking another host-wide OOM.
+  → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md),
+  [investigation](docs/jellyfin-memory-investigation.md)
 - **The off-box config backup is built but not yet pointed anywhere.**
   `scripts/offsite_backup.sh` is written, tested end to end against a local
   repository (retention proven to prune, restore verified byte-identical),

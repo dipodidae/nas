@@ -18,7 +18,7 @@ the ADR here. If you are about to change something and the YAML says
 | [0005](0005-qbittorrent-pinned-tag.md)          | Pinned tag (floor 5.2.2), stable hostname, and the stale-lock init script   |
 | [0006](0006-watchtower-opt-outs.md)             | Watchtower's recreate is not atomic; who is opted out and why               |
 | [0007](0007-qbittorrent-memory-cap.md)          | qBittorrent `mem_limit: 4g` — libtorrent mmap and the 21.1GB cgroup peak    |
-| [0008](0008-jellyfin-memory-mitigations.md)     | Jellyfin's three leak mitigations, all stopgaps                             |
+| [0008](0008-jellyfin-memory-mitigations.md)     | Jellyfin memory: NOT scan-correlated; `mem_limit` is now defence in depth   |
 | [0009](0009-slskd-healthcheck.md)               | slskd's healthcheck is deliberately Soulseek-independent                    |
 | [0010](0010-autoheal-timeouts.md)               | autoheal's own stop timeout, and the t+150s pile-up                         |
 | [0011](0011-qbittorrent-credentials.md)         | `QBITTORRENT_USER`/`PASS` belong in `.env`, not in the container            |
