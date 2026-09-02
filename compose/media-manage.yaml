@@ -122,6 +122,23 @@ services:
       # path_mappings empty. Added 2026-09-02. ADR-0015.
       - ${SHARE_DIRECTORY}:/data
       - ${CONFIG_DIRECTORY}/subcleaner:/opt/subcleaner:ro
+      # INVARIANT: this conf must exist and must be TRACKED. subcleaner writes
+      # its default config into its own directory on first run:
+      #     if not config_file.is_file(): config_file.write_text(default...)
+      # and the mount above is read-only, so that write raised
+      #     OSError: [Errno 30] Read-only file system:
+      #             '/opt/subcleaner/subcleaner.conf'
+      # on EVERY subtitle Bazarr downloaded -- post-processing failed and the
+      # subtitle was discarded, silently, for every show. Providing the file
+      # means the write never happens, so the :ro mount can stay.
+      #
+      # It also sets `log_dir = /config/log` (an ABSOLUTE path -- subcleaner
+      # resolves a relative one against /opt/subcleaner, which is read-only and
+      # was the second failure after the first was fixed). Tracked in-repo for
+      # the same reason the SWAG proxy-confs are: a fix that lives only in the
+      # gitignored config dir is one `rm -rf` from silently regressing, and this
+      # one fails INVISIBLY. ADR-0022, docs/bazarr-subcleaner-fix.md
+      - ../bazarr/subcleaner.conf:/opt/subcleaner/subcleaner.conf:ro
     ports:
       - '127.0.0.1:6767:6767'
     depends_on:
