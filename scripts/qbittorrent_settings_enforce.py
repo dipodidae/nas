@@ -101,14 +101,26 @@ BASE_PREFS = {
 
 
 def shaper_present(wan_if: str = WAN_IF) -> bool:
-  """True when the CAKE egress shaper is installed. Reading tc needs no root."""
+  """True only when internet egress is BOTH shaped and prioritised.
+
+  Deliberately not `tc qdisc show | grep cake`. A qdisc proves the component
+  exists, not the property we depend on: the DSCP bulk marks live only in
+  wan_shaper.sh, and any netfilter reload can drop them while leaving the qdisc
+  untouched. Torrents would then stop landing in CAKE's Bulk tin, stop yielding,
+  and this function would still say "shaped" — keeping the 25 Mbps cap on an
+  unyielding uplink, which is the original failure with the safety net green.
+  So ask the shaper itself; `check` verifies qdisc, rate and mark count.
+  """
   try:
     out = subprocess.run(
-      ["tc", "qdisc", "show", "dev", wan_if], capture_output=True, text=True, timeout=15, check=False
+      ["sudo", "-n", "/home/tom/nas/scripts/wan_shaper.sh", "check"],
+      capture_output=True, text=True, timeout=20, check=False,
     )
   except (OSError, subprocess.TimeoutExpired):
     return False
-  return out.returncode == 0 and "cake" in out.stdout
+  if out.returncode != 0 and out.stdout.strip():
+    print(f"  {out.stdout.strip()}")
+  return out.returncode == 0
 
 
 def desired_prefs(shaped: bool) -> dict:

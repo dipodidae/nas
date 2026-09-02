@@ -257,7 +257,8 @@ is now two numbers, chosen by observation rather than by schedule:
 | CAKE present | **25 Mbps** | pure capacity; DSCP makes it yield automatically |
 | CAKE missing | **15 Mbps** | measured unshaped at 16.1 Mbps upload, 0% loss, 37 ms max |
 
-`qbittorrent_settings_enforce.py` reads `tc qdisc show` (no root needed) and
+`qbittorrent_settings_enforce.py` asks `wan_shaper.sh check` (see §4.0 — an
+earlier version grepped `tc` directly and could not see missing DSCP marks) and
 picks the cap accordingly; it now runs at `*/5`, not hourly, because an hour of
 unmanaged uplink is an hour of 5% packet loss. The watchdog still alerts
 separately — it observes, the enforcer acts. Verified by deleting the qdisc for
@@ -297,6 +298,30 @@ ticks and the job effectively runs about twice a day. Widening the staleness
 window to 24 h stops a duplicate alert, not the problem — the failure itself
 still pushes its own `cron:playlist-sync:failed`. The pipeline taking 10.7 hours
 and then failing is a playlist-generator problem, untouched here.
+
+**Fifth pass: the enforcer was watching the wrong thing.** Its degraded-mode
+switch keyed on `tc qdisc show | grep cake`, which proves CAKE is loaded and
+nothing else. The DSCP rules live only in `wan_shaper.sh` and any netfilter
+reload — a firewall service running `iptables-restore`, a Docker network change,
+manual rule surgery — drops them without touching the qdisc. Torrents would then
+stop landing in the Bulk tin, stop yielding, and the enforcer would keep the
+25 Mbps cap on an unyielding uplink: the original failure with the safety net
+reporting green.
+
+`wan_shaper.sh check` now verifies all three properties — qdisc present, shaped
+rate still equal to `SHAPE_MBIT` (a stale figure after the ISP re-provisions is
+a shaper that has silently stopped working), and one DSCP mark per bulk
+container — and both callers ask it instead of grepping `tc` themselves.
+Verified by deleting *only* the marks:
+
+```text
+qdisc present, marks deleted
+  old check (qdisc grep) : "healthy"   <- wrong
+  wan_shaper.sh check    : FAIL 0 of 2 DSCP bulk marks present, exit 1
+  watchdog               : [CRITICAL] wan:shaper:degraded
+  enforcer               : MISSING -> degraded, up_limit 3124224 -> 1874944
+  restored               : up_limit 1874944 -> 3124224
+```
 
 **A dead end worth recording so nobody re-walks it.** The remote transcode's
 ffmpeg log carries 423 `Packet duration: -16 ... is out of range` warnings, and
@@ -839,6 +864,31 @@ stands. Fargo S01E01 was restored to the stereo version and re-verified.
 ---
 
 ## 4. Runbook
+
+### 4.0 The rule this investigation kept re-learning
+
+**When a check passes, ask whether it proves the property you care about or
+just the component that carries it.** Three times in ten passes the same mistake
+produced a green light over a broken system:
+
+| the check | what it actually proved | what was assumed |
+|---|---|---|
+| `LibraryMonitor: "X" will be refreshed` | *a* refresh happened | that the *arr notification caused it — it hadn't; the path was unmapped and the 204 was a no-op |
+| a cgroup match on the OOM kill | the *container* was the victim | that the `jellyfin` **process** was — ffprobe had to be excluded from the per-task table separately |
+| `tc qdisc show \| grep cake` | CAKE is loaded | that egress is *shaped and prioritised* — the DSCP marks can vanish while the qdisc stays, and then torrents silently stop yielding |
+
+Each time the component was present and the property was not. The fix is the
+same shape every time: make the thing being checked answer for its own
+behaviour, rather than inferring behaviour from a component's existence.
+`wan_shaper.sh check` is that — it verifies the qdisc, *and* that the shaped
+rate still matches the line, *and* that every DSCP mark is installed, and both
+`stack_watchdog.py` and `qbittorrent_settings_enforce.py` ask it rather than
+each grepping `tc` and reaching their own conclusion.
+
+Practical test when writing a check: name the failure you are guarding against,
+then ask whether your check would still pass during it. "The shaper is gone"
+passes a qdisc grep only if the qdisc is gone too — but "torrents stopped
+yielding" passes it every time.
 
 ### 4.1 Prove an *arr's "Update Library" actually works
 

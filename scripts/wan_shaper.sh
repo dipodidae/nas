@@ -42,6 +42,7 @@
 # -----
 #   sudo scripts/wan_shaper.sh apply     # install the qdisc
 #   sudo scripts/wan_shaper.sh status    # show it, with live stats
+#   sudo scripts/wan_shaper.sh check     # exit 0 only if shaping AND marking
 #   sudo scripts/wan_shaper.sh clear     # back to the kernel default
 #
 # Rate changes: edit SHAPE_MBIT, re-run `apply`. It is idempotent — apply always
@@ -142,6 +143,39 @@ apply_qdisc() {
     match ip dst 224.0.0.0/4 flowid 1:10
 }
 
+check_health() {
+  # Answer the question callers actually care about — "is internet egress being
+  # shaped AND prioritised right now" — rather than the easier one, "does a
+  # qdisc exist". Those differ: the DSCP rules live only in this script and any
+  # netfilter reload (a firewall service running iptables-restore, a Docker
+  # network change, manual rule surgery) drops them without touching the qdisc.
+  # A caller that checks only the qdisc would then report healthy while torrents
+  # had silently stopped yielding.
+  local problems=0
+
+  if ! tc qdisc show dev "$WAN_IF" | grep -q cake; then
+    printf 'wan_shaper: FAIL no CAKE qdisc on %s\n' "$WAN_IF"
+    problems=$((problems + 1))
+  elif ! tc qdisc show dev "$WAN_IF" | grep -q "bandwidth ${SHAPE_MBIT}Mbit"; then
+    # A stale rate is a shaper that has silently stopped working: shaped above
+    # the real line rate, the modem is the bottleneck again and CAKE never
+    # queues anything.
+    printf 'wan_shaper: FAIL CAKE bandwidth is not %sMbit (line re-provisioned? re-measure)\n' "$SHAPE_MBIT"
+    problems=$((problems + 1))
+  fi
+
+  local want found
+  want=${#BULK_CONTAINERS[@]}
+  found=$(iptables -t mangle -S POSTROUTING 2>/dev/null | grep -c -- "$DSCP_COMMENT" || true)
+  if [ "$found" -lt "$want" ]; then
+    printf 'wan_shaper: FAIL %s of %s DSCP bulk marks present — torrents are not yielding\n' "$found" "$want"
+    problems=$((problems + 1))
+  fi
+
+  [ "$problems" -eq 0 ] && printf 'wan_shaper: OK shaping %sMbit, %s bulk marks\n' "$SHAPE_MBIT" "$found"
+  return $((problems > 0))
+}
+
 status_qdisc() {
   printf '=== qdisc on %s ===\n' "$WAN_IF"
   tc -s qdisc show dev "$WAN_IF"
@@ -157,5 +191,6 @@ case "${1:-}" in
   apply)  require_root; apply_qdisc; apply_marks; printf 'wan_shaper: shaping %s internet egress at %s Mbit (LAN %s exempt)\n' "$WAN_IF" "$SHAPE_MBIT" "$LAN_CIDR" ;;
   clear)  require_root; clear_marks; clear_qdisc; printf 'wan_shaper: cleared, %s back to kernel default\n' "$WAN_IF" ;;
   status) status_qdisc ;;
-  *)      die "usage: $0 {apply|clear|status}" ;;
+  check)  check_health ;;
+  *)      die "usage: $0 {apply|clear|status|check}" ;;
 esac

@@ -365,37 +365,27 @@ def read_crontab() -> str:
 
 
 def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
-  """The CAKE shaper must be present, or bufferbloat comes straight back.
+  """Ask the shaper whether it is doing its job, not whether it exists.
 
-  Without it the only queue on the path is the ISP modem's dumb FIFO, which
-  BitTorrent fills: measured 5% packet loss and 127 ms latency spikes, enough
-  to make remote Jellyfin playback stutter continuously. `tc` state is not
-  persistent — it is lost on link-down and on any `tc qdisc del` — so its
-  absence is silent and needs watching, not assuming.
+  `tc qdisc show` proves CAKE is loaded. It does not prove the DSCP bulk marks
+  are still installed, nor that the shaped rate still matches the line — and
+  both are load-bearing. Marks gone means torrents no longer yield; a stale rate
+  after the ISP re-provisions means the modem is the bottleneck again and CAKE
+  never queues anything. Either way the component is present and the property is
+  not, so `wan_shaper.sh check` is the thing to ask.
   """
-  code, out = _run(["tc", "qdisc", "show", "dev", wan_if])
-  if code != 0:
-    return [Alert("wan:shaper:unreadable", "warning", f"cannot read qdisc on {wan_if}")]
-  marks_code, marks = _run(["sudo", "-n", "/home/tom/nas/scripts/wan_shaper.sh", "status"])
-  if marks_code == 0 and "wan_shaper-bulk" not in marks:
-    return [
-      Alert(
-        "wan:bulk-marks:missing",
-        "warning",
-        "CAKE is up but the DSCP bulk marks are gone — torrents are no longer "
-        "yielding to streams. Restore: sudo /home/tom/nas/scripts/wan_shaper.sh apply",
-      )
-    ]
-  if "cake" not in out:
-    return [
-      Alert(
-        "wan:shaper:missing",
-        "critical",
-        f"no CAKE shaper on {wan_if} — uplink is unmanaged again, expect packet "
-        "loss under load. Restore: sudo systemctl restart wan-shaper.service",
-      )
-    ]
-  return []
+  code, out = _run(["sudo", "-n", "/home/tom/nas/scripts/wan_shaper.sh", "check"])
+  if code == 0:
+    return []
+  detail = " ".join(line.strip() for line in out.splitlines() if "FAIL" in line) or out.strip()[:200]
+  return [
+    Alert(
+      "wan:shaper:degraded",
+      "critical",
+      f"internet egress is not being shaped and prioritised: {detail} "
+      "Restore: sudo /home/tom/nas/scripts/wan_shaper.sh apply",
+    )
+  ]
 
 
 def check_heartbeat_configured() -> list[Alert]:

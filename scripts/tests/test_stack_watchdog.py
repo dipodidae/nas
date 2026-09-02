@@ -315,38 +315,18 @@ def test_at_shorthand_lines_are_linted_too():
 # --- WAN shaper ---
 
 
-def test_missing_cake_shaper_is_critical(monkeypatch):
-    """tc state is lost on link-down, so its absence must be noisy."""
-    def fake_run(cmd, *a, **k):
-        if cmd[0] == "tc":
-            return 0, "qdisc mq 0: root\nqdisc pfifo_fast 0: parent :1"
-        return 0, "wan_shaper-bulk"
+def test_shaper_check_failure_is_critical(monkeypatch):
+    """Any of qdisc / rate / marks missing must degrade, not just a missing qdisc."""
+    for detail in ("wan_shaper: FAIL no CAKE qdisc on enp88s0",
+                   "wan_shaper: FAIL CAKE bandwidth is not 28Mbit (line re-provisioned? re-measure)",
+                   "wan_shaper: FAIL 0 of 2 DSCP bulk marks present — torrents are not yielding"):
+        monkeypatch.setattr(wd, "_run", lambda *a, d=detail, **k: (1, d))
+        alerts = wd.check_wan_shaper()
+        assert [x.key for x in alerts] == ["wan:shaper:degraded"], detail
+        assert alerts[0].severity == "critical"
+        assert "FAIL" in alerts[0].message
 
-    monkeypatch.setattr(wd, "_run", fake_run)
-    alerts = wd.check_wan_shaper()
-    assert [a.key for a in alerts] == ["wan:shaper:missing"]
-    assert alerts[0].severity == "critical"
 
-
-def test_present_cake_shaper_is_quiet(monkeypatch):
-    def fake_run(cmd, *a, **k):
-        if cmd[0] == "tc":
-            return 0, "qdisc cake 20: parent 1:20 bandwidth 28Mbit"
-        return 0, "-A POSTROUTING -s 172.30.0.4/32 --comment wan_shaper-bulk -j DSCP"
-
-    monkeypatch.setattr(wd, "_run", fake_run)
+def test_healthy_shaper_is_quiet(monkeypatch):
+    monkeypatch.setattr(wd, "_run", lambda *a, **k: (0, "wan_shaper: OK shaping 28Mbit, 2 bulk marks"))
     assert wd.check_wan_shaper() == []
-
-
-def test_shaper_present_but_bulk_marks_gone_alerts(monkeypatch):
-    """CAKE without the CS1 marks bounds latency but stops torrents yielding."""
-    calls = []
-
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        if cmd[0] == "tc":
-            return 0, "qdisc cake 20: parent 1:20 bandwidth 28Mbit"
-        return 0, "=== DSCP bulk marks ===\n  (none)"
-
-    monkeypatch.setattr(wd, "_run", fake_run)
-    assert [a.key for a in wd.check_wan_shaper()] == ["wan:bulk-marks:missing"]
