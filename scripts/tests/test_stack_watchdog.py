@@ -266,7 +266,11 @@ def test_state_without_max_age_is_skipped(tmp_path):
 # --- crontab lint (the media_ops_status class of bug) ---
 
 
-REPO = Path("/home/tom/nas")
+# Derived, not hardcoded: lint_crontab checks each `scripts/<x>.py` for
+# existence under this root, so a literal "/home/tom/nas" makes every script
+# look missing anywhere but this one machine. These tests passed locally and
+# failed in CI for exactly that reason.
+REPO = Path(__file__).resolve().parents[2]
 
 
 def test_relative_path_without_cd_is_flagged():
@@ -278,7 +282,7 @@ def test_relative_path_without_cd_is_flagged():
 
 
 def test_line_with_cd_is_accepted():
-    line = "0 1 * * * cd /home/tom/nas && . .venv/bin/activate && python scripts/album_art.py"
+    line = f"0 1 * * * cd {REPO} && . .venv/bin/activate && python scripts/album_art.py"
     assert wd.lint_crontab(line, REPO) == []
 
 
@@ -309,7 +313,7 @@ def test_absolute_paths_need_no_cd():
 def test_at_shorthand_lines_are_linted_too():
     """@daily/@reboot are valid cron and must not be a blind spot in the lint."""
     assert wd.lint_crontab("@daily .venv/bin/python scripts/album_art.py", REPO)
-    assert wd.lint_crontab("@daily cd /home/tom/nas && python scripts/album_art.py", REPO) == []
+    assert wd.lint_crontab(f"@daily cd {REPO} && python scripts/album_art.py", REPO) == []
 
 
 # --- WAN shaper ---
