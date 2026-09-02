@@ -409,7 +409,7 @@ open https://4eva.me/ops.html
 
 ## Scheduled jobs
 
-26 cron entries, all wrapped in `scripts/cron_job.py`, which reports failures
+27 cron entries, all wrapped in `scripts/cron_job.py`, which reports failures
 and staleness to ntfy — a job that stops running is itself an alert.
 
 > **Every cron line must `cd /home/tom/nas` first.** The scripts resolve `.env`
@@ -425,7 +425,7 @@ and staleness to ntfy — a job that stops running is itself an alert.
 | `12,27,42,57` | `lidarr_backlog_drip` |
 | `:07 :22 :37 :52` | Tubifarry/slskd unclog chain — **shares one flock**, do not run these concurrently |
 | `:17` | `wan_shaper.sh apply` (scoped sudo) |
-| daily | `config_backup` 01:00 · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 |
+| daily | `config_backup` 01:00 · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 |
 | every 6 h | `playlist-sync` |
 | weekly | `log_pruner` · `docker prune` · `album_art` · per-library Jellyfin scans (Fri/Sat/Sun 05:05) |
 

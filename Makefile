@@ -22,7 +22,7 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 
 .PHONY: help check lint config bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
-        submodules install-hooks
+        submodules install-hooks verify-runtime
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -178,3 +178,37 @@ install-hooks: ## Install the pre-commit hook that runs `make check`
 	  > "$$hook"; \
 	chmod +x "$$hook"; \
 	echo "installed $$hook"
+
+verify-runtime: ## Assert the RUNNING containers match the invariants (not just the config)
+	@rc=0; \
+	echo "==> every compose service has a container (ADR-0006)"; \
+	for s in $$(docker compose config --services); do \
+	  docker inspect "$$s" >/dev/null 2>&1 || { echo "    !!! $$s: NO CONTAINER"; rc=1; }; \
+	done; [ $$rc -eq 0 ] && echo "    all present"; \
+	echo "==> no stray compose.override.yaml"; \
+	if [ -e compose.override.yaml ] || [ -e compose.override.yml ]; then \
+	  echo "    !!! compose.override.yaml present. It is gitignored AND auto-loaded,"; \
+	  echo "        so git status will not show it and every compose command is affected."; \
+	  rc=1; \
+	else echo "    none"; fi; \
+	echo "==> qbittorrent holds CAP_KILL at runtime (ADR-0004)"; \
+	docker exec qbittorrent sh -c 'grep -E "^Cap(Prm|Eff|Bnd)" /proc/1/status' \
+	  | gawk '{ v=strtonum("0x" $$2); if (!and(v, 32)) { printf "    !!! %s lacks KILL\n", $$1; bad=1 } } \
+	          END { if (bad) { print "        every stop becomes a 120s SIGKILL"; exit 1 } \
+	                print "    ok: KILL in Prm/Eff/Bnd" }' || rc=1; \
+	echo "==> swag nginx can signal its own workers (ADR-0021)"; \
+	docker exec swag sh -c 'for p in /proc/[0-9]*; do \
+	    case "$$(tr -d "\0" < $$p/cmdline 2>/dev/null)" in "nginx: worker process") \
+	      kill -0 $$(basename $$p) 2>/dev/null && echo "    ok: worker signalable" \
+	        || { echo "    !!! EPERM signalling nginx worker -- reload and graceful stop are broken"; exit 1; }; \
+	      break;; esac; done' || rc=1; \
+	echo "==> nothing but dockerproxy has the Docker socket (ADR-0013)"; \
+	bad=$$(docker ps -q | xargs -r docker inspect \
+	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
+	  | grep docker.sock | grep -v '^/dockerproxy ' || true); \
+	  if [ -z "$$bad" ]; then echo "    ok: dockerproxy only"; else echo "    !!! $$bad"; rc=1; fi; \
+	echo "==> unhealthy or exited containers"; \
+	u=$$(docker compose ps -a --format '{{.Name}}\t{{.Status}}' \
+	     | grep -iE 'unhealthy|exited|restarting' || true); \
+	  if [ -z "$$u" ]; then echo "    none"; else echo "$$u" | sed 's/^/    !!! /'; rc=1; fi; \
+	exit $$rc
