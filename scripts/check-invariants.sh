@@ -83,6 +83,19 @@ def caps(svc):
 def labels(svc):
     return services[svc].get("labels") or {}
 
+def _env_file_value(key, path=".env"):
+    """Read one KEY=value from .env. Returns None if unreadable -- .env is
+    gitignored and absent in CI, and a missing file must degrade to a warning,
+    not a traceback."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith(f"{key}="):
+                    return line.split("=", 1)[1].strip().strip("'\"")
+    except OSError:
+        return None
+    return None
+
 # --------------------------------------------------------------------------
 # Documented waivers. Every entry needs a reason and an ADR. Shrink this list;
 # never grow it without a decision record.
@@ -497,6 +510,44 @@ else:
         ok("autoheal-timeouts",
            f"stop={stop_to}s > worst monitored grace {worst}s ({worst_svc}); "
            f"curl={curl_to}s; {len(monitored)} monitored")
+
+# ==========================================================================
+# 13. Jellyfin's volume mappings are frozen (owner standing instruction)
+# ==========================================================================
+# ${SHARE_DIRECTORY}:/data/movies:ro is intentional even though it looks
+# misnamed. Every Jellyfin library path, the *arr mapFrom/mapTo mappings, and
+# playlist-generator's LOCAL_PATH_PREFIX/JELLYFIN_PATH_PREFIX pair are all
+# calibrated to it, so they would have to change in lockstep. ADR-0016.
+#
+# SOURCE is asserted as well as target: repointing /data/movies at a different
+# host path breaks the same three systems while leaving the target intact, and
+# a target-only check would call that ok.
+_share = os.environ.get("SHARE_DIRECTORY") or _env_file_value("SHARE_DIRECTORY")
+_conf = os.environ.get("CONFIG_DIRECTORY") or _env_file_value("CONFIG_DIRECTORY")
+jf = services.get("jellyfin", {})
+got = {(v.get("source"), v.get("target"), bool(v.get("read_only")))
+       for v in (jf.get("volumes") or [])}
+if not _share or not _conf:
+    warn("jellyfin-mounts-frozen", "ADR-0016",
+         "SHARE_DIRECTORY / CONFIG_DIRECTORY unreadable, so the mount SOURCES "
+         "cannot be verified; checking targets only.")
+    got = {(t, r) for _s, t, r in got}
+    want = {("/config", False), ("/data/movies", True)}
+else:
+    want = {(os.path.join(_conf, "jellyfin"), "/config", False),
+            (_share, "/data/movies", True)}
+if got != want:
+    fail("jellyfin-mounts-frozen", "ADR-0016",
+         "Jellyfin's volume mappings changed and must not.\n"
+         f"       expected: {sorted(want)}\n"
+         f"       actual:   {sorted(got)}\n"
+         "       /data/movies must stay a READ-ONLY mount of the WHOLE share, "
+         "from ${SHARE_DIRECTORY} and nowhere else. Three systems are "
+         "calibrated to it: Jellyfin's library paths, the *arr mapFrom/mapTo "
+         "mappings, and playlist-generator's LOCAL_PATH_PREFIX/"
+         "JELLYFIN_PATH_PREFIX pair.")
+else:
+    ok("jellyfin-mounts-frozen", "/config rw + ${SHARE_DIRECTORY}:/data/movies ro")
 
 # ==========================================================================
 # Report
