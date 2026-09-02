@@ -47,10 +47,98 @@
 >   is linted continuously. Added the off-box heartbeat. And on the AAC
 >   rollout, Tom reversed direction on the evidence pass 8 gathered — see
 >   §3.6.
+> - **Pass 10 (2026-09-02)**: Tom reported the same stutter again, remotely,
+>   after all of the above. **Root cause found, and it was never Jellyfin** —
+>   qBittorrent's upload cap was set above the connection's entire upstream
+>   capacity, saturating the uplink queue and costing 5% packet loss. See §0.
+>   Nine passes had been debugging the wrong machine; the earlier work fixed a
+>   real OOM problem that was simply not the reported symptom.
 
 ---
 
-## 1. Root cause (confirmed, holds)
+## 0. The stutter: root cause found (2026-09-02) — it was never Jellyfin
+
+**Nine passes of this document investigated the wrong machine.** The reported
+symptom — a stuttering Fargo episode — was caused by BitTorrent saturating the
+household's upstream link, not by anything Jellyfin did. Everything in §1 below
+is real and worth keeping, but it fixed a *different* problem that happened to
+be running at the same time.
+
+**The measurement.** `ping -c 20 1.1.1.1` from this host, with nothing else
+changed except qBittorrent's upload rate:
+
+| | qBittorrent uploading at 23.4 Mbps | qBittorrent throttled |
+|---|---|---|
+| packet loss | **5%** | 0% |
+| avg / max RTT | 18.0 / **127.4** ms | 12.5 / 18.1 ms |
+| jitter (mdev) | **25.8 ms** | 1.8 ms |
+
+**Why it saturated.** qBittorrent's global upload cap was **4194304 B/s =
+33.55 Mbps**. This connection's actual upstream, measured at the NIC counter
+(`/sys/class/net/enp88s0/statistics/tx_bytes`) during a 3-stream upload with
+P2P throttled, is **~31 Mbps**. The cap was **108% of the entire link** — that
+is not a cap, and with 50 upload slots and 1000 connections the modem queue was
+permanently full.
+
+**Why that stutters a video stream.** At 5% loss and 18 ms RTT the Mathis
+bound puts a single TCP flow at roughly 2.9 Mbps
+(`MSS·8 / (RTT·√p)`). The remote session on 2026-09-01 22:11 needed ~4.5 Mbps
+and measurably got **3.65 Mbps** — 234 segments (702 s of content) delivered
+over 797 s of wall clock, a **0.88× realtime** delivery ratio. A player that
+receives 0.88 seconds of video per second of playback stutters, permanently,
+by construction.
+
+**Why it looked like a Jellyfin problem.** It only ever happened remotely — LAN
+playback never crosses the saturated uplink — and "remote" was not recorded in
+the early passes. Checking the access log settles it: the 2026-08-31 session
+that started this whole investigation came from `24.132.218.103`, **not** the
+home IP `86.81.35.107`, and carried `TranscodeReasons=AudioCodecNotSupported`
+only — meaning video was being *direct-streamed* at the file's full
+**10.6 Mbps** across a link that was dropping 5% of packets. That would stutter
+regardless of anything the server did.
+
+**What the earlier work did and did not achieve.** The OOM investigation (§1)
+found and fixed a genuine, severe defect — Jellyfin was being OOM-killed five
+times in 48 hours — and the AAC work (§3.4) genuinely eliminated audio
+transcoding for browsers. **Neither addressed the reported symptom.** Proof for
+the AAC half, against the live StreamBuilder using the exact bitrate cap the
+remote client negotiated:
+
+```text
+Fargo S01E01 (AAC-converted) @ 4.14 Mbps cap -> DirectPlay=False
+Fargo S01E01 (AAC-converted) @ 20 Mbps cap   -> DirectPlay=True
+```
+
+The audio codec is irrelevant once a bitrate cap forces a video transcode.
+
+**The fix.** qBittorrent's upload cap lowered to **1874944 B/s (15 Mbps,
+~48% of measured upstream)**, and pinned in `DESIRED_PREFS` in
+`scripts/qbittorrent_settings_enforce.py` so it does not drift back. Verified
+with the same ping test: **0% loss, max RTT 37 ms, jitter 5.2 ms**, while
+qBittorrent still uploads 16 Mbps.
+
+**A dead end worth recording so nobody re-walks it.** The remote transcode's
+ffmpeg log carries 423 `Packet duration: -16 ... is out of range` warnings, and
+zero appear in the LAN audio-only transcode — an extremely tempting lead. It
+was reproduced exactly by replaying Jellyfin's argv verbatim, then isolated to
+the fMP4 segment muxer by changing one argument at a time:
+
+| variant | warnings |
+|---|---|
+| baseline, exactly as Jellyfin ran it | 423 |
+| without `-copyts` / `-avoid_negative_ts disabled` | 423 |
+| without `-af volume=2` | 423 |
+| native `aac` instead of `libfdk_aac` | 423 |
+| **`-hls_segment_type mpegts`** | **0** |
+
+But probing the output proved the warnings **benign**: every audio packet in
+the fMP4 output carries the correct 0.021333 s duration, and the fMP4 and
+mpegts outputs differ by exactly one trailing packet out of 165,602. The muxer
+complains and then writes the right thing. Do not "fix" this.
+
+---
+
+## 1. The memory problem (separate, real, fixed)
 
 Two independent native-memory contributors, both mitigated in pass 6/7 and
 both still holding as of this pass:
@@ -139,6 +227,7 @@ reproducibility.
 | **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode | `scripts/aac_fallback_track.py` | n/a, additive |
 | **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
 | **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
+| **47** | **qBittorrent upload cap 33.55 → 15 Mbps** (`up_limit` 4194304 → 1874944 B/s). The old value was 108% of the link's entire ~31 Mbps upstream, saturating the modem queue: 5% packet loss, 127 ms latency spikes. This is the root cause of the remote stutter (§0) | qBittorrent prefs, and pinned in `DESIRED_PREFS` in `scripts/qbittorrent_settings_enforce.py` | `curl -b <cookie> -d "limit=4194304" .../api/v2/transfer/setUploadLimit` and revert the constant |
 | **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200 | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env` | Delete the `ntfy — *` connections in each *arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
 | **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
 | **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
@@ -751,6 +840,16 @@ Short, and this is the whole list.
    only you can pick which copy to keep.
 5. **`.sudo-pwd`** is now gitignored, but it is still a plaintext sudo password
    in the repo root. Worth deleting or moving somewhere with 600 permissions.
+
+6. **Fargo Season 2 is still DTS-only.** With the uplink fixed, a remote
+   browser should now direct-stream the video, but S02's audio will still be
+   transcoded (a cheap remux, not the expensive path). Ten files, ~20 min, if
+   you want it — you set the policy that conversions happen on request, so
+   this is an offer rather than something I did.
+7. **Consider qBittorrent alt-speed scheduling** if remote viewing is common.
+   15 Mbps of seeding leaves ~16 Mbps, which is comfortable for a transcoded
+   stream but tight for a 10.6 Mbps direct play. An evening schedule would
+   give direct play the whole link when you actually use it.
 
 **Closed since pass 8:** the AAC rollout (declined; 5 free flips done, tool
 kept for future small batches), the 5.1 question (answered — it transcodes on

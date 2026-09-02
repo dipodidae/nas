@@ -121,7 +121,11 @@ DEFAULT_REPEAT_MINUTES = 60.0
 # Kernel OOM lines look like:
 #   Out of memory: Killed process 12345 (jellyfin) total-vm:...,anon-rss:...
 OOM_PATTERN = re.compile(r"Out of memory: Killed process|oom-kill:|oom_reaper:")
-SEVERITY_PRIORITY = {"critical": "urgent", "warning": "high", "info": "default"}
+SEVERITY_PRIORITY = {"critical": "urgent", "warning": "high", "notice": "low", "info": "default"}
+# A standing configuration gap is not an incident: it cannot resolve on its own
+# and re-reading it every hour teaches you to ignore the topic. Once a day is
+# enough to keep it from being forgotten, which is the only job it has.
+CONFIG_GAP_REPEAT_MIN = 1440.0
 
 
 @dataclass(frozen=True)
@@ -130,11 +134,18 @@ class Alert:
 
   `key` is the dedupe identity across runs — it must be stable for the same
   underlying problem and different for a different one.
+
+  `repeat_min` overrides the global `--repeat-min` for this one alert. It
+  exists because the alerts in this file are not all the same *kind* of thing:
+  a container that died is an incident and should keep nagging hourly, while a
+  missing config value is a standing gap that nags once a day. Without the
+  override the noisiest setting wins for everything.
   """
 
   key: str
   severity: str
   message: str
+  repeat_min: float | None = None
 
 
 def _run(cmd: list[str], timeout: int = 60) -> tuple[int, str]:
@@ -359,15 +370,22 @@ def check_heartbeat_configured() -> list[Alert]:
   someone creates the external check — an account action no script can do. An
   unconfigured heartbeat is therefore a real, standing gap in coverage, and it
   should keep saying so rather than being quietly forgotten.
+
+  It says so *once a day*, at low priority. This is a configuration warning,
+  not an incident: it describes a gap that has been there since the box was
+  built, it cannot clear itself, and nothing about it is more urgent at 03:00
+  than at any other time. At the hourly default it produced 14 identical pushes
+  in one night, which is how a topic stops being read.
   """
   if os.getenv("NAS_HEARTBEAT_URL", "").strip():
     return []
   return [
     Alert(
       "heartbeat:unconfigured",
-      "warning",
+      "notice",
       "NAS_HEARTBEAT_URL is unset — nothing off this box would notice if the host "
       "died. Create a check at healthchecks.io and put its ping URL in .env",
+      repeat_min=CONFIG_GAP_REPEAT_MIN,
     )
   ]
 
@@ -674,7 +692,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[{alert.severity.upper()}] {alert.key}: {alert.message}")
     prior = active.get(alert.key)
     last = prior.get("last_notified", 0) if prior else 0
-    due = (now - last) / 60.0 >= args.repeat_min
+    repeat_min = alert.repeat_min if alert.repeat_min is not None else args.repeat_min
+    due = (now - last) / 60.0 >= repeat_min
     if webhook and not args.dry_run and (prior is None or due):
       last = now if notify(webhook, alert) else last
     still[alert.key] = {"first_seen": (prior or {}).get("first_seen", now), "last_notified": last}

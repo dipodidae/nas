@@ -493,6 +493,21 @@ courtesy seeding on public trackers, and you may well decide it is not worth
 
 ## E. Does this warrant a dedicated tool?
 
+> **Update 2026-09-01, later the same day:** this is now done. Cleanuparr is
+> configured and live — Malware Blocker, Queue Cleaner (failed-import,
+> metadata, stall and slow rules) and Download Cleaner (one seeding rule at
+> the existing 0.6 / 34 h goals). Unlinked, Orphaned Files, Dead Torrents,
+> Seeker and Blacklist Sync are deliberately off, each for a recorded reason.
+> Full write-up and the verification recipe: `docs/cleanuparr-configuration.md`.
+>
+> One finding worth pulling forward: the **Dead Torrents** module was tried,
+> dry-run, and rejected. It struck 22 torrents, every one of them 100%
+> complete and seeding toward the goal — bucket A. "No seeders" means no
+> *other* seeder, which is the resting state of 25 of the 59 completed
+> torrents here. Bucket G's `-links 1` heuristic remains unusable for a
+> second reason too: hardlinks work now (commit `13dbdb9`), but the
+> pre-restructure backlog is still `nlink=1`.
+
 **You already have one, and it is switched off.**
 
 `cleanuparr` is deployed, running, healthy, published at its own subdomain, wired

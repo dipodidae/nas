@@ -15,7 +15,14 @@ stderr to notice.
 So this wraps a job and closes both halves:
 
 * **Failure is pushed.** A fatal exit sends an ntfy alert naming the job, its
-  exit code and the tail of its stderr.
+  exit code and the tail of its stderr. A job that keeps failing re-pushes at
+  `--alert-repeat-min` rather than on every run, so one broken `*/5` job is one
+  alert an hour instead of twelve.
+* **Recovery is pushed too.** When a job that was failing exits cleanly again
+  it sends `RESOLVED: cron:<name>:failed`, symmetric with the `:stale` keys
+  `stack_watchdog` already resolves. Without it every transient cron failure
+  stayed open forever, and an open alert that cannot close is indistinguishable
+  from a live one.
 * **Silence is pushed too.** Each run records a state file under
   `logs/cron-state/`; `stack_watchdog.py` alerts when a job has not *succeeded*
   within the `--max-age-min` the cron line itself declares. That is the half
@@ -91,6 +98,9 @@ from stack_watchdog import Alert, notify  # noqa: E402, I001
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR = REPO_ROOT / "logs" / "cron-state"
 DEFAULT_OK_CODES = "0,1"
+# Matches stack_watchdog's --repeat-min default: one broken thing should sound
+# the same whichever half of the system noticed it.
+DEFAULT_ALERT_REPEAT_MIN = 60.0
 STDERR_TAIL_LINES = 12
 STDERR_ALERT_CHARS = 600
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -157,6 +167,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help=f"Exit codes that count as success (default {DEFAULT_OK_CODES} — 0 ok, 1 partial).",
   )
   parser.add_argument(
+    "--alert-repeat-min",
+    type=float,
+    default=DEFAULT_ALERT_REPEAT_MIN,
+    help=(
+      "Minutes before a still-failing job re-pushes its alert "
+      f"(default {DEFAULT_ALERT_REPEAT_MIN:.0f}; 0 = push every failing run)."
+    ),
+  )
+  parser.add_argument(
     "--register",
     action="store_true",
     help="Write the state file without running anything, so a never-yet-run job is still watched.",
@@ -196,23 +215,51 @@ def main(argv: list[str] | None = None) -> int:
   state["last_run"] = now
   state["last_exit"] = code
   state["last_duration_s"] = round(elapsed, 1)
+
+  webhook = os.getenv("NAS_ALERT_WEBHOOK") or os.getenv("SLSKD_ALERT_WEBHOOK") or ""
+  key = f"cron:{args.name}:failed"
+  # Was this job in a failed state before this run? `failing_since` is the
+  # marker: it is set on the first failing run and only cleared by a success.
+  # It is what makes the resolve below symmetric with the alert above, rather
+  # than inferring "was failing" from `last_exit`, which a --register call or a
+  # hand-edited state file could quietly lose.
+  failing_since = float(state.get("failing_since") or 0)
+
   if code in ok_codes:
     state["last_success"] = now
     state.pop("last_error", None)
-  else:
-    state["last_error"] = tail(stderr_text)
-  save_state(args.name, state)
+    state.pop("failing_since", None)
+    state.pop("last_failure_notified", None)
+    save_state(args.name, state)
+    # Close the alert. Without this every transient cron failure stays open
+    # forever and the topic stops distinguishing live problems from old ones —
+    # `stack_watchdog` already does exactly this for its own `:stale` keys.
+    if failing_since:
+      msg = f"cleared after {(now - failing_since) / 60.0:.0f} min (exit {code})"
+      print(f"[RESOLVED] {key}: {msg}")
+      if webhook:
+        notify(webhook, Alert(key, "info", msg), resolved=True)
+    return 0
 
-  if code not in ok_codes:
-    detail = tail(stderr_text)[-STDERR_ALERT_CHARS:] or "(no stderr)"
-    webhook = os.getenv("NAS_ALERT_WEBHOOK") or os.getenv("SLSKD_ALERT_WEBHOOK") or ""
-    alert = Alert(f"cron:{args.name}:failed", "critical", f"exit {code} after {elapsed:.0f}s\n{detail}")
+  state["last_error"] = tail(stderr_text)
+  state.setdefault("failing_since", now)
+  detail = tail(stderr_text)[-STDERR_ALERT_CHARS:] or "(no stderr)"
+  alert = Alert(key, "critical", f"exit {code} after {elapsed:.0f}s\n{detail}")
+  # Re-push a *continuing* failure at the same slow interval the watchdog uses,
+  # not on every run: a job on a */5 schedule would otherwise push 12 times an
+  # hour for one broken thing.
+  last_notified = float(state.get("last_failure_notified", 0) or 0)
+  if (now - last_notified) / 60.0 >= args.alert_repeat_min:
+    # The print-only path honours the same window as the push path, so what you
+    # see in the job log is what the phone would have received.
     if webhook:
-      notify(webhook, alert)
+      if notify(webhook, alert):
+        state["last_failure_notified"] = now
     else:
       print(f"ALERT (no webhook configured): {alert.message}", file=sys.stderr)
-    return code
-  return 0
+      state["last_failure_notified"] = now
+  save_state(args.name, state)
+  return code
 
 
 if __name__ == "__main__":

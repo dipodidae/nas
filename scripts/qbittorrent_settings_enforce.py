@@ -53,12 +53,27 @@ if "QBITTORRENT_USER" not in os.environ:
     pass
 
 DEFAULT_QBT_HOST = "http://localhost:8080"
+# 15 Mbps, in bytes/s. The upload cap was 4194304 (33.55 Mbps) -- **108% of
+# this connection's entire measured upstream of ~31 Mbps**, i.e. effectively
+# uncapped. With 50 upload slots and no headroom, BitTorrent kept the uplink
+# queue permanently full: measured 5% packet loss, 127ms latency spikes and
+# 25ms jitter to 1.1.1.1, versus 0% / 18ms / 1.8ms with it throttled. That
+# collapses TCP throughput for anything else sharing the link -- which is why
+# remote Jellyfin playback stuttered while LAN playback was fine. See
+# docs/jellyfin-playback-audit.md.
+#
+# If the connection ever changes, re-measure before changing this: throttle
+# qBittorrent, then watch /sys/class/net/<wan>/statistics/tx_bytes during a
+# multi-stream upload. Keep the cap near half of what you measure.
+UPLOAD_LIMIT_BYTES_PER_SEC = 1_874_944  # 1831 KiB/s; qBittorrent rounds to whole KiB, so match it or enforcement never converges
+
 DESIRED_PREFS = {
   "auto_tmm_enabled": True,
   "category_changed_tmm_enabled": True,
   "save_path_changed_tmm_enabled": True,
   "temp_path_enabled": True,
   "temp_path": "/downloads/incomplete/qbittorrent",
+  "up_limit": UPLOAD_LIMIT_BYTES_PER_SEC,
 }
 
 

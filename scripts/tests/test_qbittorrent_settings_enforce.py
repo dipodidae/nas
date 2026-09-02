@@ -30,6 +30,9 @@ def test_plan_pref_changes_returns_only_differing_keys():
     "save_path_changed_tmm_enabled": False,
     "temp_path_enabled": True,
     "temp_path": "/downloads/incomplete",
+    # the cap qBittorrent shipped with: 33.55 Mbps, above this link's entire
+    # ~31 Mbps upstream, which is what kept the uplink queue permanently full
+    "up_limit": 4194304,
     "unrelated": "x",
   }
   desired = qbt.DESIRED_PREFS
@@ -38,7 +41,19 @@ def test_plan_pref_changes_returns_only_differing_keys():
     "auto_tmm_enabled": True,
     "save_path_changed_tmm_enabled": True,
     "temp_path": "/downloads/incomplete/qbittorrent",
+    "up_limit": qbt.UPLOAD_LIMIT_BYTES_PER_SEC,
   }
+
+
+def test_upload_limit_leaves_headroom_on_the_measured_uplink():
+  """The cap must stay well under the ~31 Mbps upstream measured 2026-09-02.
+
+  Set at or above capacity, BitTorrent keeps the modem queue full and every
+  other flow on the link -- notably remote Jellyfin playback -- loses packets.
+  """
+  measured_upstream_bps = 31_000_000
+  headroom_fraction = qbt.UPLOAD_LIMIT_BYTES_PER_SEC * 8 / measured_upstream_bps
+  assert headroom_fraction < 0.6
 
 
 def test_plan_pref_changes_empty_when_already_correct():
