@@ -22,18 +22,35 @@ cd "$(dirname "$0")/.." || exit 2
 VERBOSE=0
 [ "${1:-}" = "--verbose" ] || [ "${1:-}" = "-v" ] && VERBOSE=1
 
-if ! docker compose config -q 2>/dev/null; then
+# Optional test hook: an extra "-f <path>" appended to every compose
+# invocation, used to inject deliberate violations when proving an assertion
+# can fail. Deliberately NOT compose.override.yaml -- that path is gitignored
+# AND auto-loaded, so a forgotten one is invisible to `git status` and silently
+# active.
+#
+# Passing -f to compose replaces the default file discovery, so the base file
+# has to be named explicitly alongside the injected one -- otherwise the
+# override renders on its own and every service loses its image.
+# shellcheck disable=SC2206  # deliberate word splitting: COMPOSE_EXTRA is "-f path"
+EXTRA=()
+if [ -n "${COMPOSE_EXTRA:-}" ]; then
+  EXTRA=(-f compose.yaml ${COMPOSE_EXTRA})
+  COMPOSE_EXTRA="-f compose.yaml ${COMPOSE_EXTRA}"
+fi
+
+if ! docker compose "${EXTRA[@]}" config -q 2>/dev/null; then
   echo "FATAL: 'docker compose config' failed -- the compose model does not render." >&2
-  docker compose config -q
+  docker compose "${EXTRA[@]}" config -q
   exit 2
 fi
 
-VERBOSE=$VERBOSE python3 - <<'PY'
+COMPOSE_EXTRA="${COMPOSE_EXTRA:-}" VERBOSE=$VERBOSE python3 - <<'PY'
 import json, os, re, subprocess, sys
 
 try:
+    _extra = os.environ.get("COMPOSE_EXTRA", "").split()
     raw = subprocess.run(
-        ["docker", "compose", "config", "--format", "json"],
+        ["docker", "compose", *_extra, "config", "--format", "json"],
         capture_output=True, text=True, check=True,
     ).stdout
     model = json.loads(raw)
@@ -345,6 +362,55 @@ for svc in sorted(services):
              "SECRET_OK list. A container gets a credential only if the process "
              "inside it actually reads one; otherwise it is just sitting in "
              "`docker inspect`. Add it to SECRET_OK if this is legitimate.")
+
+# ==========================================================================
+# 11. autoheal-monitored healthchecks must probe THIS service only
+# ==========================================================================
+# autoheal converts a failing healthcheck into a restart. A probe that depends
+# on anything outside the container therefore restarts the wrong thing, and
+# keeps doing it. The live instance is slskd: its web server can be up while
+# its Soulseek login is dead, the login handshake times out after a hardcoded
+# 5000ms while slsknet holds a ghost session, and a restart re-collides with
+# that ghost (32->64->128s backoff, never recovers). The cure is staying DOWN
+# 15-30 min, so an auto-restart is the exact opposite of it. Login state is
+# watched alert-only by scripts/slskd_login_watch.py. ADR-0009.
+#
+# This is deliberately generic: the next service to get autoheal=true inherits
+# the rule instead of needing its own numbered section.
+FOREIGN_PROBE = (
+    # slskd: Soulseek session state, not web-server liveness (ADR-0009)
+    "isloggedin", "/api/v0/server", "/api/v0/session",
+    # generic cross-service reach: a probe naming a host that is not itself
+    "http://qbittorrent", "http://slskd", "http://prowlarr", "http://lidarr",
+    "http://sonarr", "http://radarr", "http://jellyfin", "http://nextcloud",
+)
+_ah = []
+for name, svc in sorted(services.items()):
+    lbls = svc.get("labels") or {}
+    if isinstance(lbls, list):
+        lbls = dict(x.split("=", 1) for x in lbls if "=" in x)
+    if str(lbls.get("autoheal", "")).lower() != "true":
+        continue
+    hc = svc.get("healthcheck") or {}
+    probe = " ".join(str(x) for x in (hc.get("test") or [])).lower()
+    if not probe or hc.get("disable"):
+        fail("autoheal-healthchecks-local", "ADR-0009",
+             f"{name} has autoheal=true but no healthcheck. autoheal then cannot "
+             "restart it when its own process actually dies, which is the one "
+             "case a restart does help.")
+        continue
+    hits = [p for p in FOREIGN_PROBE if p in probe and f"//{name}" not in probe]
+    if hits:
+        fail("autoheal-healthchecks-local", "ADR-0009",
+             f"{name}'s healthcheck probes {hits}, which is state outside this "
+             "container. With autoheal=true, every transient failure of that "
+             "dependency restarts THIS service, and a restart cannot fix it. "
+             "Keep the probe to local liveness (a web-UI spider or curl -f "
+             "against its own port).")
+    else:
+        _ah.append(name)
+if _ah:
+    ok("autoheal-healthchecks-local", f"liveness-only on {', '.join(_ah)}")
 
 # ==========================================================================
 # Report
