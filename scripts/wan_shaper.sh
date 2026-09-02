@@ -56,6 +56,14 @@ IFS=$'\n\t'
 WAN_IF="${WAN_IF:-enp88s0}"
 # ~90% of the 31 Mbps measured at the NIC counter on 2026-09-02. Shaping must sit
 # below the real rate or the modem, not us, stays the bottleneck.
+#
+# 85% (26 Mbit) was A/B'd against this and REJECTED on the data: across 18
+# samples the residual latency spikes do not correlate with our own upload
+# (r = +0.20), appear at near-idle just as at full load (worst max 44.9 ms below
+# 5 Mbps vs 61.6 ms above 10 Mbps), and 26 Mbit's worst case was no better.
+# Packet loss is 0% at both. The spikes are path variance to the probe target,
+# not our queue, so shaping harder costs 2 Mbps and buys nothing. Re-measure
+# before revisiting; the criterion is loss and load-correlation, not max RTT.
 SHAPE_MBIT="${SHAPE_MBIT:-28}"
 LAN_CIDR="${LAN_CIDR:-192.168.2.0/24}"
 # Well above any real LAN speed, so the LAN class is effectively unshaped while
@@ -82,7 +90,7 @@ clear_qdisc() {
 clear_marks() {
   # Delete every rule we previously added, identified by its comment, so this
   # is idempotent and leaves nothing behind for anyone else's rules.
-  while iptables -t mangle -S POSTROUTING | grep -q -- "--comment \"$DSCP_COMMENT\""; do
+  while iptables -t mangle -S POSTROUTING | grep -q -- "--comment $DSCP_COMMENT"; do
     local n
     n=$(iptables -t mangle -L POSTROUTING --line-numbers -n | awk -v c="$DSCP_COMMENT" '$0 ~ c {print $1; exit}')
     [ -n "$n" ] || break
@@ -167,8 +175,11 @@ check_health() {
   local want found
   want=${#BULK_CONTAINERS[@]}
   found=$(iptables -t mangle -S POSTROUTING 2>/dev/null | grep -c -- "$DSCP_COMMENT" || true)
-  if [ "$found" -lt "$want" ]; then
-    printf 'wan_shaper: FAIL %s of %s DSCP bulk marks present — torrents are not yielding\n' "$found" "$want"
+  if [ "$found" -ne "$want" ]; then
+    # Exact, not ">=": too few means torrents are not yielding, and too many
+    # means the teardown is not matching and rules are accumulating on every
+    # apply — which is how this was found. Either is a defect.
+    printf 'wan_shaper: FAIL %s DSCP bulk marks present, expected exactly %s\n' "$found" "$want"
     problems=$((problems + 1))
   fi
 

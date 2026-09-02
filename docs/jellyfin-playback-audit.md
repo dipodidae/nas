@@ -323,6 +323,35 @@ qdisc present, marks deleted
   restored               : up_limit 1874944 -> 3124224
 ```
 
+**A rule-teardown bug the exact-count check then caught.** While tightening the
+health check, `wan_shaper.sh check` reported *four* DSCP marks for two
+containers. `clear_marks` matched on `--comment "wan_shaper-bulk"` with quotes,
+but `iptables -S` prints the comment unquoted — so the teardown never fired and
+every `apply` appended another pair. Fixed, and the count check made **exact**
+rather than `>=`: too few means torrents are not yielding, too many means the
+teardown is broken, and both are defects. Three consecutive applies now hold at
+2 rules.
+
+**Shaper rate: 85% A/B'd and rejected on the data.** The standing advice when
+loaded latency looks poor is to drop from 90% to 85% of line rate. Measured
+across **18 samples** at 28 and 26 Mbit:
+
+| | n | avg RTT | worst max | worst jitter |
+|---|---|---|---|---|
+| near-idle (<5 Mbps up) | 7 | 11.8 ms | 44.9 ms | 6.87 ms |
+| loaded (≥10 Mbps up) | 7 | 12.5 ms | 61.6 ms | 7.85 ms |
+
+**Packet loss was 0% in every sample at both rates.** The residual spikes barely
+correlate with our own upload (**r = +0.20**), occur at near-idle as readily as
+at full load, and download was 0.0 Mbps throughout — so they are not our egress
+queue, and not ingress either. They are path variance to the probe target.
+26 Mbit's worst case (108 ms) was no better than 28's (61.6 ms). Shaping harder
+would cost 2 Mbps of capacity and fix nothing, so the rate stays at 28.
+
+The useful generalisation: **the criterion for the shaper is packet loss and
+load-correlation, not absolute max RTT.** A max-RTT number with no correlation
+to your own traffic is telling you about the internet, not about your queue.
+
 **A dead end worth recording so nobody re-walks it.** The remote transcode's
 ffmpeg log carries 423 `Packet duration: -16 ... is out of range` warnings, and
 zero appear in the LAN audio-only transcode — an extremely tempting lead. It
