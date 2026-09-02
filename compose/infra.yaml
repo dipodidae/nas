@@ -85,26 +85,42 @@ services:
       disable: true
     # Watchtower-opt-out: it must not restart its own dependency. ADR-0006.
 
-  # Pulls newer images for containers labelled
-  # com.centurylinklabs.watchtower.enable=true, on WATCHTOWER_SCHEDULE.
-  # Reaches Docker only through dockerproxy. INVARIANT: watchtower's recreate
-  # is not atomic, so slow/important services are opted OUT and updated by
-  # hand -- ADR-0006 lists them and explains the 13h qbittorrent outage.
+  # DETECTS newer images for containers labelled
+  # com.centurylinklabs.watchtower.enable=true, on WATCHTOWER_SCHEDULE, and
+  # reports them to ntfy. It does NOT apply them -- see WATCHTOWER_MONITOR_ONLY
+  # below. Reaches Docker only through dockerproxy. ADR-0020 supersedes the
+  # per-service opt-out defence in ADR-0006.
   watchtower:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: containrrr/watchtower:latest
+    # INVARIANT: NOT containrrr/watchtower -- archived 2025-12-17, "no longer
+    # maintained". This fork keeps the com.centurylinklabs.watchtower.* labels
+    # and the WATCHTOWER_* env contract, so every label in this repo and every
+    # deliberate omission keeps its meaning. ADR-0020.
+    image: nickfedor/watchtower:1.22.0
     container_name: watchtower
     environment:
       - DOCKER_HOST=tcp://dockerproxy:2375
-      - DOCKER_API_VERSION=1.40
+      # DOCKER_API_VERSION removed with the fork swap: it autonegotiates, and
+      # this host serves API 1.55. ADR-0020.
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
       - WATCHTOWER_LABEL_ENABLE=true
+      # Inert under monitor-only (cleanup only removes an image AFTER a
+      # container is restarted with a new one), left set so it is correct again
+      # if anyone reverts. The weekly `docker image prune -f` cron is what
+      # actually bounds the images monitor-only keeps pulling. ADR-0020.
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - WATCHTOWER_ROLLING_RESTART=false
       - WATCHTOWER_REMOVE_VOLUMES=false
+      # INVARIANT: monitor-only. Watchtower detects updates and reports them;
+      # it must never stop, remove or create a container. Its recreate is not
+      # atomic and a failed remove leaves NO container at all -- 13h of
+      # qbittorrent on 2026-09-01, 7 days on 2026-08-19. It did recreate `qui`
+      # at 04:01 on 2026-09-02, so this capability is live, not historical.
+      # Recreating is `docker compose up -d`'s job. ADR-0020.
+      - WATCHTOWER_MONITOR_ONLY=true
       # INVARIANT: >= the longest stop_grace_period in the stack (qbittorrent,
       # 120s). Watchtower's own SIGTERM->SIGKILL timeout defaults to 10s and
       # ignores compose's stop_grace_period. ADR-0006.

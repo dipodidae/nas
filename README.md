@@ -311,7 +311,7 @@ the rule.** Compose lines carrying `INVARIANT:` are the same contract.
 |---|---|---|
 | `qbittorrent` keeps `CAP_KILL` | s6 (root) must signal `qbittorrent-nox` (uid 1000). Without it every stop is a 120.3 s SIGKILL instead of 6.2 s | [0004](docs/decisions/0004-qbittorrent-cap-kill.md) |
 | `qbittorrent` tag stays pinned, ≥ 5.2.2 | 5.2.0/5.2.1 can't prove their lockfile is stale after a recreate and refuse to start | [0005](docs/decisions/0005-qbittorrent-pinned-tag.md) |
-| `qbittorrent`/`jellyfin` carry **no** Watchtower label | Its stop→remove→create is not atomic; a failed remove leaves **no container at all** (13 h outage) | [0006](docs/decisions/0006-watchtower-opt-outs.md) |
+| Watchtower is `MONITOR_ONLY` | Its recreate is not atomic; a failed remove leaves **no container at all** (13 h, then 7 days). The capability is removed, not defended | [0020](docs/decisions/0020-watchtower-replaced-and-demoted.md) |
 | `memswap_limit == mem_limit` wherever `mem_limit` is set | Otherwise it balloons into host swap and thrashes everything else first | [0007](docs/decisions/0007-qbittorrent-memory-cap.md) |
 | slskd's healthcheck stays Soulseek-**independent** | A login-aware healthcheck + autoheal = permanent restart spiral | [0009](docs/decisions/0009-slskd-healthcheck.md) |
 | autoheal stop timeout ≥ 120 s, `CURL_TIMEOUT` > that | Otherwise restarts are cut off mid-stop and pile up three deep | [0010](docs/decisions/0010-autoheal-timeouts.md) |
@@ -330,13 +330,22 @@ Start at [`docs/decisions/README.md`](docs/decisions/README.md) for the full ind
 There are two update paths on purpose, because Watchtower's recreate is not
 atomic and has twice left no container at all.
 
-### Scheduled (16 services)
+### Detected, not applied (16 services)
 
-Watchtower runs on `WATCHTOWER_SCHEDULE` (default `0 0 4 * * *`) and touches
-only containers labelled `com.centurylinklabs.watchtower.enable=true`. It talks
-to Docker through `dockerproxy`, never the raw socket, and pushes an ntfy
-digest per run — so "what changed at 04:00 and did it work" needs no log
-reading.
+Watchtower runs on `WATCHTOWER_SCHEDULE` (default `0 0 4 * * *`), checks the 16
+labelled containers for newer images, and **reports** what it finds to ntfy. It
+is `WATCHTOWER_MONITOR_ONLY=true` and never stops, removes or creates anything:
+its recreate is not atomic and a failed remove leaves no container at all. That
+capability is gone rather than defended against. The image is
+`nickfedor/watchtower`, a maintained drop-in fork — `containrrr/watchtower` was
+archived in December 2025. → [ADR-0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)
+
+Applying an update is `make pull && make up`, or one of the watched
+single-service targets below.
+
+Monitor-only still *pulls* the images it checks, and `WATCHTOWER_CLEANUP` only
+removes an image after a container is restarted with it — so pulled images
+accumulate until the weekly `docker image prune -f` cron (Sundays 03:00).
 
 ### Deliberate (the rest)
 
@@ -622,5 +631,10 @@ Honest list of things that are wrong or unfinished, all tracked:
   oversight. → [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md)
 - **`lingarr` carries `swag=enable` but has no proxy-conf**, so
   `lingarr.4eva.me` does not resolve to it. Reach it on `127.0.0.1:9876`.
+- **No update notification for `jellyfin` or `qbittorrent`.** Both are pinned
+  and both are unlabelled, and Watchtower reports against the tag a container
+  was started from — so a pinned tag is silent even if relabelled. Closing this
+  needs a version-aware watcher (DIUN / WUD / Renovate against the compose
+  files), not a Watchtower setting. → [ADR-0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)
 - **No off-box backup of `${CONFIG_DIRECTORY}`.** `config_backup.py` writes to
   `/mnt/drive/backups/`, which is the same host and the same box.

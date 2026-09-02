@@ -626,6 +626,39 @@ else:
         ok("qbit-diskio-type", _QBT_IOTYPE.get(_t, _t))
 
 # ==========================================================================
+# 15. Watchtower is monitor-only, and not the archived upstream
+# ==========================================================================
+# Its stop->remove->create is not atomic: when the remove fails it logs
+# Failed=1 and moves on WITHOUT creating a replacement, leaving no container
+# at all. qbittorrent, 2026-09-01, 13h. monitor-only removes the capability
+# rather than defending against it.
+#
+# The image check is separate and softer: containrrr/watchtower was archived
+# 2025-12-17 ("no longer maintained"). It still works against Docker 29 here,
+# so this is a maintenance risk rather than a live fault. ADR-0020.
+wt = services.get("watchtower", {})
+wt_env = env_of("watchtower")
+if str(wt_env.get("WATCHTOWER_MONITOR_ONLY", "")).lower() != "true":
+    fail("watchtower-monitor-only", "ADR-0020",
+         "WATCHTOWER_MONITOR_ONLY is not 'true'. Watchtower can then stop and "
+         "remove containers, and its recreate is not atomic -- a failed remove "
+         "leaves NO container, which restart: unless-stopped cannot fix and "
+         "autoheal cannot heal. It cost 13h of qbittorrent on 2026-09-01 and "
+         "7 days on 2026-08-19. Recreating belongs to `docker compose up -d`.")
+else:
+    ok("watchtower-monitor-only", "notify-only; compose does the recreating")
+
+if wt.get("image", "").startswith("containrrr/watchtower"):
+    warn("watchtower-image-maintained", "ADR-0020",
+         "containrrr/watchtower was archived 2025-12-17 and will get no further "
+         "fixes. It still works against Docker 29.7.2 here, so this is a "
+         "maintenance risk, not a live fault -- but the next Docker API change "
+         "has nobody to answer it. nickfedor/watchtower is a drop-in: same "
+         "com.centurylinklabs.watchtower.* labels, same WATCHTOWER_* env vars.")
+elif wt.get("image"):
+    ok("watchtower-image-maintained", wt["image"])
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
