@@ -72,6 +72,29 @@ services:
     image: nas/playlist-generator:latest
     pull_policy: build
     container_name: playlist-generator
+    # Measured 2026-09-02, not guessed. nginx binds :80 (NET_BIND_SERVICE), its
+    # master spawns `user www-data;` workers (SETUID/SETGID), and CHOWN covers
+    # nginx's cache and log dirs at startup. uvicorn stays on 127.0.0.1:8000 and
+    # needs nothing.
+    #
+    # KILL: the nginx master is uid 0 and its workers are uid 33. kill() across
+    # a uid boundary needs CAP_KILL -- root is not enough. Without it the
+    # container starts healthy and then cannot reload or stop gracefully, ending
+    # every stop in a SIGKILL. Same mechanism as swag (ADR-0021) and as
+    # qbittorrent's s6 supervisor (ADR-0004).
+    #
+    # DAC_OVERRIDE deliberately NOT granted: everything here is root-owned
+    # (/etc/nginx/.htpasswd is 0:0), so there are no permission checks to
+    # bypass -- unlike playlist-generator-db, whose PGDATA is 999:1000.
+    # ADR-0018.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - KILL
+      - NET_BIND_SERVICE
     environment:
       - TZ=${TZ:-UTC}
       - DATABASE_URL=postgresql://playlist:${PLAYLIST_GENERATOR_DB_PASSWORD}@playlist-generator-db:5432/playlist_generator
@@ -120,4 +143,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
-    # KNOWN GAP: no cap_drop: ALL. ADR-0018.

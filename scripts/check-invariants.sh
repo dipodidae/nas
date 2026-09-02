@@ -124,10 +124,9 @@ def is_locally_built(svc):
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
 # Warned about on every run so it cannot quietly become the convention.
-CAP_DROP_WAIVER = {
-    "playlist-generator":    "ADR-0018 -- nginx needs NET_BIND_SERVICE; set not yet determined",
-    "playlist-generator-db": "ADR-0018 -- pg entrypoint chowns PGDATA; set not yet determined",
-}
+# 2026-09-02: both closed with measured capability sets -- the dict is
+# deliberately left in place (empty) so the next gap has an obvious home.
+CAP_DROP_WAIVER = {}
 
 # Ports that are public on purpose. Anything else must bind 127.0.0.1.
 PUBLIC_PORT_ALLOWLIST = {

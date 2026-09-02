@@ -327,7 +327,7 @@ the rule.** Compose lines carrying `INVARIANT:` are the same contract.
 | Only `dockerproxy` mounts `/var/run/docker.sock` | The socket is root on the host | [0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
 | sonarr/radarr/lidarr/**bazarr** mount `/data` | Hardlinks can't cross a mount point (cost 0.96 TiB); bazarr needs it to resolve *arr paths | [0002](docs/decisions/0002-single-mount-data-hardlinks.md), [0015](docs/decisions/0015-bazarr-no-data-mount.md) |
 | Jellyfin's volume mappings are **not** changed | Owner instruction, and 3 systems are calibrated to `/data/movies` | [0016](docs/decisions/0016-jellyfin-paths-are-load-bearing.md) |
-| Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI | The hardening baseline | [0001](docs/decisions/0001-hardening-baseline.md) |
+| Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI | The hardening baseline. **No exceptions** — the last two waivers were closed with measured sets on 2026-09-02 | [0001](docs/decisions/0001-hardening-baseline.md), [0018](docs/decisions/0018-capability-gaps.md) |
 
 Start at [`docs/decisions/README.md`](docs/decisions/README.md) for the full index.
 
@@ -626,10 +626,6 @@ The pre-split `docker-compose.yml` is recoverable:
 
 Honest list of things that are wrong or unfinished, all tracked:
 
-- **`playlist-generator` and its db don't `cap_drop: ALL`** — the only two
-  services missing it. Not guessed at, because getting a database's capability
-  set wrong means it doesn't come back up. `make check` warns by name every
-  run. → [ADR-0018](docs/decisions/0018-capability-gaps.md)
 - **Lidarr still copies instead of hardlinking.** The repath is staged and
   parked. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md)
 - **Jellyfin's memory leak is not root-caused.** Three mitigations contain it;
