@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import re
 import sqlite3
 import sys
@@ -33,7 +34,7 @@ LAZYLIBRARIAN_DB = Path("/mnt/docker-usb/lazylibrarian/lazylibrarian.db")
 BOOKS_DIR = Path("/mnt/drive-next/Books")
 LOG_DIR = Path("/home/tom/nas/logs")
 JELLYFIN_API_URL = "http://localhost:8096"
-JELLYFIN_API_KEY = "d0ba4efb1a664e2b8870363719c57939"
+JELLYFIN_API_KEY = os.environ.get("API_KEY_READARR", "")
 
 # Format preference: higher number = higher priority
 FORMAT_PRIORITY = {

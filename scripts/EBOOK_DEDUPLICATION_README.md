@@ -253,7 +253,7 @@ Edit these values at the top of the script if your paths differ:
 LAZYLIBRARIAN_DB = Path("/mnt/docker-usb/lazylibrarian/lazylibrarian.db")
 BOOKS_DIR = Path("/mnt/drive-next/Books")
 JELLYFIN_API_URL = "http://localhost:8096"
-JELLYFIN_API_KEY = "d0ba4efb1a664e2b8870363719c57939"
+JELLYFIN_API_KEY = os.environ.get("API_KEY_READARR", "")
 ```
 
 ## Best Practices

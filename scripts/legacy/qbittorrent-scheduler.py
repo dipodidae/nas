@@ -6,6 +6,7 @@ Runs every minute via cron or systemd timer.
 """
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 
@@ -13,8 +14,8 @@ import requests
 
 # Configuration
 QB_HOST = "http://localhost:8080"
-QB_USER = "admin"
-QB_PASS = "sotm19858514"
+QB_USER = os.environ.get("QBITTORRENT_USER", "")
+QB_PASS = os.environ.get("QBITTORRENT_PASS", "")  # never hardcode; see AGENTS.md
 
 # Speed limits (KB/s, 0 = unlimited)
 DOWNLOAD_WINDOW_START = 1  # 01:00
