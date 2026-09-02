@@ -216,30 +216,6 @@
     service: swag
   watch_repo: false
 
-# watchtower
-#   plain semver tags
-- name: nickfedor/watchtower:1.22.0
-  metadata:
-    service: watchtower
-  watch_repo: true
-  sort_tags: semver
-  max_tags: 5
-  include_tags:
-    - '^\d+\.\d+\.\d+$'
-  exclude_tags:
-    - '^latest$'
-    - '^nightly$'
-    - '^develop(ment)?$'
-    - '^edge$'
-    - '^main$'
-    - '^master$'
-    - '^unstable$'
-    - '^beta$'
-    - '^rc'
-    - '-rc'
-    - '^dev$'
-    - '-dev$'
-
 # whisper
 - name: onerahmet/openai-whisper-asr-webservice:latest
   metadata:

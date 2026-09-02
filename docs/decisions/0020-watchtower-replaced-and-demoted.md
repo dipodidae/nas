@@ -1,7 +1,9 @@
 # ADR-0020 — Watchtower is replaced and demoted to monitor-only
 
 **Date:** 2026-09-02
-**Status:** accepted
+**Status:** superseded by [ADR-0025](0025-watchtower-retired.md) — watchtower is
+gone entirely, and the notification gap this record identified is closed by
+[ADR-0024](0024-diun-version-aware-notification.md)
 **Amends:** ADR-0006, which defended against this failure per-service
 
 ## Decision

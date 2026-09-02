@@ -102,10 +102,6 @@ POLICIES: dict[str, Policy] = {
         include=[r"^v\d+\.\d+\.\d+-omnibus$"],
         note="omnibus variant only -- the split images are a different topology",
     ),
-    "nickfedor/watchtower": Policy(
-        include=[r"^\d+\.\d+\.\d+$"],
-        note="plain semver tags",
-    ),
     "crazymax/diun": Policy(
         include=[r"^\d+\.\d+\.\d+$"],
         note="plain semver tags",

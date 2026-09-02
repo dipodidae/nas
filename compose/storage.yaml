@@ -34,7 +34,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'https://localhost:443/status.php', -k]
       interval: 60s

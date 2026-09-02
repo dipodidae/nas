@@ -14,7 +14,7 @@ project, one reverse proxy, one 10 TB disk.
 | Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0                |
 | Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                           |
 | Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe (42 % worn, SMART-watched) |
-| Services        | 28 (4 built locally, 16 auto-updated, 8 deliberately not)       |
+| Services        | 27 (4 built locally; ALL watched by diun, 5 manual-update)      |
 | Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01       |
 
 ---
@@ -52,7 +52,7 @@ make bootstrap      # creates nas-network and pre-chowns the two config dirs
                     # them crash-loop on `permission denied`. ADR-0014.
 
 make lint           # does the compose model even render?
-make check          # 41 invariant assertions
+make check          # 40 invariant assertions
 
 docker compose up -d 4eva-rootpage      # swag depends_on it being healthy
 docker compose up -d swag               # get TLS working first
@@ -103,13 +103,13 @@ make check                                 # the incident-derived assertions
 Restart cadence is what the module grouping encodes, so check which file a
 service lives in before you cycle it:
 
-| Module                        | Safe to restart | Notes                                                          |
-| ----------------------------- | --------------- | -------------------------------------------------------------- |
-| `compose/media-manage.yaml`   | **Freely**      | Stateless HTTP apps over SQLite                                |
-| `compose/media-serve.yaml`    | Deliberately    | User-visible; Jellyfin is slow to stop                         |
-| `compose/storage.yaml`        | Deliberately    | Nextcloud holds live sync sessions                             |
-| `compose/infra.yaml`          | **Carefully**   | `dockerproxy` is watchtower's and autoheal's only Docker route |
-| `compose/media-download.yaml` | **Carefully**   | See below                                                      |
+| Module                        | Safe to restart | Notes                                           |
+| ----------------------------- | --------------- | ----------------------------------------------- |
+| `compose/media-manage.yaml`   | **Freely**      | Stateless HTTP apps over SQLite                 |
+| `compose/media-serve.yaml`    | Deliberately    | User-visible; Jellyfin is slow to stop          |
+| `compose/storage.yaml`        | Deliberately    | Nextcloud holds live sync sessions              |
+| `compose/infra.yaml`          | **Carefully**   | `dockerproxy` is `autoheal`'s only Docker route |
+| `compose/media-download.yaml` | **Carefully**   | See below                                       |
 
 Two services need real care, both for recorded reasons:
 
@@ -143,14 +143,14 @@ boundaries and `depends_on` only resolves within a project.
 ├── Makefile                      # operational targets
 ├── compose/
 │   ├── _fragments.yaml           # shared service shape, pulled in via `extends`
-│   ├── infra.yaml                # swag, dockerproxy, watchtower, autoheal, ntfy
+│   ├── infra.yaml                # swag, dockerproxy, autoheal, diun, scrutiny, ntfy
 │   ├── media-download.yaml       # qbittorrent, qui, slskd, prowlarr, byparr
 │   ├── media-manage.yaml         # sonarr, radarr, lidarr, bazarr, whisper,
 │   │                             #   lingarr, cleanuparr, recyclarr
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
 │   └── storage.yaml              # nextcloud
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
-├── docs/decisions/               # 25 ADRs — the incident history
+├── docs/decisions/               # 26 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
 └── qbittorrent/custom-cont-init.d/   # LSIO init hook, bind-mounted read-only
 ```
@@ -198,8 +198,10 @@ Full reasoning, including what was rejected and why:
 
 ## Service reference
 
-`wt` = auto-updated by Watchtower. `NO` means **deliberately opted out**, never
-forgotten — [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md) says why for each.
+`wt` = **update notification** only; nothing here auto-updates any more
+([ADR-0025](docs/decisions/0025-watchtower-retired.md)). Every image is watched
+by `diun`; `NO` in this column marks a service that must be updated **by hand**,
+listed with its reason in `MANUAL_UPDATE_ONLY` in the checker.
 
 ### Control plane — `compose/infra.yaml`
 
@@ -207,7 +209,6 @@ forgotten — [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md) says why fo
 | ------------- | ----------------------------- | ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `swag`        | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                           |
 | `dockerproxy` | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
-| `watchtower`  | containrrr/watchtower         | —                | **NO** | Daily 04:00. Never self-updates                                                                                              |
 | `autoheal`    | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                     |
 | `ntfy`        | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                  |
 | `diun`        | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md) |
@@ -249,7 +250,8 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 
 ### Locally built — `webapps/*/compose.yaml`
 
-All four are Watchtower-opt-out **by construction**: it cannot pull a local image.
+All four are excluded from update notification **by derivation**: a locally-built
+image has no registry to watch, so `diun`'s manifest emitter skips them.
 
 | Service                 | Source                                            | Ports            | Notes                                                  |
 | ----------------------- | ------------------------------------------------- | ---------------- | ------------------------------------------------------ |
@@ -265,7 +267,7 @@ All four are Watchtower-opt-out **by construction**: it cannot pull a local imag
 
 ```
 4eva-rootpage ─(healthy)→ swag ────────→ nextcloud
-dockerproxy ──→ watchtower, autoheal
+dockerproxy ──→ autoheal   (its only client — ADR-0025)
 qbittorrent ──→ prowlarr, qui ──→ sonarr, radarr, lidarr
 slskd ────────→ lidarr ─────────→ lidarr-bulk
 prowlarr, whisper ──→ bazarr
@@ -316,8 +318,8 @@ ssh -L 8989:127.0.0.1:8989 <host>    # then http://localhost:8989
 
 ## Rules that will bite you
 
-These are asserted mechanically by `scripts/check-invariants.sh` — **41
-assertions** over 28 services, run by `make check`, by the pre-commit hook, and
+These are asserted mechanically by `scripts/check-invariants.sh` — **40
+assertions** over 27 services, run by `make check`, by the pre-commit hook, and
 by CI so a violation cannot merge. Each failure prints the ADR that explains why
 the rule exists — **read it before changing the rule.** Compose lines carrying
 `INVARIANT:` are the same contract.
@@ -327,27 +329,27 @@ containers, no qBittorrent API). `make verify-runtime` is the other half: it
 asserts the _running_ containers match, on a daily cron, and covers what config
 alone cannot prove.
 
-| Rule                                                                                                                                                                                                              | Why                                                                                                                                                                                                                                                                                   | ADR                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `diun/manifest.yml` covers every image-pulling service, and matches the compose model                                                                                                                             | Diun watches what the manifest lists and nothing else, so a service added without regenerating it silently loses update notification. Drift in a _notification_ config is the worst kind: the thing that would have told you is the thing that stopped. `make diun-manifest`          | [0024](docs/decisions/0024-diun-version-aware-notification.md)                                                         |
-| Only `scrutiny` holds `CAP_SYS_ADMIN` or a raw disk device, `:r`, on `/dev/nvme0` (the **controller**, not the `nvme0n1` namespace — `smartctl --scan` returns empty for a namespace and the UI still looks fine) | Measured, not copied: `SYS_ADMIN` alone reads the NVMe, `SYS_RAWIO` alone cannot, and both together are no better. So `SYS_RAWIO` is refused, as `FOWNER`/`FSETID` were on qBittorrent                                                                                                | [0023](docs/decisions/0023-smart-monitoring.md)                                                                        |
-| No two services publish the same host port                                                                                                                                                                        | `docker compose config` renders a collision without complaint; only `up` fails, as a bind error on whichever container starts second — which reads as "that service is broken". Scrutiny's upstream example publishes host 8080, which `qbittorrent` owns and three scripts depend on | [0023](docs/decisions/0023-smart-monitoring.md)                                                                        |
-| `qbittorrent` keeps `CAP_KILL`, and nothing wider                                                                                                                                                                 | s6 (root) must signal `qbittorrent-nox` (uid 1000). Without it every stop is a 120.3 s SIGKILL instead of 6.2 s. `FOWNER`/`FSETID` were verified _not_ needed — do not widen the grant                                                                                                | [0004](docs/decisions/0004-qbittorrent-cap-kill.md)                                                                    |
-| An nginx whose master and workers differ in uid needs `CAP_KILL`                                                                                                                                                  | `kill()` across a uid boundary needs the capability; **root is not enough**. Without it `nginx -s reload` leaks stale-config workers and a graceful stop ends in SIGKILL. Covers `swag` and `playlist-generator`                                                                      | [0021](docs/decisions/0021-nginx-cap-kill.md)                                                                          |
-| `qbittorrent` tag stays pinned, ≥ 5.2.2                                                                                                                                                                           | 5.2.0/5.2.1 can't prove their lockfile is stale after a recreate and refuse to start                                                                                                                                                                                                  | [0005](docs/decisions/0005-qbittorrent-pinned-tag.md)                                                                  |
-| `jellyfin` tag stays pinned too                                                                                                                                                                                   | A Jellyfin regression is discovered mid-playback. An update must be _chosen_. Accepted cost: pinned + unlabelled means Watchtower never reports one                                                                                                                                   | [0006](docs/decisions/0006-watchtower-opt-outs.md), [0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)     |
-| Watchtower is `MONITOR_ONLY`, and not the archived upstream                                                                                                                                                       | Its recreate is not atomic; a failed remove leaves **no container at all** (13 h, then 7 days). The capability is removed, not defended. `containrrr/watchtower` was archived 2025-12-17                                                                                              | [0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)                                                         |
-| `memswap_limit == mem_limit` wherever `mem_limit` is set                                                                                                                                                          | Otherwise it balloons into host swap and thrashes everything else first                                                                                                                                                                                                               | [0007](docs/decisions/0007-qbittorrent-memory-cap.md)                                                                  |
-| qBittorrent's disk-IO stays `DisableOSCache` — checked against the **live session**                                                                                                                               | `mem_limit: 4g` is only the backstop; this is the actual fix for the 21.1 GB cgroup peak, and it lives in qBittorrent's own config where the WebUI can silently revert it. Read from the API, not `qBittorrent.conf`                                                                  | [0007](docs/decisions/0007-qbittorrent-memory-cap.md)                                                                  |
-| No autoheal-monitored healthcheck may probe a **dependency**                                                                                                                                                      | autoheal turns a failing probe into a restart, so a probe that depends on anything outside the container restarts the wrong thing — forever. slskd's Soulseek login is the live instance; the rule is generic                                                                         | [0009](docs/decisions/0009-slskd-healthcheck.md)                                                                       |
-| `start_period` must outlast the slowest legitimate startup                                                                                                                                                        | slskd doesn't bind `:5030` until its ~18 min share scan finishes. At 120 s it went unhealthy at ~9 min, autoheal restarted it, and the scan began again at 0% — a loop it never escaped                                                                                               | [0009](docs/decisions/0009-slskd-healthcheck.md)                                                                       |
-| autoheal's stop timeout ≥ the longest monitored `stop_grace_period`, `CURL_TIMEOUT` > that                                                                                                                        | Otherwise restarts are cut off mid-stop and pile up three deep. **Computed from the live model**, over the monitored services only, honouring per-container overrides                                                                                                                 | [0010](docs/decisions/0010-autoheal-timeouts.md)                                                                       |
-| No `QBITTORRENT_USER`/`PASS` on the container                                                                                                                                                                     | The image never read them; it only leaked them into `docker inspect`                                                                                                                                                                                                                  | [0011](docs/decisions/0011-qbittorrent-credentials.md)                                                                 |
-| Only `dockerproxy` mounts `/var/run/docker.sock`                                                                                                                                                                  | The socket is root on the host. Asserted in config **and** against the running containers                                                                                                                                                                                             | [0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md)                                                          |
-| sonarr/radarr/lidarr/**bazarr** mount `/data`                                                                                                                                                                     | Hardlinks can't cross a mount point (cost 0.96 TiB); bazarr needs it to resolve \*arr paths. **Both ends of the link must be inside it** — a root folder alone is not enough                                                                                                          | [0002](docs/decisions/0002-single-mount-data-hardlinks.md), [0015](docs/decisions/0015-bazarr-no-data-mount.md)        |
-| Jellyfin's volume mappings are **not** changed — sources included                                                                                                                                                 | Owner instruction, and 3 systems are calibrated to `/data/movies`. Repointing the _source_ breaks the same three while leaving the target intact                                                                                                                                      | [0016](docs/decisions/0016-jellyfin-paths-are-load-bearing.md)                                                         |
-| Every `swag=enable` service has a tracked proxy-conf, and every conf has a label                                                                                                                                  | The **conf** is what routes, not the label — the auto-proxy mod is not installed. `lingarr` had a label and no conf (served SWAG's default page, answering `200`); `slskd` had a conf and no label. All 16 confs are tracked, nine of which existed nowhere else                      | [0020](docs/decisions/0020-watchtower-replaced-and-demoted.md), [0022](docs/decisions/0022-proxy-confs-are-tracked.md) |
-| Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI                                                                                                                                     | The hardening baseline. **No exceptions** — the last two waivers were closed with measured sets on 2026-09-02                                                                                                                                                                         | [0001](docs/decisions/0001-hardening-baseline.md), [0018](docs/decisions/0018-capability-gaps.md)                      |
+| Rule                                                                                                                                                                                                              | Why                                                                                                                                                                                                                                                                                   | ADR                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `diun/manifest.yml` covers every image-pulling service, and matches the compose model                                                                                                                             | Diun watches what the manifest lists and nothing else, so a service added without regenerating it silently loses update notification. Drift in a _notification_ config is the worst kind: the thing that would have told you is the thing that stopped. `make diun-manifest`          | [0024](docs/decisions/0024-diun-version-aware-notification.md)                                                     |
+| Only `scrutiny` holds `CAP_SYS_ADMIN` or a raw disk device, `:r`, on `/dev/nvme0` (the **controller**, not the `nvme0n1` namespace — `smartctl --scan` returns empty for a namespace and the UI still looks fine) | Measured, not copied: `SYS_ADMIN` alone reads the NVMe, `SYS_RAWIO` alone cannot, and both together are no better. So `SYS_RAWIO` is refused, as `FOWNER`/`FSETID` were on qBittorrent                                                                                                | [0023](docs/decisions/0023-smart-monitoring.md)                                                                    |
+| No two services publish the same host port                                                                                                                                                                        | `docker compose config` renders a collision without complaint; only `up` fails, as a bind error on whichever container starts second — which reads as "that service is broken". Scrutiny's upstream example publishes host 8080, which `qbittorrent` owns and three scripts depend on | [0023](docs/decisions/0023-smart-monitoring.md)                                                                    |
+| `qbittorrent` keeps `CAP_KILL`, and nothing wider                                                                                                                                                                 | s6 (root) must signal `qbittorrent-nox` (uid 1000). Without it every stop is a 120.3 s SIGKILL instead of 6.2 s. `FOWNER`/`FSETID` were verified _not_ needed — do not widen the grant                                                                                                | [0004](docs/decisions/0004-qbittorrent-cap-kill.md)                                                                |
+| An nginx whose master and workers differ in uid needs `CAP_KILL`                                                                                                                                                  | `kill()` across a uid boundary needs the capability; **root is not enough**. Without it `nginx -s reload` leaks stale-config workers and a graceful stop ends in SIGKILL. Covers `swag` and `playlist-generator`                                                                      | [0021](docs/decisions/0021-nginx-cap-kill.md)                                                                      |
+| `qbittorrent` tag stays pinned, ≥ 5.2.2                                                                                                                                                                           | 5.2.0/5.2.1 can't prove their lockfile is stale after a recreate and refuse to start                                                                                                                                                                                                  | [0005](docs/decisions/0005-qbittorrent-pinned-tag.md)                                                              |
+| `jellyfin` tag stays pinned too                                                                                                                                                                                   | A Jellyfin regression is discovered mid-playback. An update must be _chosen_. `diun` reports when there is one to choose, which is what the pin used to cost                                                                                                                          | [0006](docs/decisions/0006-watchtower-opt-outs.md), [0024](docs/decisions/0024-diun-version-aware-notification.md) |
+| No service carries a `com.centurylinklabs.watchtower.*` label, and `dockerproxy` exposes only `CONTAINERS`/`POST`/`PING`/`VERSION`                                                                                | Watchtower is retired. `IMAGES`/`NETWORKS`/`DELETE` existed only for its recreate flow — the one that leaves **no container at all** (13 h, then 7 days) — so narrowing the proxy removes the capability that caused the incident, not just an unused grant                           | [0025](docs/decisions/0025-watchtower-retired.md)                                                                  |
+| `memswap_limit == mem_limit` wherever `mem_limit` is set                                                                                                                                                          | Otherwise it balloons into host swap and thrashes everything else first                                                                                                                                                                                                               | [0007](docs/decisions/0007-qbittorrent-memory-cap.md)                                                              |
+| qBittorrent's disk-IO stays `DisableOSCache` — checked against the **live session**                                                                                                                               | `mem_limit: 4g` is only the backstop; this is the actual fix for the 21.1 GB cgroup peak, and it lives in qBittorrent's own config where the WebUI can silently revert it. Read from the API, not `qBittorrent.conf`                                                                  | [0007](docs/decisions/0007-qbittorrent-memory-cap.md)                                                              |
+| No autoheal-monitored healthcheck may probe a **dependency**                                                                                                                                                      | autoheal turns a failing probe into a restart, so a probe that depends on anything outside the container restarts the wrong thing — forever. slskd's Soulseek login is the live instance; the rule is generic                                                                         | [0009](docs/decisions/0009-slskd-healthcheck.md)                                                                   |
+| `start_period` must outlast the slowest legitimate startup                                                                                                                                                        | slskd doesn't bind `:5030` until its ~18 min share scan finishes. At 120 s it went unhealthy at ~9 min, autoheal restarted it, and the scan began again at 0% — a loop it never escaped                                                                                               | [0009](docs/decisions/0009-slskd-healthcheck.md)                                                                   |
+| autoheal's stop timeout ≥ the longest monitored `stop_grace_period`, `CURL_TIMEOUT` > that                                                                                                                        | Otherwise restarts are cut off mid-stop and pile up three deep. **Computed from the live model**, over the monitored services only, honouring per-container overrides                                                                                                                 | [0010](docs/decisions/0010-autoheal-timeouts.md)                                                                   |
+| No `QBITTORRENT_USER`/`PASS` on the container                                                                                                                                                                     | The image never read them; it only leaked them into `docker inspect`                                                                                                                                                                                                                  | [0011](docs/decisions/0011-qbittorrent-credentials.md)                                                             |
+| Only `dockerproxy` mounts `/var/run/docker.sock`                                                                                                                                                                  | The socket is root on the host. Asserted in config **and** against the running containers                                                                                                                                                                                             | [0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md)                                                      |
+| sonarr/radarr/lidarr/**bazarr** mount `/data`                                                                                                                                                                     | Hardlinks can't cross a mount point (cost 0.96 TiB); bazarr needs it to resolve \*arr paths. **Both ends of the link must be inside it** — a root folder alone is not enough                                                                                                          | [0002](docs/decisions/0002-single-mount-data-hardlinks.md), [0015](docs/decisions/0015-bazarr-no-data-mount.md)    |
+| Jellyfin's volume mappings are **not** changed — sources included                                                                                                                                                 | Owner instruction, and 3 systems are calibrated to `/data/movies`. Repointing the _source_ breaks the same three while leaving the target intact                                                                                                                                      | [0016](docs/decisions/0016-jellyfin-paths-are-load-bearing.md)                                                     |
+| Every `swag=enable` service has a tracked proxy-conf, and every conf has a label                                                                                                                                  | The **conf** is what routes, not the label — the auto-proxy mod is not installed. `lingarr` had a label and no conf (served SWAG's default page, answering `200`); `slskd` had a conf and no label. All 16 confs are tracked, nine of which existed nowhere else                      | [0022](docs/decisions/0022-proxy-confs-are-tracked.md)                                                             |
+| Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI                                                                                                                                     | The hardening baseline. **No exceptions** — the last two waivers were closed with measured sets on 2026-09-02                                                                                                                                                                         | [0001](docs/decisions/0001-hardening-baseline.md), [0018](docs/decisions/0018-capability-gaps.md)                  |
 
 Start at [`docs/decisions/README.md`](docs/decisions/README.md) for the full index.
 
@@ -355,27 +357,29 @@ Start at [`docs/decisions/README.md`](docs/decisions/README.md) for the full ind
 
 ## Updating services
 
-There are two update paths on purpose, because Watchtower's recreate is not
-atomic and has twice left no container at all.
+**Nothing in this stack applies an update.** Detection and application are fully
+separated, because the thing that used to do both had a non-atomic recreate that
+twice left no container at all.
+→ [ADR-0025](docs/decisions/0025-watchtower-retired.md)
 
-### Detected, not applied (16 services)
+### Detected (every image, including the pinned ones)
 
-Watchtower runs on `WATCHTOWER_SCHEDULE` (default `0 0 4 * * *`), checks the 16
-labelled containers for newer images, and **reports** what it finds to ntfy. It
-is `WATCHTOWER_MONITOR_ONLY=true` and never stops, removes or creates anything:
-its recreate is not atomic and a failed remove leaves no container at all. That
-capability is gone rather than defended against. The image is
-`nickfedor/watchtower`, a maintained drop-in fork — `containrrr/watchtower` was
-archived in December 2025. → [ADR-0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)
+`diun` reads a manifest generated from the compose model and watches each
+image's **repository**, so it can answer "what is newer than this pin" — which
+is why it covers `jellyfin` and `qbittorrent`, the two Watchtower structurally
+could not report on. It runs at 04:10 and pushes to the `nas-alerts` ntfy topic.
 
-Applying an update is `make pull && make up`, or one of the watched
-single-service targets below.
+`diun` has **no route to the Docker API at all**, not even through
+`dockerproxy`. `make check` asserts the manifest covers every image-pulling
+service and still matches the compose model — drift in a notification config is
+silent, so it is asserted rather than trusted.
+→ [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md)
 
-Monitor-only still _pulls_ the images it checks, and `WATCHTOWER_CLEANUP` only
-removes an image after a container is restarted with it — so pulled images
-accumulate until the weekly `docker image prune -f` cron (Sundays 03:00).
+```bash
+make diun-manifest      # regenerate after adding a service, then commit it
+```
 
-### Deliberate (the rest)
+### Applied (always by hand)
 
 ```bash
 make pull-jellyfin          # pull + up -d + wait for healthy
@@ -479,12 +483,15 @@ tail -f logs/stack_watchdog.log     # or any logs/<job>.log
 
 ### A service is missing entirely (no container)
 
-This is the Watchtower failure mode. `restart: unless-stopped` cannot help.
+This was the Watchtower failure mode, and nothing in the stack can cause it any
+more ([ADR-0025](docs/decisions/0025-watchtower-retired.md)) — but a failed
+`docker compose up -d` can still leave a service with no container, so the
+watchdog keeps looking. `restart: unless-stopped` cannot help.
 
 ```bash
 docker compose ps -a | grep -i exit
 docker compose up -d <service>
-docker logs watchtower --since 24h | grep -i "failed\|did not receive"
+docker logs diun --since 24h | grep -i "error\|failed"
 ```
 
 ### qBittorrent won't start / crash-loops
@@ -616,8 +623,12 @@ $EDITOR compose/<the-right-module>.yaml     # group by blast radius
 - add a healthcheck; to publish it, commit `swag/proxy-confs/<name>.subdomain.conf`,
   bind-mount it into swag, **and** add `labels: [swag=enable]` — the conf is what
   routes, the label is what `make check` reconciles it against ([ADR-0022](docs/decisions/0022-proxy-confs-are-tracked.md))
-- label it for Watchtower **unless** there's a reason not to — then say so in a
-  one-line comment and add it to `WATCHTOWER_OPTOUT` in the checker
+- run `make diun-manifest` and commit the result, so update notification covers
+  it — `make check` fails if you don't ([ADR-0024](docs/decisions/0024-diun-version-aware-notification.md))
+- if it must be updated by hand (a pinned tag, a database engine), pin the tag
+  and add it to `MANUAL_UPDATE_ONLY` in the checker with the reason
+- do **not** add a `com.centurylinklabs.watchtower.*` label — there is no
+  watchtower, and `make check` rejects one ([ADR-0025](docs/decisions/0025-watchtower-retired.md))
 - document any new `.env` variable in `.env.example` **and** `AGENTS.md`
 
 ```bash

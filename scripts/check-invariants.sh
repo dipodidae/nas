@@ -101,28 +101,18 @@ def _env_file_value(key, path=".env"):
 # never grow it without a decision record.
 # --------------------------------------------------------------------------
 
-# Services deliberately NOT labelled for watchtower. This list is what lets the
-# checker tell "deliberately unlabeled" from "someone forgot the label".
-# ADR-0006. (Kept here rather than as an x- field in the compose files: a
-# service-level x- key shows up in `docker compose config` and risks
-# perturbing the config hash that decides whether `up -d` recreates. ADR-0000.)
-# Services that pull an image but must not be auto-updated. Locally-built
-# services are NOT listed here: "has a build: section" already proves
-# watchtower cannot pull it, so that opt-out is derived rather than declared
-# (which means a newly-added local project needs no edit to this list).
-WATCHTOWER_OPTOUT = {
-    "qbittorrent":           "pinned tag; watchtower's non-atomic recreate deleted it for 13h",
-    "jellyfin":              "worst service to lose to a failed recreate; slow to stop",
-    "dockerproxy":           "watchtower must not restart its own dependency",
-    "watchtower":            "must not self-update",
-    "autoheal":              "control plane",
-    "playlist-generator-db": "never auto-update a database engine under its data",
+# Services that must not take an unattended image update. There is no
+# watchtower any more (ADR-0025), so this list no longer gates a label -- it
+# records which services a HUMAN must update deliberately, and `diun` reports
+# them like everything else (ADR-0024). Kept because the reasoning is still
+# load-bearing every time someone runs `docker compose pull`.
+MANUAL_UPDATE_ONLY = {
+    "qbittorrent":           "pinned tag, floor >= 5.2.2; `make update-qbittorrent`",
+    "jellyfin":              "pinned; a regression surfaces mid-playback; `make pull-jellyfin`",
+    "playlist-generator-db": "never bump a database engine under its data",
     "scrutiny":              "omnibus bundles InfluxDB; same rule as playlist-generator-db",
-    "diun":                  "pinned; it reports its OWN updates via the manifest",
+    "diun":                  "the thing that reports updates should not take one by surprise",
 }
-
-def is_locally_built(svc):
-    return "build" in services[svc]
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
 # Warned about on every run so it cannot quietly become the convention.
@@ -209,36 +199,53 @@ else:
     ok("qbit-cap-narrow")
 
 # ==========================================================================
-# 3. Watchtower labels: qbittorrent and jellyfin must carry none; every other
-#    opt-out must be a documented one, and everything else must be labelled.
+# 3. No service carries a watchtower label, and every manual-update service
+#    is still pinned
 # ==========================================================================
-WT = "com.centurylinklabs.watchtower.enable"
-for svc in ("qbittorrent", "jellyfin"):
-    if WT in labels(svc):
-        fail("watchtower-optout", "ADR-0006",
-             f"{svc} carries the watchtower enable label. Its non-atomic "
-             "stop->remove->create leaves NO container when the remove fails "
-             "(qbittorrent, 13h, 2026-09-01). Update it by hand instead.")
-    else:
-        ok("watchtower-optout", f"{svc} unlabelled")
+# watchtower is retired (ADR-0025). A leftover
+# `com.centurylinklabs.watchtower.enable` label would now control nothing while
+# still reading as policy -- which is precisely the class of lie this file
+# exists to prevent. All 16 were removed with the service.
+#
+# The second half is what actually still matters: the services a human must
+# update deliberately have to STAY pinned, or `docker compose pull` quietly
+# takes the update the pin was protecting against.
+WT_PREFIX = "com.centurylinklabs.watchtower"
+_stale = sorted(
+    svc for svc, sv in services.items()
+    if any(str(k).startswith(WT_PREFIX) for k in (labels(svc) or {}))
+)
+if _stale:
+    fail("watchtower-labels-gone", "ADR-0025",
+         f"{_stale} still carry a {WT_PREFIX}.* label, but watchtower was "
+         "retired. The label controls nothing now and reads as though it does. "
+         "Remove it; diun handles notification (ADR-0024).")
+else:
+    ok("watchtower-labels-gone", "no stale watchtower labels")
 
-for svc in sorted(services):
-    labelled = labels(svc).get(WT) == "true"
-    if labelled and is_locally_built(svc):
-        fail("watchtower-optout", "ADR-0006",
-             f"{svc} is locally built (has a build: section) but carries the "
-             "watchtower enable label. Watchtower cannot pull a local image, so "
-             "the label buys nothing and adds recreate risk.")
-    elif labelled and svc in WATCHTOWER_OPTOUT:
-        fail("watchtower-optout", "ADR-0006",
-             f"{svc} is on the documented opt-out list "
-             f"({WATCHTOWER_OPTOUT[svc]}) but carries the enable label.")
-    elif not labelled and not is_locally_built(svc) and svc not in WATCHTOWER_OPTOUT:
-        fail("watchtower-coverage", "ADR-0006",
-             f"{svc} has no watchtower label, is not locally built, and is not "
-             "on the documented opt-out list in this script. Either label it, "
-             "or add it to WATCHTOWER_OPTOUT with a reason so 'deliberate' is "
-             "distinguishable from 'forgotten'.")
+def _image_tag_of(image):
+    """Tag of an image ref, or '' if untagged. Handles a registry port and a
+    digest pin, neither of which a bare rpartition(':') survives."""
+    if "@" in image:
+        return "@" + image.rsplit("@", 1)[1]
+    last = image.rsplit("/", 1)[-1]
+    return last.rsplit(":", 1)[1] if ":" in last else ""
+
+_unpinned = []
+for svc, why in sorted(MANUAL_UPDATE_ONLY.items()):
+    sv = services.get(svc)
+    if not sv or "build" in sv:
+        continue
+    t = _image_tag_of(sv.get("image", ""))
+    if not t or t == "latest":
+        _unpinned.append(f"{svc} ({why})")
+if _unpinned:
+    fail("manual-update-pinned", "ADR-0025",
+         f"these must be updated by hand and are NOT pinned: {_unpinned}. "
+         "Nothing auto-updates any more, but `docker compose pull` follows a "
+         "moving tag -- the pin is what makes the update a decision.")
+else:
+    ok("manual-update-pinned", f"{len(MANUAL_UPDATE_ONLY)} manual-update services pinned")
 
 # ==========================================================================
 # 4. mem_limit implies memswap_limit == mem_limit
@@ -631,43 +638,49 @@ else:
        "reclaimable (ADR-0007)")
 
 # ==========================================================================
-# 15. Watchtower is monitor-only, and not the archived upstream
+# 15. dockerproxy exposes only what autoheal needs
 # ==========================================================================
-# Its stop->remove->create is not atomic: when the remove fails it logs
-# Failed=1 and moves on WITHOUT creating a replacement, leaving no container
-# at all. qbittorrent, 2026-09-01, 13h. monitor-only removes the capability
-# rather than defending against it.
+# The Docker socket is root on the host, so the proxy's job is to be narrow.
+# With watchtower retired (ADR-0025), `autoheal` is the only client and it needs
+# exactly: list containers (CONTAINERS), POST a restart (POST), and the client
+# handshake (PING, VERSION).
 #
-# The image check is separate and softer: containrrr/watchtower was archived
-# 2025-12-17 ("no longer maintained"). It still works against Docker 29 here,
-# so this is a maintenance risk rather than a live fault. ADR-0020.
-wt = services.get("watchtower", {})
-wt_env = env_of("watchtower")
-if str(wt_env.get("WATCHTOWER_MONITOR_ONLY", "")).lower() != "true":
-    fail("watchtower-monitor-only", "ADR-0020",
-         "WATCHTOWER_MONITOR_ONLY is not 'true'. Watchtower can then stop and "
-         "remove containers, and its recreate is not atomic -- a failed remove "
-         "leaves NO container, which restart: unless-stopped cannot fix and "
-         "autoheal cannot heal. It cost 13h of qbittorrent on 2026-09-01 and "
-         "7 days on 2026-08-19. Recreating belongs to `docker compose up -d`.")
+# IMAGES, NETWORKS and DELETE existed ONLY for watchtower's recreate flow --
+# NETWORKS to disconnect/reconnect containers on nas-network, DELETE to remove
+# them. That recreate is the thing that left NO container at all for 13h on
+# 2026-09-01, so this is not tidying an unused grant: it removes the capability
+# that caused the incident.
+#
+# Verified on 2026-09-02 against this exact set, with a disposable canary
+# container and a dedicated autoheal watching its own label (never slskd --
+# ADR-0009): the canary was restarted three times, while /images/json,
+# /networks, /info and /exec all returned 403.
+DOCKERPROXY_ALLOWED = {"CONTAINERS", "PING", "VERSION", "POST"}
+DOCKERPROXY_REQUIRED = {"CONTAINERS", "POST"}
+_dp = {k: str(v) for k, v in env_of("dockerproxy").items()}
+_enabled = {k for k, v in _dp.items() if v == "1"}
+_extra = sorted(_enabled - DOCKERPROXY_ALLOWED)
+_missing = sorted(DOCKERPROXY_REQUIRED - _enabled)
+if _extra:
+    fail("dockerproxy-narrow", "ADR-0025",
+         f"dockerproxy enables {_extra}, which nothing in this stack needs. "
+         "autoheal uses CONTAINERS + POST (+ PING/VERSION for the handshake). "
+         "IMAGES/NETWORKS/DELETE were watchtower's recreate flow, and that "
+         "recreate is the incident. Do not re-widen without an ADR.")
+elif _missing:
+    fail("dockerproxy-narrow", "ADR-0025",
+         f"dockerproxy is missing {_missing}; autoheal cannot list containers "
+         "or restart one, so nothing heals an unhealthy container.")
 else:
-    ok("watchtower-monitor-only", "notify-only; compose does the recreating")
-
-if wt.get("image", "").startswith("containrrr/watchtower"):
-    warn("watchtower-image-maintained", "ADR-0020",
-         "containrrr/watchtower was archived 2025-12-17 and will get no further "
-         "fixes. It still works against Docker 29.7.2 here, so this is a "
-         "maintenance risk, not a live fault -- but the next Docker API change "
-         "has nobody to answer it. nickfedor/watchtower is a drop-in: same "
-         "com.centurylinklabs.watchtower.* labels, same WATCHTOWER_* env vars.")
-elif wt.get("image"):
-    ok("watchtower-image-maintained", wt["image"])
+    ok("dockerproxy-narrow", f"{sorted(_enabled)} only")
 
 # ==========================================================================
 # 16. Jellyfin's tag is pinned too
 # ==========================================================================
-# Not for watchtower's sake any more (ADR-0020), but because a Jellyfin
-# regression is discovered mid-playback. An update must be chosen. ADR-0006.
+# Never for watchtower's sake -- and now there is no watchtower at all
+# (ADR-0025). A Jellyfin regression is discovered mid-playback, so the update
+# must be chosen: `make pull-jellyfin`. diun reports when there is one to
+# choose (ADR-0024). ADR-0006.
 def _image_tag(image):
     """Tag of an image ref, or '' if untagged. Handles a registry port and a
     digest pin, neither of which a bare rpartition(':') survives."""

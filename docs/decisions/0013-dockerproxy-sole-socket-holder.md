@@ -1,7 +1,10 @@
 # ADR-0013 — Only `dockerproxy` touches `/var/run/docker.sock`
 
 **Date:** 2026-09-02 (records a standing convention)
-**Status:** accepted
+**Status:** accepted; the exposed endpoint set is **amended** by
+[ADR-0025](0025-watchtower-retired.md) — `IMAGES`, `NETWORKS`, `DELETE` and
+`INFO` were dropped with watchtower, leaving `CONTAINERS`, `POST`, `PING`,
+`VERSION` for autoheal alone
 
 ## Decision
 

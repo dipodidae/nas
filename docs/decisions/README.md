@@ -35,3 +35,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0022](0022-proxy-confs-are-tracked.md)         | Proxy-confs are tracked in-repo; the conf routes, the label only documents  |
 | [0023](0023-smart-monitoring.md)                | SMART monitoring: a scoped `SYS_ADMIN` exception, covering ONE disk         |
 | [0024](0024-diun-version-aware-notification.md) | Diun watches image repos from a generated manifest; pinned tags visible     |
+| [0025](0025-watchtower-retired.md)              | Watchtower retired; dockerproxy narrowed to what autoheal alone needs       |

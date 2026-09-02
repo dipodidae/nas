@@ -1,9 +1,11 @@
-# Control plane: TLS termination, the Docker-API proxy, the two supervisors
-# that use it, and push alerting.
+# Control plane: TLS termination, the Docker-API proxy, the one supervisor that
+# uses it, update notification, SMART monitoring, and push alerting.
 #
 # Blast radius: everything. dockerproxy is the only container in the stack with
-# any route to the Docker socket (ADR-0013), and both watchtower and autoheal
-# depend on it.
+# any route to the Docker socket (ADR-0013), and `autoheal` is now its ONLY
+# client -- watchtower was retired in ADR-0025, which is why the proxy's
+# endpoint set is down to four groups. Nothing in this stack can recreate a
+# container any more; that is `docker compose up -d`'s job, deliberately.
 
 services:
 
@@ -75,7 +77,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     depends_on:
       4eva-rootpage:
         condition: service_healthy
@@ -87,10 +88,19 @@ services:
       start_period: 90s
 
   # Read-only Docker API proxy. INVARIANT: the only container in this stack
-  # permitted to mount /var/run/docker.sock. Exposes just the endpoints
-  # watchtower and autoheal need; NETWORKS=1 is required so watchtower can
-  # disconnect/reconnect containers on nas-network during a recreate.
-  # ADR-0013.
+  # permitted to mount /var/run/docker.sock. ADR-0013.
+  #
+  # INVARIANT: exactly these five endpoint groups, and no more. `autoheal` is
+  # now the ONLY client -- it lists containers and POSTs a restart, which is
+  # CONTAINERS + POST; PING and VERSION are the client handshake.
+  #
+  # IMAGES, NETWORKS, DELETE and INFO were dropped when watchtower was retired
+  # (ADR-0025). They existed ONLY for watchtower's recreate flow -- NETWORKS so
+  # it could disconnect/reconnect containers on nas-network, DELETE so it could
+  # remove them. That recreate is the thing that left no container at all for
+  # 13h on 2026-09-01, so the capability is not merely unused now: nothing in
+  # this stack should have it. Verified against a live autoheal + canary
+  # restart through this narrowed set before the widening was removed.
   dockerproxy:
     extends:
       file: _fragments.yaml
@@ -99,13 +109,9 @@ services:
     container_name: dockerproxy
     environment:
       - CONTAINERS=1
-      - IMAGES=1
-      - NETWORKS=1
       - PING=1
       - VERSION=1
-      - INFO=1
       - POST=1
-      - DELETE=1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     read_only: true
@@ -190,68 +196,15 @@ services:
     #   * no autoheal=true -- a restart cannot fix a failing disk, and the probe
     #     would be the only thing standing between a wedged TSDB and a restart
     #     loop. ADR-0009's rule applies to new services too.
-    #   * no watchtower label -- it is on the documented WATCHTOWER_OPTOUT list
-    #     in scripts/check-invariants.sh instead. ADR-0023.
+    #   * no watchtower label -- there is no watchtower any more (ADR-0025),
+    #     and `make check` asserts that nothing carries a stale one. Update
+    #     notification is diun's job now (ADR-0024).
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8080/api/health']
       interval: 60s
       timeout: 5s
       retries: 3
       start_period: 45s
-
-  # DETECTS newer images for containers labelled
-  # com.centurylinklabs.watchtower.enable=true, on WATCHTOWER_SCHEDULE, and
-  # reports them to ntfy. It does NOT apply them -- see WATCHTOWER_MONITOR_ONLY
-  # below. Reaches Docker only through dockerproxy. ADR-0020 supersedes the
-  # per-service opt-out defence in ADR-0006.
-  watchtower:
-    extends:
-      file: _fragments.yaml
-      service: svc-hardened-tz
-    # INVARIANT: NOT containrrr/watchtower -- archived 2025-12-17, "no longer
-    # maintained". This fork keeps the com.centurylinklabs.watchtower.* labels
-    # and the WATCHTOWER_* env contract, so every label in this repo and every
-    # deliberate omission keeps its meaning. ADR-0020.
-    image: nickfedor/watchtower:1.22.0
-    container_name: watchtower
-    environment:
-      - DOCKER_HOST=tcp://dockerproxy:2375
-      # DOCKER_API_VERSION removed with the fork swap: it autonegotiates, and
-      # this host serves API 1.55. ADR-0020.
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
-      - WATCHTOWER_LABEL_ENABLE=true
-      # Inert under monitor-only (cleanup only removes an image AFTER a
-      # container is restarted with a new one), left set so it is correct again
-      # if anyone reverts. The weekly `docker image prune -f` cron is what
-      # actually bounds the images monitor-only keeps pulling. ADR-0020.
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_INCLUDE_RESTARTING=true
-      - WATCHTOWER_ROLLING_RESTART=false
-      - WATCHTOWER_REMOVE_VOLUMES=false
-      # INVARIANT: monitor-only. Watchtower detects updates and reports them;
-      # it must never stop, remove or create a container. Its recreate is not
-      # atomic and a failed remove leaves NO container at all -- 13h of
-      # qbittorrent on 2026-09-01, 7 days on 2026-08-19. It did recreate `qui`
-      # at 04:01 on 2026-09-02, so this capability is live, not historical.
-      # Recreating is `docker compose up -d`'s job. ADR-0020.
-      - WATCHTOWER_MONITOR_ONLY=true
-      # INVARIANT: >= the longest stop_grace_period in the stack (qbittorrent,
-      # 120s). Watchtower's own SIGTERM->SIGKILL timeout defaults to 10s and
-      # ignores compose's stop_grace_period. ADR-0006.
-      - WATCHTOWER_TIMEOUT=150s
-      # One ntfy digest per run, so "what changed at 04:00" needs no log
-      # reading. ADR-0012.
-      - WATCHTOWER_NOTIFICATION_URL=ntfy://${NTFY_ARR_USER}:${NTFY_ARR_PASSWORD}@ntfy:8410/nas-alerts?scheme=http&priority=default&tags=package
-      - WATCHTOWER_NOTIFICATION_REPORT=true
-      - WATCHTOWER_NOTIFICATIONS_LEVEL=info
-    depends_on:
-      dockerproxy:
-        condition: service_started
-    networks:
-      - nas-network
-    healthcheck:
-      disable: true
-    # Watchtower-opt-out: never self-update. ADR-0006.
 
   # Version-aware update NOTIFICATION. This is the tool that closes the gap
   # ADR-0020 named and could not close: watchtower reports against the tag a
@@ -325,9 +278,9 @@ services:
     # publish, nothing to route. No autoheal label either -- see ADR-0009; a
     # daily notifier is not worth an auto-restart path.
     #
-    # It is on the documented WATCHTOWER_OPTOUT list in
-    # scripts/check-invariants.sh rather than labelled, and commit 3 retires
-    # watchtower entirely. ADR-0024, ADR-0025.
+    # No watchtower label: watchtower is retired (ADR-0025). Diun watches its
+    # own repository through the manifest, so a new Diun arrives as a
+    # notification like everything else. ADR-0024.
     healthcheck:
       # Diun exposes no liveness endpoint, so this asserts the thing that
       # actually matters for a scheduled checker: that it has WRITTEN to its
@@ -379,7 +332,7 @@ services:
       disable: true
     # Watchtower-opt-out: control plane. ADR-0006.
 
-  # Push alerting for scripts/stack_watchdog.py and watchtower. Self-hosted so
+  # Push alerting for scripts/ and for diun/scrutiny. Self-hosted so
   # alert contents never leave the box; deny-all because the topic sits on a
   # public subdomain. Coverage limit: the watchdog and ntfy share this host, so
   # neither can report the host itself being down. ADR-0012.
@@ -421,7 +374,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD-SHELL, 'wget -q -O - http://localhost:8410/v1/health | grep -q ''"healthy":true''']
       interval: 60s

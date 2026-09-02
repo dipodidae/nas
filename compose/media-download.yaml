@@ -26,7 +26,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     # Same cadence as svc-arr, but prowlarr takes no UMASK, so it is not an
     # svc-arr and declares the timings itself.
     healthcheck:
@@ -133,7 +132,6 @@ services:
       - swag=enable
       - swag_port=7476
       - swag_proto=http
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:7476/']
       interval: 60s
@@ -170,7 +168,6 @@ services:
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
     labels:
-      - com.centurylinklabs.watchtower.enable=true
       - autoheal=true
       # slskd has been published at slskd.${PUBLIC_DOMAIN} all along -- by the
       # presence of its proxy-conf, which is what actually routes. The label was
@@ -224,8 +221,6 @@ services:
       - '127.0.0.1:8191:8191'
     networks:
       - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8191/docs']
       interval: 60s

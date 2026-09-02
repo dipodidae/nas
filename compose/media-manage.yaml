@@ -35,7 +35,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8989/ping']
 
@@ -65,7 +64,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:7878/ping']
 
@@ -100,7 +98,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:8686/ping']
 
@@ -136,7 +133,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:6767/ping']
 
@@ -161,8 +157,6 @@ services:
       - '127.0.0.1:9000:9000'
     networks:
       - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:9000/docs']
       interval: 120s
@@ -197,7 +191,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       disable: true
 
@@ -230,7 +223,6 @@ services:
       - nas-network
     labels:
       - swag=enable
-      - com.centurylinklabs.watchtower.enable=true
     healthcheck:
       test: [CMD, curl, -f, 'http://localhost:11011/api/v1/health']
       interval: 60s
@@ -259,5 +251,3 @@ services:
         condition: service_started
     networks:
       - nas-network
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
