@@ -58,26 +58,51 @@ The autoheal comment now says so, and points here.
 A login-aware healthcheck on the autoheal path. Not for slskd, not for any
 service whose recovery requires _staying down_.
 
-## Amendment 2026-09-02 — `start_period` must outlast a full share scan
+## Amendment 2026-09-02 — the share scan, and the cache that made it repeat
 
 The same failure shape as the login spiral, reached from a different direction:
 an autoheal restart that cannot fix the condition and actively prevents
 recovery.
 
 slskd does not bind `:5030` until its startup share scan completes — the probe
-gets `connection refused`, not a slow answer. This library is 19,433 shared
-directories and the scan takes about 18 minutes. The healthcheck was
+gets `connection refused`, not a slow answer. The healthcheck was
 `start_period: 120s` with `retries: 5` at `interval: 60s`, so the container was
 marked unhealthy at roughly 9 minutes, autoheal restarted it, and the scan began
-again at 0%. Measured on 2026-09-02: autoheal restarted slskd every ~9 minutes
-for over an hour, each restart at 30-40% of the scan, and slskd was never once
+again at 0%. Measured: autoheal restarted slskd every ~9 minutes for over an
+hour, each restart landing at 30-40% of the scan, and slskd was never once
 reachable in that window.
 
-`start_period` is now `30m` — the measurement plus headroom for a growing
-library. The accepted cost is that a genuinely dead slskd goes undetected for
-half an hour, which this ADR already tolerates: for slskd, staying down is
-usually the cure rather than the emergency.
+### The first fix was wrong, and it is worth recording why
+
+`start_period` was raised to **30m**, from a figure of "~18 min" that was
+**extrapolated from the first 39% of a scan (7 minutes)**. That extrapolation
+was badly wrong: the early directories were warm in the page cache and the rest
+were cold. The real scan was still at **95% after 45 minutes**, so autoheal went
+on killing it — at 30-minute intervals instead of 9. Better, still broken.
+
+**Do not extrapolate this number. Read it off a completed run.**
+
+### The root cause was not the timeout at all
+
+`shares.cache.storage_mode` in `slskd.yml` was **`memory`**. The share cache was
+therefore destroyed on every restart, and slskd redid the entire cold scan at
+_every single start_. It also made the neighbouring `retention: 10080` ("rescan
+weekly") meaningless — the cache never survived long enough to be retained.
+
+Set to **`disk`**, the cache is persisted and loaded at startup, so only the
+first start after the change pays for a cold scan. That removes the cause rather
+than widening the tolerance for it, which is the same move ADR-0020 makes for
+Watchtower.
+
+`start_period` is now **90m**, sized for the cold case. It costs nothing in the
+warm one: Docker ends `start_period` at the first _successful_ probe, so a fast
+startup leaves the window immediately rather than staying blind inside it.
+
+The accepted cost is that a genuinely dead slskd could go undetected for up to
+90 minutes on a cold start — which this ADR already tolerates, since for slskd
+staying down is usually the cure rather than the emergency, and
+`scripts/stack_watchdog.py` still catches a _missing_ container every 5 minutes.
 
 The general rule, which the next service inherits: **`start_period` is a
-property of the slowest legitimate startup, not a round number.** A probe that
-fires before the service can possibly answer converts autoheal into a treadmill.
+property of the slowest legitimate startup, not a round number — and if that
+startup is slow because work is being repeated, fix the repetition first.**
