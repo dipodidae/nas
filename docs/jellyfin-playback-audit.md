@@ -53,6 +53,15 @@
 >   capacity, saturating the uplink queue and costing 5% packet loss. See §0.
 >   Nine passes had been debugging the wrong machine; the earlier work fixed a
 >   real OOM problem that was simply not the reported symptom.
+> - **Pass 11 (2026-09-02)**: replaced the static bandwidth budget with DSCP
+>   marking so torrents yield automatically; split the qBittorrent cap into
+>   shaped and degraded values because one number could not be both a capacity
+>   target and a safety net; made the shaper answer for its own behaviour after
+>   finding the enforcer proved the component and not the property (the third
+>   instance of that mistake — §4.0); A/B'd and **rejected** the standard
+>   "shape at 85%" advice on 18 samples; and swept the host, which turned up a
+>   media drive with no SMART and no monitoring (§0.6). Also **§0.5**, which has
+>   nothing to do with playback and matters more than all of it.
 
 ---
 
@@ -373,6 +382,81 @@ complains and then writes the right thing. Do not "fix" this.
 
 ---
 
+## 0.5 A live credential was public on GitHub for three months
+
+Found on 2026-09-02 while looking for anything that could rewrite qBittorrent's
+preferences — unrelated to playback, and more serious than anything else in this
+document.
+
+`scripts/legacy/qbittorrent-scheduler.py` carried a plaintext password. It did
+**not** match qBittorrent's; it matched **`PLAYLIST_GENERATOR_PASSWORD`**, which
+guards `playlist-generator.<PUBLIC_DOMAIN>` — an internet-facing service that
+answers `401` to the world. This repository is **public** on GitHub and that
+file was committed on **2026-05-26**, so the password protecting that service
+was readable by anyone for over three months.
+
+Rotated, and the rotation verified rather than assumed:
+
+```text
+new credential  -> 200
+exposed one     -> 401
+no credential   -> 401
+```
+
+Also scrubbed a hardcoded API key from `deduplicate_ebooks.py`,
+`deduplicate_ebooks_filesystem.py` and `EBOOK_DEDUPLICATION_README.md`. That one
+is stale — every *arr rejects it with 401 — but it had no business being in the
+tree. All four now read from the environment.
+
+**The rule, which is not "delete the file":** scrubbing the working tree stops
+the exposure getting worse and does nothing about the exposure itself, because
+git history is public and permanent. **A published credential must be rotated.**
+The `.env` file is gitignored and is the only place secrets belong.
+
+While in there: `.sudo-pwd` was mode **664** — group- and world-readable, in the
+repository root, containing a sudo password. Now `600`, and gitignored since
+2026-09-01.
+
+---
+
+## 0.6 Host sweep: the media drive has no health signal at all
+
+A root-level sweep on 2026-09-02, looking for things nobody had looked at.
+
+**The finding that mattered.** `/mnt/drive` is a **single 9.1 TB USB external
+disk** holding all ~4.7 TB of media, with no redundancy — and its USB bridge
+refuses SMART under every device type `smartctl` offers (`sat`, `sat,12`,
+`sat,16`, `usbjmicron`, `usbsunplus`, `usbcypress`, `scsi`, all verified). So
+the normal "is this disk dying" signal does not exist here, and nothing was
+watching the signals that do.
+
+`stack_watchdog.py` now watches those instead: the mount disappearing, ext4
+**remounting read-only**, free space, and kernel I/O / USB-reset / `EXT4-fs
+error` lines in the last six hours. The read-only case is the one to fear —
+ext4 does it on error by default, and at that point every *arr import fails
+while every container still reports healthy. That is the same failure shape as
+everything else in this document.
+
+**Noted, not acted on:**
+
+| | |
+|---|---|
+| NVMe wear | 42% used, **31.4 TB written**; ~572 GB of that is swap since boot |
+| zram0 | 100% full (7.6 GB data → 2.5 GB compressed), so overflow reaches the disk swapfile — which is where the NVMe writes come from |
+| stale VS Code Server | holding **5.5 GB of swap**, 499 MB resident, **zero established connections**, running since 2026-09-01. Unrelated to the stack; killing it reclaims that, but it is an editor session and therefore Tom's call |
+| `systemd-networkd-wait-online.service` | failed at boot 2026-08-24. Cosmetic — NetworkManager owns the interface; it only delays boot. Not masked, because a masked unit has its own cost and there is no benefit today |
+
+**Clean:** no kernel I/O errors in 7 days, filesystem clean (`tune2fs` reports
+`clean`), time synced, unattended-upgrades enabled, 3 upgradable packages of
+which **0 security**, no reboot required, no other failed units, 4.5 TB free.
+
+Note the filesystem has `Maximum mount count: -1` and `Check interval: 0` —
+periodic `fsck` is disabled and it was last checked 2026-05-22. That is the
+usual default and changing it means long boot delays on a 9 TB volume, so it is
+recorded rather than changed.
+
+---
+
 ## 1. The memory problem (separate, real, fixed)
 
 Two independent native-memory contributors, both mitigated in pass 6/7 and
@@ -462,15 +546,25 @@ reproducibility.
 | **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode | `scripts/aac_fallback_track.py` | n/a, additive |
 | **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
 | **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
+| **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
+| **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
+| **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200 | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env` | Delete the `ntfy — *` connections in each *arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
 | **47** | **qBittorrent upload cap 33.55 → 15 Mbps** (`up_limit` 4194304 → 1874944 B/s). The old value was 108% of the link's entire ~31 Mbps upstream, saturating the modem queue: 5% packet loss, 127 ms latency spikes. This is the root cause of the remote stutter (§0) | qBittorrent prefs, and pinned in `DESIRED_PREFS` in `scripts/qbittorrent_settings_enforce.py` | `curl -b <cookie> -d "limit=4194304" .../api/v2/transfer/setUploadLimit` and revert the constant |
 | **48** | **CAKE egress shaper** on internet-bound traffic at 28 Mbit, LAN exempt via an HTB split. `scripts/wan_shaper.sh` + `wan-shaper.service` (enabled), watched by `stack_watchdog.py` | new script, systemd unit | `sudo systemctl disable --now wan-shaper.service` |
-| **49** | **qBittorrent cap raised 15 → 20 Mbps** once CAKE was managing the queue, and **upload slots 50 → 6**. Both pinned in `DESIRED_PREFS`, with a test asserting cap + 8 Mbps remote stream ≤ 28 Mbit shaped | `scripts/qbittorrent_settings_enforce.py` | Edit the two constants |
-| **50** | **`qbittorrent_settings_enforce.py` on cron** (hourly, :47). The live cap was observed drifting back to UNLIMITED with the repo pin untouched — pinning is necessary but something has to re-assert it | crontab | Remove the cron line |
+| **49** | **qBittorrent cap raised 15 → 20 Mbps** once CAKE was managing the queue, and **upload slots 50 → 6**. Both pinned in `DESIRED_PREFS`, with a test asserting cap + 8 Mbps remote stream ≤ 28 Mbit shaped. **Superseded by rows 53-55** — that budget assumed one viewer; DSCP replaced it | `scripts/qbittorrent_settings_enforce.py` | Edit the two constants |
+| **50** | **`qbittorrent_settings_enforce.py` on cron** (now `*/5`, see row 55; originally hourly at :47). The live cap was observed drifting back to UNLIMITED with the repo pin untouched — pinning is necessary but something has to re-assert it | crontab | Remove the cron line |
 | **51** | **µTP-only tested and rejected** — measurably worse jitter than TCP+uTP once CAKE is in place. No change left in effect | — | n/a, reverted |
 | **52** | **Jellyfin `RemoteClientBitrateLimit` 0 → 8 Mbps**, server-wide. Remote clients can no longer negotiate a bitrate the link cannot sustain | Jellyfin `/System/Configuration` | `POST` with `RemoteClientBitrateLimit: 0`; pre-change backup in `docs/jellyfin-config-backups/` |
-| **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200 | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env` | Delete the `ntfy — *` connections in each *arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
-| **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
-| **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
+| **53** | **DSCP CS1 marking** on qBittorrent's and slskd's egress, so CAKE's Bulk tin makes them yield automatically. Replaces the per-viewer arithmetic budget | `scripts/wan_shaper.sh` (`apply_marks`), iptables mangle POSTROUTING | Remove `apply_marks` from `apply`; rules clear on the next run |
+| **54** | **qBittorrent cap 20 → 25 Mbps**, since yielding is now automatic and the cap is no longer a reservation | `scripts/qbittorrent_settings_enforce.py` | Edit `UPLOAD_LIMIT_BYTES_PER_SEC` |
+| **55** | **Two caps, chosen by shaper state**: 25 Mbps shaped / 15 Mbps degraded. Enforcer moved from hourly to `*/5` because it is now a safety net | `scripts/qbittorrent_settings_enforce.py`, crontab | Collapse the two constants back to one |
+| **56** | **`wan_shaper.sh check`** — verifies qdisc *and* shaped rate *and* exact DSCP mark count; watchdog and enforcer both ask it instead of grepping `tc`. Plus a sudoers entry for `apply`/`status`/`check` and an hourly re-apply cron | `scripts/wan_shaper.sh`, `/etc/sudoers.d/wan-shaper`, crontab | Delete the sudoers file and the cron line |
+| **57** | **`clear_marks` teardown bug fixed** — it matched a quoted comment that `iptables -S` prints unquoted, so every `apply` appended another rule pair. Mark count check made exact rather than `>=` | `scripts/wan_shaper.sh` | n/a, pure fix |
+| **58** | **Shaper rate kept at 28 Mbit**; 85% (26 Mbit) A/B'd across 18 samples and rejected — 0% loss at both, spikes uncorrelated with our load (r = +0.20) | `scripts/wan_shaper.sh` `SHAPE_MBIT` | Set to 26 and re-measure |
+| **59** | **`NAS_HEARTBEAT_URL` configured** (by Tom) and the off-box chain drilled in both directions — alive *and* `/fail` — not just the happy path | `.env` | Blank the variable |
+| **60** | **Media-drive watchdog checks**: mount present, not remounted read-only, free space, kernel I/O/USB/EXT4 errors. Added because the USB bridge refuses SMART under every `smartctl -d` type, so no disk-health signal exists | `scripts/stack_watchdog.py` | Delete `check_media_storage` and its call |
+| **61** | **`.sudo-pwd` permissions 664 → 600** — it was group- and world-readable | host filesystem | `chmod 664` (do not) |
+| **62** | **Exposed credential rotated** — see §0.5. `PLAYLIST_GENERATOR_PASSWORD` had been public on GitHub since 2026-05-26; rotated and verified, hardcoded secrets scrubbed from four tracked files | `.env`, `scripts/legacy/qbittorrent-scheduler.py`, `scripts/deduplicate_ebooks*.py`, `scripts/EBOOK_DEDUPLICATION_README.md` | n/a — never restore a published credential |
 
 ---
 
@@ -845,7 +939,8 @@ Verified: hc-ping.com is reachable from this box; a wrong ping URL exits 2 with
 `HTTP 400 — is the ping URL right?`; a DNS failure exits 2; a real reachable
 endpoint returns 0. **Still needs an account** — creating the check is not
 something a script can do, so `NAS_HEARTBEAT_URL` is empty and the watchdog
-raises a standing `heartbeat:unconfigured` warning until it is set. That nag is
+raises a standing `heartbeat:unconfigured` warning until it is set (it was set
+on 2026-09-02 and the warning resolved after 935 minutes). That nag is
 deliberate: this is the one remaining hole in coverage and it should keep
 saying so.
 
@@ -1085,54 +1180,32 @@ background with no pollable progress (§3.2).
 
 Short, and this is the whole list.
 
-1. **Create the healthchecks.io check** and put its ping URL in
-   `NAS_HEARTBEAT_URL`. Period 10 min, grace 20 min. Everything else about the
-   off-box heartbeat is built and verified — this is an account action no
-   script can do, and it is the one remaining hole in alerting coverage. The
-   watchdog raises a standing `heartbeat:unconfigured` warning until it is set.
-2. **Subscribe a phone to ntfy**: `https://ntfy.<PUBLIC_DOMAIN>/nas-alerts`,
-   credentials `NAS_ALERT_USER` / `NAS_ALERT_PASSWORD` from `.env`. DNS and the
-   wildcard cert already cover it. Server-side is verified end to end
-   (including a real container failure and its recovery); nothing has actually
-   buzzed a phone yet.
-3. **Bazarr credentials** — a working opensubtitles.com login and a fresh
-   addic7ed Cloudflare cookie. Both providers stay disabled until then;
-   credentials are still stored, so re-enabling is a toggle.
-4. **Blue Öyster Cult duplicate tracks** — `/music/Blue Öyster Cult/1977 -
+1. **The stale VS Code Server** holding 5.5 GB of swap (§0.6) — zero
+   connections since 2026-09-01. `kill 306070` reclaims it, but it is your
+   editor session so I left it alone.
+2. **Blue Öyster Cult duplicate tracks** — `/music/Blue Öyster Cult/1977 -
    Spectres/` holds two copies each of tracks 04 and 08, differing only in
    apostrophe character. Lidarr's pending rename would overwrite one with the
-   other. Noted in `AGENTS.md` so a future session does not hit it blind, but
-   only you can pick which copy to keep.
-5. **`.sudo-pwd`** is now gitignored, but it is still a plaintext sudo password
-   in the repo root. Worth deleting or moving somewhere with 600 permissions.
+   other. Noted in `AGENTS.md`; only you can pick which copy to keep.
+3. **Bazarr credentials** — a working opensubtitles.com login and a fresh
+   addic7ed Cloudflare cookie would let both providers back on. They stay
+   disabled with credentials retained, so it is a toggle.
+4. **`.sudo-pwd` still exists**, now `600` and gitignored. A plaintext sudo
+   password on disk is a deliberate trade-off for unattended host work; worth
+   deciding whether you still want it there.
+5. **The playlist pipeline takes 10.7 hours and then fails** (§3.6) with
+   `"Stream closed without a completion signal"`. The `flock` is working
+   correctly and the schedule is a fiction — a 6-hourly job that runs for 10.7 h
+   effectively runs twice a day. That belongs to playlist-generator, not here.
+6. **One orphaned Jellyfin row** — `tmp-audio-test/prototype.mkv`, from pass 7's
+   prototype. Both delete routes return 404 because its parent library GUID no
+   longer exists; removing it needs SQLite surgery with Jellyfin stopped, which
+   is disproportionate for one invisible row. Agreed to leave it.
 
-6. **Fargo Season 2 is still DTS-only.** With the uplink fixed, a remote
-   browser should now direct-stream the video, but S02's audio will still be
-   transcoded (a cheap remux, not the expensive path). Ten files, ~20 min, if
-   you want it — you set the policy that conversions happen on request, so
-   this is an offer rather than something I did.
-7. **Consider qBittorrent alt-speed scheduling** if remote viewing is common.
-   15 Mbps of seeding leaves ~16 Mbps, which is comfortable for a transcoded
-   stream but tight for a 10.6 Mbps direct play. An evening schedule would
-   give direct play the whole link when you actually use it.
-
-**Closed since pass 8:** the AAC rollout (declined; 5 free flips done, tool
-kept for future small batches), the 5.1 question (answered — it transcodes on
-stereo-output browsers, §3.6), autoheal (running, and two timeout defects
-fixed), the cron-silence class (wrapped + linted), and the ruff backlog (green).
-
-**The owed Jellyfin restart is done**, and it confirmed both things it was
-owed for. It no longer happens by itself — jellyfin's watchtower label was
-removed on 2026-09-01 — and someone was mid-film for ~40 minutes, which was not
-worth interrupting to save 2 MB of log, so it was deferred until playback
-actually ended (20:42) rather than forced:
-
-```text
-RefreshLibrary triggers after restart: []          <- survived, PASS
-"Request starting" lines: 6761 -> 6761 over 90s    <- request logging off
-jellyfin 10.11.11, healthy, anon=318.8MB, arena_regions=0, doublemapper=0
-```
-
-The trigger result is the one that mattered: a persisted `[]` on disk was good
-evidence but not proof, and the whole point of emptying it was that the scan is
-the largest memory event left.
+**Closed since pass 8:** the AAC rollout (declined; the 5 free flips done), the
+5.1 question (answered — it transcodes on stereo-output browsers), autoheal
+(running, two timeout defects fixed), the cron-silence class (wrapped + linted),
+the ruff backlog, the owed Jellyfin restart, the remote stutter itself (§0), the
+per-viewer budget (replaced by DSCP), the shaper's self-check, the 85% rate
+question (rejected on data), and the off-box heartbeat — now configured and
+drilled in both directions, alive *and* `/fail`, rather than only the happy path.
