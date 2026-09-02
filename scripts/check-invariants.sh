@@ -118,6 +118,7 @@ WATCHTOWER_OPTOUT = {
     "autoheal":              "control plane",
     "playlist-generator-db": "never auto-update a database engine under its data",
     "scrutiny":              "omnibus bundles InfluxDB; same rule as playlist-generator-db",
+    "diun":                  "pinned; it reports its OWN updates via the manifest",
 }
 
 def is_locally_built(svc):
@@ -145,6 +146,10 @@ PUBLIC_PORT_ALLOWLIST = {
 SECRET_OK = {
     "swag", "slskd", "qui", "ntfy", "lidarr-bulk", "ongehoord",
     "playlist-generator", "playlist-generator-db", "watchtower",
+    # diun: DIUN_NOTIF_NTFY_TOKEN. Its native ntfy notifier takes a token only,
+    # not basic auth, so it cannot use the ?auth= or userinfo tricks the other
+    # publishers use. ADR-0024.
+    "diun",
 }
 
 # Env vars that must NOT appear on a given service, whatever else changes.
@@ -911,6 +916,73 @@ if _dupes:
              "just fails to bind, and looks broken rather than conflicted.")
 else:
     ok("port-collision", f"{len(_claimed)} published host ports, all distinct")
+
+
+# ==========================================================================
+# 21. Diun's manifest is current, and covers every watchable service
+# ==========================================================================
+# Diun watches what its file-provider manifest lists, and nothing else. So a
+# service added to the compose model without regenerating the manifest silently
+# loses update notification -- and drift in a NOTIFICATION config is the worst
+# kind, because the thing that would have told you is the thing that stopped.
+#
+# Two separate assertions, because they fail for different reasons:
+#   * coverage: every service with an image and no build: section appears. A
+#     locally-built service is excluded by derivation, not by a list, exactly
+#     like the watchtower opt-out above.
+#   * currency: the tracked file still equals what the emitter produces. This
+#     catches a hand-edit of a generated file as well as a stale regeneration.
+# ADR-0024.
+_MANIFEST = "diun/manifest.yml"
+if "diun" in services:
+    try:
+        with open(_MANIFEST, encoding="utf-8") as fh:
+            _manifest_text = fh.read()
+    except OSError:
+        _manifest_text = None
+
+    if _manifest_text is None:
+        fail("diun-manifest-present", "ADR-0024",
+             f"{_MANIFEST} is missing, but diun mounts it read-only and watches "
+             "nothing without it. Regenerate with `make diun-manifest`.")
+    else:
+        _watchable = {
+            n for n, v in services.items()
+            if v.get("image") and "build" not in v
+        }
+        _listed = set(re.findall(r"^\s+service:\s*(\S+)\s*$", _manifest_text, re.M))
+        _unwatched = sorted(_watchable - _listed)
+        if _unwatched:
+            fail("diun-manifest-coverage", "ADR-0024",
+                 f"{_unwatched} pull an image but are absent from {_MANIFEST}, so "
+                 "nothing will ever report an update for them. Run "
+                 "`make diun-manifest` and commit the result.")
+        else:
+            ok("diun-manifest-coverage", f"{len(_listed)} images watched")
+
+        # Currency. Shelling out to the emitter keeps ONE definition of the
+        # manifest format -- duplicating the render here would just create a
+        # second thing to drift.
+        try:
+            _rc = subprocess.run(
+                [sys.executable, "scripts/emit_diun_manifest.py", "--check"],
+                capture_output=True, text=True, check=False,
+            )
+        except OSError as _exc:
+            warn("diun-manifest-current", "ADR-0024",
+                 f"could not run the manifest emitter ({_exc}); currency unverified")
+        else:
+            if _rc.returncode == 0:
+                ok("diun-manifest-current", "matches the compose model")
+            elif _rc.returncode == 1:
+                fail("diun-manifest-current", "ADR-0024",
+                     f"{_MANIFEST} is out of date with the compose model. Run "
+                     "`make diun-manifest` and commit the result. "
+                     f"({(_rc.stderr or '').strip().splitlines()[:1]})")
+            else:
+                warn("diun-manifest-current", "ADR-0024",
+                     "the manifest emitter could not render the compose model "
+                     "(expected in CI without docker); currency unverified")
 
 # ==========================================================================
 # Report

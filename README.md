@@ -14,7 +14,7 @@ project, one reverse proxy, one 10 TB disk.
 | Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0                |
 | Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                           |
 | Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe (42 % worn, SMART-watched) |
-| Services        | 27 (4 built locally, 16 auto-updated, 7 deliberately not)       |
+| Services        | 28 (4 built locally, 16 auto-updated, 8 deliberately not)       |
 | Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01       |
 
 ---
@@ -52,7 +52,7 @@ make bootstrap      # creates nas-network and pre-chowns the two config dirs
                     # them crash-loop on `permission denied`. ADR-0014.
 
 make lint           # does the compose model even render?
-make check          # 39 invariant assertions
+make check          # 41 invariant assertions
 
 docker compose up -d 4eva-rootpage      # swag depends_on it being healthy
 docker compose up -d swag               # get TLS working first
@@ -150,7 +150,7 @@ boundaries and `depends_on` only resolves within a project.
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
 │   └── storage.yaml              # nextcloud
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
-├── docs/decisions/               # 24 ADRs — the incident history
+├── docs/decisions/               # 25 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
 └── qbittorrent/custom-cont-init.d/   # LSIO init hook, bind-mounted read-only
 ```
@@ -210,6 +210,7 @@ forgotten — [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md) says why fo
 | `watchtower`  | containrrr/watchtower         | —                | **NO** | Daily 04:00. Never self-updates                                                                                              |
 | `autoheal`    | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                     |
 | `ntfy`        | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                  |
+| `diun`        | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md) |
 | `scrutiny`    | ghcr.io/analogj/scrutiny      | `127.0.0.1:8086` | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md) |
 
 ### Download path — `compose/media-download.yaml`
@@ -315,8 +316,8 @@ ssh -L 8989:127.0.0.1:8989 <host>    # then http://localhost:8989
 
 ## Rules that will bite you
 
-These are asserted mechanically by `scripts/check-invariants.sh` — **39
-assertions** over 27 services, run by `make check`, by the pre-commit hook, and
+These are asserted mechanically by `scripts/check-invariants.sh` — **41
+assertions** over 28 services, run by `make check`, by the pre-commit hook, and
 by CI so a violation cannot merge. Each failure prints the ADR that explains why
 the rule exists — **read it before changing the rule.** Compose lines carrying
 `INVARIANT:` are the same contract.
@@ -328,6 +329,7 @@ alone cannot prove.
 
 | Rule                                                                                                                                                                                                              | Why                                                                                                                                                                                                                                                                                   | ADR                                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `diun/manifest.yml` covers every image-pulling service, and matches the compose model                                                                                                                             | Diun watches what the manifest lists and nothing else, so a service added without regenerating it silently loses update notification. Drift in a _notification_ config is the worst kind: the thing that would have told you is the thing that stopped. `make diun-manifest`          | [0024](docs/decisions/0024-diun-version-aware-notification.md)                                                         |
 | Only `scrutiny` holds `CAP_SYS_ADMIN` or a raw disk device, `:r`, on `/dev/nvme0` (the **controller**, not the `nvme0n1` namespace — `smartctl --scan` returns empty for a namespace and the UI still looks fine) | Measured, not copied: `SYS_ADMIN` alone reads the NVMe, `SYS_RAWIO` alone cannot, and both together are no better. So `SYS_RAWIO` is refused, as `FOWNER`/`FSETID` were on qBittorrent                                                                                                | [0023](docs/decisions/0023-smart-monitoring.md)                                                                        |
 | No two services publish the same host port                                                                                                                                                                        | `docker compose config` renders a collision without complaint; only `up` fails, as a bind error on whichever container starts second — which reads as "that service is broken". Scrutiny's upstream example publishes host 8080, which `qbittorrent` owns and three scripts depend on | [0023](docs/decisions/0023-smart-monitoring.md)                                                                        |
 | `qbittorrent` keeps `CAP_KILL`, and nothing wider                                                                                                                                                                 | s6 (root) must signal `qbittorrent-nox` (uid 1000). Without it every stop is a 120.3 s SIGKILL instead of 6.2 s. `FOWNER`/`FSETID` were verified _not_ needed — do not widen the grant                                                                                                | [0004](docs/decisions/0004-qbittorrent-cap-kill.md)                                                                    |
@@ -661,13 +663,16 @@ The pre-split `docker-compose.yml` is recoverable:
 
 Honest list of things that are wrong or unfinished, all tracked:
 
+- **Update notification now covers pinned tags, and applying an update is still
+  manual on purpose.** `diun` watches every image in the compose model from a
+  generated, asserted manifest — including `jellyfin` and `qbittorrent`, which
+  Watchtower structurally could not report on. Nothing in the stack can apply an
+  update any more; that is `docker compose pull <svc> && docker compose up -d
+<svc>`, or `make pull-jellyfin` / `make update-qbittorrent`.
+  → [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md)
+
 - **Jellyfin's memory leak is not root-caused.** Three mitigations contain it;
   none fixes it. → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md)
-- **No update notification for `jellyfin` or `qbittorrent`.** Both are pinned
-  and both are unlabelled, and Watchtower reports against the tag a container
-  was started from — so a pinned tag is silent even if relabelled. Closing this
-  needs a version-aware watcher (DIUN / WUD / Renovate against the compose
-  files), not a Watchtower setting. → [ADR-0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)
 - **The off-box config backup is built but not yet pointed anywhere.**
   `scripts/offsite_backup.sh` is written, tested end to end against a local
   repository (retention proven to prune, restore verified byte-identical),

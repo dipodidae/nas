@@ -253,6 +253,98 @@ services:
       disable: true
     # Watchtower-opt-out: never self-update. ADR-0006.
 
+  # Version-aware update NOTIFICATION. This is the tool that closes the gap
+  # ADR-0020 named and could not close: watchtower reports against the tag a
+  # container was STARTED FROM, so a pinned tag is silent and an unlabelled one
+  # is never checked -- which meant `jellyfin` and `qbittorrent`, the two whose
+  # updates most need to be chosen deliberately, got no notification at all.
+  #
+  # Diun's FILE provider watches a repository and enumerates its tags, so a pin
+  # is visible. That is the whole reason it is the file provider and not the
+  # docker provider: the docker provider would reproduce watchtower's blind spot
+  # exactly. ADR-0024.
+  #
+  # It notifies. It has no route to the Docker API at all -- not even through
+  # dockerproxy -- because it never needs to touch a container. Applying an
+  # update stays `docker compose pull <svc> && docker compose up -d <svc>`.
+  diun:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned. The thing that tells you about updates should not take
+    # one by surprise; it watches its own repository via the manifest, so a new
+    # Diun shows up as a notification like everything else. ADR-0024.
+    image: crazymax/diun:4.33.0
+    container_name: diun
+    # INVARIANT: no LSIO root init, so ${CONFIG_DIRECTORY}/diun must already be
+    # ${PUID}:${PGID} or the bbolt DB cannot be created. Same gotcha as qui and
+    # ntfy; `make bootstrap` does it. ADR-0014.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    environment:
+      - DIUN_DB_PATH=/data/diun.db
+      # 04:10, twenty past what watchtower used to occupy, so "what changed
+      # overnight" stays one glance at one topic.
+      - DIUN_WATCH_SCHEDULE=10 4 * * *
+      # INVARIANT: both of these together, or the first run is a spam event.
+      # RUNONSTARTUP makes the DB exist within a minute of a cold start (which
+      # the healthcheck below depends on); FIRSTCHECKNOTIF=false stops that run
+      # announcing all 23 images as "new". Persisting /data is the other half:
+      # without it every restart is a first run again. ADR-0024.
+      - DIUN_WATCH_RUNONSTARTUP=true
+      - DIUN_WATCH_FIRSTCHECKNOTIF=false
+      # Report a moving tag whose digest changed underneath it -- the signal
+      # watchtower gave for the 16 labelled services, minus the ability to act.
+      - DIUN_WATCH_COMPAREDIGEST=true
+      # Generated from the compose model; `make check` asserts it is current.
+      - DIUN_PROVIDERS_FILE_FILENAME=/manifest.yml
+      # ADR-0012: one topic. Diun's native ntfy notifier accepts a TOKEN only,
+      # not basic auth -- so this is a third answer to the "some services cannot
+      # set an auth header" problem in AGENTS.md, alongside ?auth= and URL
+      # userinfo. The token belongs to the existing write-only `arr` publisher,
+      # so it can be revoked without touching that account's password:
+      #   docker exec ntfy ntfy token remove arr <token>
+      - DIUN_NOTIF_NTFY_ENDPOINT=http://ntfy:8410
+      - DIUN_NOTIF_NTFY_TOPIC=nas-alerts
+      - DIUN_NOTIF_NTFY_TOKEN=${NTFY_DIUN_TOKEN}
+      - DIUN_NOTIF_NTFY_PRIORITY=3
+      - DIUN_NOTIF_NTFY_TAGS=package
+      - DIUN_LOG_LEVEL=info
+    volumes:
+      - ${CONFIG_DIRECTORY}/diun:/data
+      # Tracked in-repo and mounted read-only, for the same reason the SWAG
+      # proxy-confs are (ADR-0022): a notification config that lives only in the
+      # gitignored config dir drifts silently, and nothing tells you the thing
+      # meant to tell you has stopped covering something.
+      - ../diun/manifest.yml:/manifest.yml:ro
+    depends_on:
+      ntfy:
+        condition: service_started
+    networks:
+      - nas-network
+    # No ports and no swag=enable: Diun has no HTTP server at all. Nothing to
+    # publish, nothing to route. No autoheal label either -- see ADR-0009; a
+    # daily notifier is not worth an auto-restart path.
+    #
+    # It is on the documented WATCHTOWER_OPTOUT list in
+    # scripts/check-invariants.sh rather than labelled, and commit 3 retires
+    # watchtower entirely. ADR-0024, ADR-0025.
+    healthcheck:
+      # Diun exposes no liveness endpoint, so this asserts the thing that
+      # actually matters for a scheduled checker: that it has WRITTEN to its
+      # database recently. 48h is two schedule periods -- a checker that has
+      # silently stopped checking is the failure mode, and "the process is
+      # alive" would not catch it. Valid from a cold start only because
+      # RUNONSTARTUP populates the DB immediately.
+      #
+      # `stat -c %Y` rather than `find -newermt`: this is a busybox image and
+      # -newermt is NOT supported there (measured -- it fails silently, which
+      # would have made this healthcheck always-green).
+      test: [CMD-SHELL, '[ $$(( $$(date +%s) - $$(stat -c %Y /data/diun.db) )) -lt 172800 ]']
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   # Restarts containers labelled `autoheal=true` (qbittorrent, slskd) when
   # Docker marks them unhealthy. Reaches Docker only through dockerproxy.
   # NOTE: slskd's healthcheck is deliberately Soulseek-INDEPENDENT, so autoheal

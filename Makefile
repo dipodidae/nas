@@ -20,7 +20,7 @@ PUID  ?= $(or $(call getenv,PUID),1000)
 PGID  ?= $(or $(call getenv,PGID),1000)
 CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 
-.PHONY: help check lint config bootstrap up down logs pull \
+.PHONY: help check lint config diun-manifest bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
         submodules install-hooks verify-runtime backup-offsite
 
@@ -41,6 +41,11 @@ lint: ## Validate the compose model renders (matches CI)
 config: ## Print the fully-resolved, merged compose model
 	@docker compose config
 
+diun-manifest: ## Regenerate diun/manifest.yml from the compose model (ADR-0024)
+	@.venv/bin/python scripts/emit_diun_manifest.py 2>/dev/null \
+	  || python3 scripts/emit_diun_manifest.py
+	@echo 'Commit the result -- make check asserts it matches the compose model.'
+
 # ---------------------------------------------------------------- lifecycle
 
 bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO config dirs
@@ -57,7 +62,7 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	@if [ -z "$(CONFIG_DIRECTORY)" ]; then \
 	  echo "!!! CONFIG_DIRECTORY is not set in $(ENV_FILE); cannot pre-chown." >&2; exit 2; \
 	fi
-	@# qui and ntfy are NOT linuxserver images: no root init chowns /config, so
+	@# qui, ntfy and diun are NOT linuxserver images: no root init chowns their
 	@# if Docker auto-creates these as root on first `up` they crash-loop on
 	@# `permission denied`. ADR-0014.
 	@# Deliberately NOT scrutiny: it is the inverse case. It runs as root (it
@@ -66,7 +71,7 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	@# permission bits and fail with `Permission denied` on influxdb's config.
 	@# Docker's default -- auto-creating the bind-mount source as root:root --
 	@# is correct there. Do not add it to this loop. ADR-0023.
-	@for d in qui ntfy; do \
+	@for d in qui ntfy diun; do \
 	  p="$(CONFIG_DIRECTORY)/$$d"; \
 	  echo "==> $$p -> $(PUID):$(PGID)"; \
 	  mkdir -p "$$p"; \
