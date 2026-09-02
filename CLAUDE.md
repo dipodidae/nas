@@ -22,7 +22,7 @@ Most tooling is wrapped in `package.json` scripts; prefer those over raw command
 
 ```bash
 # Compose invariants + validation — run BOTH after any compose change
-make check             # scripts/check-invariants.sh: 22 incident-derived assertions
+make check             # scripts/check-invariants.sh: 34 incident-derived assertions
 make lint              # docker compose config -q (matches CI)
 
 # Stack lifecycle

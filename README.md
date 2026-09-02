@@ -52,7 +52,7 @@ make bootstrap      # creates nas-network and pre-chowns the two config dirs
                     # them crash-loop on `permission denied`. ADR-0014.
 
 make lint           # does the compose model even render?
-make check          # 22 invariant assertions
+make check          # 34 invariant assertions
 
 docker compose up -d 4eva-rootpage      # swag depends_on it being healthy
 docker compose up -d swag               # get TLS working first
@@ -314,7 +314,7 @@ ssh -L 8989:127.0.0.1:8989 <host>    # then http://localhost:8989
 
 ## Rules that will bite you
 
-These are asserted mechanically by `scripts/check-invariants.sh` — **31
+These are asserted mechanically by `scripts/check-invariants.sh` — **34
 assertions** over 26 services, run by `make check`, by the pre-commit hook, and
 by CI so a violation cannot merge. Each failure prints the ADR that explains why
 the rule exists — **read it before changing the rule.** Compose lines carrying
