@@ -402,6 +402,8 @@ accident. Four layers now cover it:
 | `autoheal` | Unhealthy `qbittorrent`/`slskd`, restarts within ~30 s | Anything unlabelled |
 | `scripts/stack_watchdog.py` (`*/5`) | A service defined in compose with **no container at all**, plus unhealthy ones | The host itself |
 | `scripts/heartbeat.py` (`*/10`) → healthchecks.io | **The host being down** | — |
+| `make verify-runtime` (daily 06:15) | Running containers drifting from the invariants — a missing container, a lost capability, a stray `compose.override.yaml` | Anything the config alone can prove (that is `make check`'s job) |
+| `scripts/offsite_backup.sh` (daily 02:00) | Config surviving the loss of this machine | Media — 4.6 T is not backed up anywhere, by choice |
 
 All alerts go to self-hosted `ntfy` (`nas-alerts`), published over loopback so
 contents never leave the box; only the phone's subscription goes out through
@@ -442,7 +444,7 @@ and staleness to ntfy — a job that stops running is itself an alert.
 | `12,27,42,57` | `lidarr_backlog_drip` |
 | `:07 :22 :37 :52` | Tubifarry/slskd unclog chain — **shares one flock**, do not run these concurrently |
 | `:17` | `wan_shaper.sh apply` (scoped sudo) |
-| daily | `config_backup` 01:00 · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 |
+| daily | `config_backup` 01:00 · `offsite_backup` 02:00 (commented until a destination is set) · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 |
 | every 6 h | `playlist-sync` |
 | weekly | `log_pruner` · `docker prune` · `album_art` · per-library Jellyfin scans (Fri/Sat/Sun 05:05) |
 
@@ -646,5 +648,11 @@ Honest list of things that are wrong or unfinished, all tracked:
   was started from — so a pinned tag is silent even if relabelled. Closing this
   needs a version-aware watcher (DIUN / WUD / Renovate against the compose
   files), not a Watchtower setting. → [ADR-0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)
-- **No off-box backup of `${CONFIG_DIRECTORY}`.** `config_backup.py` writes to
-  `/mnt/drive/backups/`, which is the same host and the same box.
+- **The off-box config backup is built but not yet pointed anywhere.**
+  `scripts/offsite_backup.sh` is written, tested end to end against a local
+  repository (retention proven to prune, restore verified byte-identical), and
+  its cron entry is installed **commented out**. Two operator actions close it:
+  `sudo apt-get install -y restic`, and a `RESTIC_REPOSITORY` in `.env`. Then
+  uncomment the `#PENDING-DESTINATION` line in `crontab -e`.
+- **Media is not backed up at all.** 4.6 T under `${SHARE_DIRECTORY}`, by
+  choice. The off-box backup above covers **config only**.
