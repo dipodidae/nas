@@ -3,9 +3,9 @@
 > **Revision history** (kept per standing instructions — corrections earn
 > their space):
 >
-> *Only the newest entry is marked `current`. If you are adding a pass, clear
+> _Only the newest entry is marked `current`. If you are adding a pass, clear
 > the previous one's marker — three entries once claimed to be "this revision"
-> at the same time, in the one document meant to orient someone cold.*
+> at the same time, in the one document meant to orient someone cold._
 >
 > - **Pass 1**: enabled VAAPI hardware transcoding, declared it "the fix."
 >   Wrong — the session never encoded video at all (`-codec:v:0 copy`,
@@ -25,7 +25,7 @@
 >   growth is overwhelmingly native/unmanaged memory, not a managed leak.
 > - **Pass 6**: tested H3 (glibc malloc arena fragmentation,
 >   dotnet/runtime#122027) with an A/B: `MALLOC_ARENA_MAX=2` cut peak memory
->   by ~25% and finished the identical load *faster*. Confirmed the
+>   by ~25% and finished the identical load _faster_. Confirmed the
 >   `memfd:doublemapper` lead as a genuinely separate contributor.
 > - **Pass 7**: closed out the standing task list — W^X A/B (kept),
 >   reverse-proxy hygiene, heap dump housekeeping, prototyped the AAC
@@ -34,7 +34,7 @@
 >   failure."
 > - **Pass 8**: **corrects pass 7's central conclusion.**
 >   The *arr → Jellyfin "Update Library" notifications were not merely
->   unverified for Radarr and Lidarr — they were *broken for all three*, in
+>   unverified for Radarr and Lidarr — they were *broken for all three\*, in
 >   a way pass 7's verification method could not have detected, and the
 >   Radarr/Lidarr "blocked on downloads" framing was wrong (both were
 >   forceable in minutes). Details in §3.1. Also: built the alerting that
@@ -44,10 +44,10 @@
 >   (§3.3).
 > - **Pass 9**: closed the three loose ends pass 8 left and
 >   reversed one of its own recommendations. Restarted `autoheal` after
->   establishing *why* it was stopped (and fixed two timeout defects that
+>   establishing _why_ it was stopped (and fixed two timeout defects that
 >   would have made it harmful). Generalised the two silent-failure findings
 >   into a mechanism rather than two more fixes: every cron job is now wrapped
->   so both its failures *and its silences* are pushed, and the crontab itself
+>   so both its failures _and its silences_ are pushed, and the crontab itself
 >   is linted continuously. Added the off-box heartbeat. And on the AAC
 >   rollout, Tom reversed direction on the evidence pass 8 gathered — see
 >   §3.6.
@@ -74,17 +74,17 @@
 **Nine passes of this document investigated the wrong machine.** The reported
 symptom — a stuttering Fargo episode — was caused by BitTorrent saturating the
 household's upstream link, not by anything Jellyfin did. Everything in §1 below
-is real and worth keeping, but it fixed a *different* problem that happened to
+is real and worth keeping, but it fixed a _different_ problem that happened to
 be running at the same time.
 
 **The measurement.** `ping -c 20 1.1.1.1` from this host, with nothing else
 changed except qBittorrent's upload rate:
 
-| | qBittorrent uploading at 23.4 Mbps | qBittorrent throttled |
-|---|---|---|
-| packet loss | **5%** | 0% |
-| avg / max RTT | 18.0 / **127.4** ms | 12.5 / 18.1 ms |
-| jitter (mdev) | **25.8 ms** | 1.8 ms |
+|               | qBittorrent uploading at 23.4 Mbps | qBittorrent throttled |
+| ------------- | ---------------------------------- | --------------------- |
+| packet loss   | **5%**                             | 0%                    |
+| avg / max RTT | 18.0 / **127.4** ms                | 12.5 / 18.1 ms        |
+| jitter (mdev) | **25.8 ms**                        | 1.8 ms                |
 
 **Why it saturated.** qBittorrent's global upload cap was **4194304 B/s =
 33.55 Mbps**. This connection's actual upstream, measured at the NIC counter
@@ -106,7 +106,7 @@ playback never crosses the saturated uplink — and "remote" was not recorded in
 the early passes. Checking the access log settles it: the 2026-08-31 session
 that started this whole investigation came from `24.132.218.103`, **not** the
 home IP `86.81.35.107`, and carried `TranscodeReasons=AudioCodecNotSupported`
-only — meaning video was being *direct-streamed* at the file's full
+only — meaning video was being _direct-streamed_ at the file's full
 **10.6 Mbps** across a link that was dropping 5% of packets. That would stutter
 regardless of anything the server did.
 
@@ -139,7 +139,7 @@ bottleneck into a queue we own:
   **28 Mbit** (~90% of the measured 31), under a `wan-shaper.service` systemd
   unit so it survives reboots, with `stack_watchdog.py` alerting if the qdisc
   ever disappears (`tc` state does not survive a link-down).
-  **The non-obvious part:** `enp88s0` carries LAN *and* internet traffic — the
+  **The non-obvious part:** `enp88s0` carries LAN _and_ internet traffic — the
   gateway and every client share `192.168.2.0/24` — so shaping the whole
   interface would also cap LAN traffic at the uplink rate, and this box serves
   40 GB remuxes that direct-play at ~48 Mbps. An HTB root therefore splits
@@ -151,14 +151,14 @@ bottleneck into a queue we own:
 
 **Then the cap went back up, on evidence.** With CAKE managing the queue the
 emergency 15 Mbps was too conservative. Measured across three caps, three
-samples each, recording the *actual* upload rate because peer demand varies:
+samples each, recording the _actual_ upload rate because peer demand varies:
 
-| cap | best-loaded sample | loss | max RTT | jitter |
-|---|---|---|---|---|
-| unshaped, 33.55 | 23.4 Mbps | **5%** | 127 ms | 25.8 ms |
-| 15 | 3.6 Mbps | 0% | 22 ms | 2.0 ms |
-| **20** | **16.9 Mbps** | **0%** | **21 ms** | **2.3 ms** |
-| 25 | 10.2 Mbps | 0% | 28 ms | 4.3 ms |
+| cap             | best-loaded sample | loss   | max RTT   | jitter     |
+| --------------- | ------------------ | ------ | --------- | ---------- |
+| unshaped, 33.55 | 23.4 Mbps          | **5%** | 127 ms    | 25.8 ms    |
+| 15              | 3.6 Mbps           | 0%     | 22 ms     | 2.0 ms     |
+| **20**          | **16.9 Mbps**      | **0%** | **21 ms** | **2.3 ms** |
+| 25              | 10.2 Mbps          | 0%     | 28 ms     | 4.3 ms     |
 
 **0% loss at every shaped cap.** 20 Mbps is the setting: 16.9 Mbps of real
 seeding at 21 ms max RTT, and it leaves exactly the 8 Mbps that Jellyfin's
@@ -169,9 +169,9 @@ stream fits the 28 Mbit pipe. A test asserts that budget so it cannot drift.
 designed for exactly this, so it should have helped. At comparable load
 (~7-8 Mbps):
 
-| | max RTT | jitter |
-|---|---|---|
-| TCP+uTP | 20.2 / 19.6 / 12.6 ms | 1.6 / 1.5 / 0.3 ms |
+|          | max RTT                       | jitter                     |
+| -------- | ----------------------------- | -------------------------- |
+| TCP+uTP  | 20.2 / 19.6 / 12.6 ms         | 1.6 / 1.5 / 0.3 ms         |
 | uTP only | 24.9 / **58.6** / **54.9** ms | 2.4 / **8.5** / **7.9** ms |
 
 Plausibly because LEDBAT targets ~100 ms of queuing delay while CAKE already
@@ -198,7 +198,7 @@ x264 at this profile would be a fraction of that and would saturate the CPU.
 
 **A live scare that turned out not to be one.** Three ffmpeg invocations failed
 with exit 254 this morning, which looked like transcoding being broken. It was
-not: `Error opening input: No such file or directory` — the *Star City* series
+not: `Error opening input: No such file or directory` — the _Star City_ series
 had been deleted (gone from disk, from Sonarr and from Jellyfin) and a stale
 client was still asking for it. A full sweep of all 1115 library items found
 exactly one orphaned path, `tmp-audio-test/prototype.mkv`, left over from pass
@@ -206,7 +206,7 @@ exactly one orphaned path, `tmp-audio-test/prototype.mkv`, left over from pass
 
 **Third pass (2026-09-02, later): DSCP replaces the arithmetic.** The budget
 above — cap + 8 Mbps ≤ 28 Mbit — silently assumed **exactly one remote viewer**.
-`RemoteClientBitrateLimit` is a per-*stream* ceiling, not a server-wide
+`RemoteClientBitrateLimit` is a per-_stream_ ceiling, not a server-wide
 aggregate: verified against the live server, two concurrent remote
 `PlaybackInfo` requests were each offered the full 8 Mbps. With five users the
 budget was simply wrong, and CAKE's flow fairness would have handed most of the
@@ -215,11 +215,11 @@ link to whichever side had more flows.
 `scripts/wan_shaper.sh` now marks qBittorrent's and slskd's egress **DSCP CS1**,
 which files them in CAKE's Bulk tin. Measured, per-tin, on the live shaper:
 
-| | Bulk (torrents) | Best Effort (a stream) |
-|---|---|---|
-| torrents alone | **26.5 Mbps** | 0.6 |
-| one ordinary flow added | **5.0 Mbps** | **24.6 Mbps** |
-| again, with the cap at 25 | **1.76 Mbps** — exactly the 1750 Kbit threshold | **25.7 Mbps** |
+|                           | Bulk (torrents)                                 | Best Effort (a stream) |
+| ------------------------- | ----------------------------------------------- | ---------------------- |
+| torrents alone            | **26.5 Mbps**                                   | 0.6                    |
+| one ordinary flow added   | **5.0 Mbps**                                    | **24.6 Mbps**          |
+| again, with the cap at 25 | **1.76 Mbps** — exactly the 1750 Kbit threshold | **25.7 Mbps**          |
 
 Torrents surrender the link the moment anything else wants it, and take it back
 when nothing does. That scales to one viewer or five with no arithmetic, so the
@@ -227,7 +227,7 @@ qBittorrent cap went **20 → 25 Mbps**. Latency under contention: max 15 ms,
 jitter 0.9 ms.
 
 **A correction to the brief that changed the implementation.** The instruction
-was to mark *Gluetun's outer packets*, because WireGuard will not carry an inner
+was to mark _Gluetun's outer packets_, because WireGuard will not carry an inner
 DSCP mark. **There is no Gluetun** — the VPN sidecar was removed 2026-07-27 and
 qBittorrent is a plain `nas-network` member egressing over the home IP. So the
 marks go directly on the real packets, in `mangle POSTROUTING`, which runs
@@ -254,7 +254,7 @@ crontab, has no systemd timer and was not running. **I could not determine what
 reset it.** The hourly enforcement cron is therefore a backstop for an unknown
 cause rather than a known one, which is worth stating plainly.
 
-The *rule* stands regardless and is now in AGENTS.md: change service settings
+The _rule_ stands regardless and is now in AGENTS.md: change service settings
 through the API, never by editing the config of a live container. That is what
 pass 2 recorded for Jellyfin's XML, and qBittorrent does rewrite its conf on
 exit — it simply is not the explanation here.
@@ -265,9 +265,9 @@ and 25 Mbps cannot be both. Unshaped, 25 lands in the same range as the original
 defect — the 33.55 Mbps cap produced 23.4 Mbps of real upload and 5% loss. So it
 is now two numbers, chosen by observation rather than by schedule:
 
-| shaper state | cap | basis |
-|---|---|---|
-| CAKE present | **25 Mbps** | pure capacity; DSCP makes it yield automatically |
+| shaper state | cap         | basis                                                     |
+| ------------ | ----------- | --------------------------------------------------------- |
+| CAKE present | **25 Mbps** | pure capacity; DSCP makes it yield automatically          |
 | CAKE missing | **15 Mbps** | measured unshaped at 16.1 Mbps upload, 0% loss, 37 ms max |
 
 `qbittorrent_settings_enforce.py` asks `wan_shaper.sh check` (see §4.0 — an
@@ -287,19 +287,19 @@ qdisc restored -> enforcer: wan shaper: present
 
 **The revert: both named candidates ruled out, cause still unknown.**
 
-- *Container recreate.* `RestartCount: 0` proves nothing — it is per-container,
+- _Container recreate._ `RestartCount: 0` proves nothing — it is per-container,
   so a `compose up -d` yields a fresh container reading zero. Checked properly:
   the container **was** recreated (Created 2026-09-01 18:22:01, Started 18:29:53
   — a 472 s gap, which is the peer session's `compose up -d` building images
-  between the two). But both timestamps are ~15 h *before* the 09:55 change, and
+  between the two). But both timestamps are ~15 h _before_ the 09:55 change, and
   the container Id never changed afterwards. A recreate happened; not in the
   window that matters.
-- *Alternative rate limits.* `up_limit` itself read `UNLIMITED`, with
+- _Alternative rate limits._ `up_limit` itself read `UNLIMITED`, with
   `alt_up_limit` UNLIMITED, `scheduler_enabled` False and `speedLimitsMode` 0.
   Not a masked value.
 
 So it stays unknown — but the **next** occurrence is now diagnosable rather than
-guessable: the enforcer logs the value it *found*, not just what it set
+guessable: the enforcer logs the value it _found_, not just what it set
 (`up_limit: found 0 -> setting 3124224`), timestamped every five minutes.
 
 **Playlist-sync: the flock is fine, the pipeline is not.** Verified `flock -n`
@@ -325,7 +325,7 @@ reporting green.
 rate still equal to `SHAPE_MBIT` (a stale figure after the ISP re-provisions is
 a shaper that has silently stopped working), and one DSCP mark per bulk
 container — and both callers ask it instead of grepping `tc` themselves.
-Verified by deleting *only* the marks:
+Verified by deleting _only_ the marks:
 
 ```text
 qdisc present, marks deleted
@@ -337,7 +337,7 @@ qdisc present, marks deleted
 ```
 
 **A rule-teardown bug the exact-count check then caught.** While tightening the
-health check, `wan_shaper.sh check` reported *four* DSCP marks for two
+health check, `wan_shaper.sh check` reported _four_ DSCP marks for two
 containers. `clear_marks` matched on `--comment "wan_shaper-bulk"` with quotes,
 but `iptables -S` prints the comment unquoted — so the teardown never fired and
 every `apply` appended another pair. Fixed, and the count check made **exact**
@@ -349,10 +349,10 @@ teardown is broken, and both are defects. Three consecutive applies now hold at
 loaded latency looks poor is to drop from 90% to 85% of line rate. Measured
 across **18 samples** at 28 and 26 Mbit:
 
-| | n | avg RTT | worst max | worst jitter |
-|---|---|---|---|---|
-| near-idle (<5 Mbps up) | 7 | 11.8 ms | 44.9 ms | 6.87 ms |
-| loaded (≥10 Mbps up) | 7 | 12.5 ms | 61.6 ms | 7.85 ms |
+|                        | n   | avg RTT | worst max | worst jitter |
+| ---------------------- | --- | ------- | --------- | ------------ |
+| near-idle (<5 Mbps up) | 7   | 11.8 ms | 44.9 ms   | 6.87 ms      |
+| loaded (≥10 Mbps up)   | 7   | 12.5 ms | 61.6 ms   | 7.85 ms      |
 
 **Packet loss was 0% in every sample at both rates.** The residual spikes barely
 correlate with our own upload (**r = +0.20**), occur at near-idle as readily as
@@ -371,13 +371,13 @@ zero appear in the LAN audio-only transcode — an extremely tempting lead. It
 was reproduced exactly by replaying Jellyfin's argv verbatim, then isolated to
 the fMP4 segment muxer by changing one argument at a time:
 
-| variant | warnings |
-|---|---|
-| baseline, exactly as Jellyfin ran it | 423 |
-| without `-copyts` / `-avoid_negative_ts disabled` | 423 |
-| without `-af volume=2` | 423 |
-| native `aac` instead of `libfdk_aac` | 423 |
-| **`-hls_segment_type mpegts`** | **0** |
+| variant                                           | warnings |
+| ------------------------------------------------- | -------- |
+| baseline, exactly as Jellyfin ran it              | 423      |
+| without `-copyts` / `-avoid_negative_ts disabled` | 423      |
+| without `-af volume=2`                            | 423      |
+| native `aac` instead of `libfdk_aac`              | 423      |
+| **`-hls_segment_type mpegts`**                    | **0**    |
 
 But probing the output proved the warnings **benign**: every audio packet in
 the fMP4 output carries the correct 0.021333 s duration, and the fMP4 and
@@ -409,7 +409,7 @@ no credential   -> 401
 
 Also scrubbed a hardcoded API key from `deduplicate_ebooks.py`,
 `deduplicate_ebooks_filesystem.py` and `EBOOK_DEDUPLICATION_README.md`. That one
-is stale — every *arr rejects it with 401 — but it had no business being in the
+is stale — every \*arr rejects it with 401 — but it had no business being in the
 tree. All four now read from the environment.
 
 **The rule, which is not "delete the file":** scrubbing the working tree stops
@@ -443,27 +443,27 @@ watching the signals that do.
 `stack_watchdog.py` now watches those instead: the mount disappearing, ext4
 **remounting read-only**, free space, and kernel I/O / USB-reset / `EXT4-fs
 error` lines in the last six hours. The read-only case is the one to fear —
-ext4 does it on error by default, and at that point every *arr import fails
+ext4 does it on error by default, and at that point every \*arr import fails
 while every container still reports healthy. That is the same failure shape as
 everything else in this document.
 
 **The NVMe wear turned out to be the memory bug, already fixed.** The raw
 numbers look alarming — 42% used, **31.4 TB written**, of which ~572 GB is swap
-*since boot* — and a first reading suggests an unexplained memory-pressure
+_since boot_ — and a first reading suggests an unexplained memory-pressure
 problem measured in terabytes of flash. Checked against actual uptime rather
 than assumed:
 
-| | |
-|---|---|
-| uptime at measurement | **9.1 days**, so 572 GB = **63 GB/day** of swap writes |
-| lifetime average, all writes | 31.4 TB over 9,789 powered-on hours = **77 GB/day** |
-| so swap is | **82% of everything ever written to this SSD** |
-| current swapout rate | **0 pages over a 420 s window** — but see the caveat below |
+|                              |                                                            |
+| ---------------------------- | ---------------------------------------------------------- |
+| uptime at measurement        | **9.1 days**, so 572 GB = **63 GB/day** of swap writes     |
+| lifetime average, all writes | 31.4 TB over 9,789 powered-on hours = **77 GB/day**        |
+| so swap is                   | **82% of everything ever written to this SSD**             |
+| current swapout rate         | **0 pages over a 420 s window** — but see the caveat below |
 
 **Caveat, because the first reading here was overstated.** A 60-second sample
 showed 0 pages and that was written up as "swapping has stopped". The cumulative
 counter then moved **2.3 GB between two readings ~40 minutes apart**, so it is
-*bursty*, not stopped. Re-measured over 420 s: 0 pages again. The burst window
+_bursty_, not stopped. Re-measured over 420 s: 0 pages again. The burst window
 contained no stack activity that explains it — `playlist-sync` last ran at 00:10,
 twelve hours earlier — but it did contain a `du -sh` walk over 79 GB of backups
 and other diagnostics of mine, which is the kind of page-cache pressure that
@@ -472,7 +472,7 @@ heavy filesystem walks.** Do not treat "0 over a minute" as proof of anything;
 this counter needs a long window.
 
 All six OOM kills in this boot fall between 2026-08-30 10:15 and 2026-09-01
-05:34 — *before* `MALLOC_ARENA_MAX` and `DOTNET_EnableWriteXorExecute` went in
+05:34 — _before_ `MALLOC_ARENA_MAX` and `DOTNET_EnableWriteXorExecute` went in
 on the afternoon of 09-01. Nothing has been OOM-killed since, and the sustained
 swapout rate is now zero. **The 572 GB is attributable to the Jellyfin
 native-memory leak of §1**, not a second
@@ -489,11 +489,11 @@ VS Code Server below. It costs nothing ongoing.
 **Backups: one premise corrected, one confirmed.** The concern was that backups
 live on the disk they would be needed to recover from. Checked per device:
 
-| | live copy | backup copy | verdict |
-|---|---|---|---|
-| service configs | NVMe (`.docker-config`) | USB (`backups/nas-configs`) | **two devices — correct as-is** |
-| Bazarr config (row 43) | NVMe | USB | two devices, fine |
-| **AAC originals (row 30)** | **USB** | **USB** | **one device — no protection from disk loss** |
+|                            | live copy               | backup copy                 | verdict                                       |
+| -------------------------- | ----------------------- | --------------------------- | --------------------------------------------- |
+| service configs            | NVMe (`.docker-config`) | USB (`backups/nas-configs`) | **two devices — correct as-is**               |
+| Bazarr config (row 43)     | NVMe                    | USB                         | two devices, fine                             |
+| **AAC originals (row 30)** | **USB**                 | **USB**                     | **one device — no protection from disk loss** |
 
 So the config backups are already on a different physical device from what they
 restore. The AAC originals are not, and that is real: "originals preserved"
@@ -511,12 +511,12 @@ redundancy and no SMART.** That is a size problem, not a scripting one.
 
 **Noted, not acted on:**
 
-| | |
-|---|---|
-| NVMe wear | 42% used, **31.4 TB written**; ~572 GB of that is swap since boot |
-| zram0 | 100% full (7.6 GB data → 2.5 GB compressed), so overflow reaches the disk swapfile — which is where the NVMe writes come from |
-| stale VS Code Server | holding **5.5 GB of swap**, 499 MB resident, **zero established connections**, running since 2026-09-01. Unrelated to the stack; killing it reclaims that, but it is an editor session and therefore Tom's call |
-| `systemd-networkd-wait-online.service` | failed at boot 2026-08-24. Cosmetic — NetworkManager owns the interface; it only delays boot. Not masked, because a masked unit has its own cost and there is no benefit today |
+|                                        |                                                                                                                                                                                                                 |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NVMe wear                              | 42% used, **31.4 TB written**; ~572 GB of that is swap since boot                                                                                                                                               |
+| zram0                                  | 100% full (7.6 GB data → 2.5 GB compressed), so overflow reaches the disk swapfile — which is where the NVMe writes come from                                                                                   |
+| stale VS Code Server                   | holding **5.5 GB of swap**, 499 MB resident, **zero established connections**, running since 2026-09-01. Unrelated to the stack; killing it reclaims that, but it is an editor session and therefore Tom's call |
+| `systemd-networkd-wait-online.service` | failed at boot 2026-08-24. Cosmetic — NetworkManager owns the interface; it only delays boot. Not masked, because a masked unit has its own cost and there is no benefit today                                  |
 
 **Clean:** no kernel I/O errors in 7 days, filesystem clean (`tune2fs` reports
 `clean`), time synced, unattended-upgrades enabled, 3 upgradable packages of
@@ -538,8 +538,8 @@ both still holding as of this pass:
    via A/B with the "Scan Media Library" task as load generator.
    `MALLOC_ARENA_MAX=2` cut peak memory from >2.08GB (still climbing, scan
    incomplete after 23.8min) to 1.56GB (scan complete in 10.8min) — faster
-   *and* smaller, no downside found. glibc sizes arena count from the
-   *host's* online CPU count (16 here), not the container's cgroup quota,
+   _and_ smaller, no downside found. glibc sizes arena count from the
+   _host's_ online CPU count (16 here), not the container's cgroup quota,
    so `mem_limit` alone cannot restrain it.
 2. **`memfd:doublemapper` accumulation** — .NET's W^X double-mapping for
    JIT'd code (dotnet/runtime#89776 / #121455). Over 1,000 mappings at a
@@ -550,7 +550,7 @@ both still holding as of this pass:
 **Still holding.** The sampler at the end of this pass reads
 `anon=455.8MB  arena_regions=1  doublemapper=0`, and `journalctl -k` shows
 the last kernel OOM kill of the `jellyfin` process at **2026-09-01 05:34:58**
-(anon-rss 23,483,348 kB) — *before* the fixes went in. None since.
+(anon-rss 23,483,348 kB) — _before_ the fixes went in. None since.
 
 **Ruled out; do not revisit without new evidence:** hardware transcoding
 (the session direct-streamed), ffprobe memory (jellyfin/jellyfin#16048 — no
@@ -573,77 +573,77 @@ reproducibility.
 
 ## 2. Consolidated change log — everything live, all passes
 
-| # | Change | Where | Revert |
-|---|---|---|---|
-| 1 | `devices: [/dev/dri:/dev/dri]`, `group_add: ["991"]` (host `render` GID), VAAPI hardware transcoding enabled | `docker-compose.yml` (jellyfin) | Remove `devices`/`group_add`, set `HardwareAccelerationType: none` via Jellyfin API |
-| 2 | Jellyfin encoding config: `HardwareDecodingCodecs` corrected to match real `vainfo` output, `AllowHevcEncoding`/`AllowAv1Encoding`/low-power-encoder settings off | Jellyfin `/System/Configuration/encoding` | `POST` prior JSON from `docs/jellyfin-config-backups/` |
-| 3 | SWAG `jellyfin.subdomain.conf`: `proxy_buffering off`, `proxy_request_buffering off` | `.docker-config/swag/nginx/proxy-confs/jellyfin.subdomain.conf` | Restore `.bak-20260901-133132` |
-| 4 | Jellyfin `KnownProxies`: `[] → ["172.30.0.0/24"]` | Jellyfin `/System/Configuration/network` | `POST` with `KnownProxies: []` |
-| 5 | `mem_limit: 10g` / `memswap_limit: 10g` | `docker-compose.yml` (jellyfin) | Delete both lines |
-| 6 | Real-time monitoring off on all 3 libraries | Jellyfin `/Library/VirtualFolders/LibraryOptions` (×3) | Flip `EnableRealtimeMonitor` back to `true`, then **restart the container** — the API-only toggle does not apply live |
-| 7 | NFO metadata saving off (Music, TV Shows) | Jellyfin `/Library/VirtualFolders/LibraryOptions` (×2) | Flip `SaveLocalMetadata` back to `true` |
-| 8 | OpenCL Docker Mod tried, reverted (needs `CAP_FOWNER`, declined) | — | Already reverted |
-| 9 | `scripts/jellyfin_mem_sample.py` (v3) + per-minute cron | `scripts/`, crontab | Remove cron line, delete script |
-| 10 | `MALLOC_ARENA_MAX=2` | `docker-compose.yml` (jellyfin) | Delete the line |
-| 11 | `DOTNET_EnableWriteXorExecute=0` | `docker-compose.yml` (jellyfin) | Delete the line |
-| 12 | Dedicated Jellyfin API key for *arr integrations (`API_KEY_JELLYFIN_ARR`, Jellyfin key name `arr-integrations`) | `.env` | Delete the var; revoke in Jellyfin Dashboard → API Keys |
-| 13 | Sonarr → Jellyfin "Update Library" notification | Sonarr `/api/v3/notification` id 1 | Delete the "Jellyfin" connection in Sonarr |
-| 14 | Radarr → Jellyfin "Update Library" notification | Radarr `/api/v3/notification` id 2 | Delete the "Jellyfin" connection in Radarr |
-| 15 | Lidarr → Jellyfin "Update Library" notification | Lidarr `/api/v1/notification` id 6 | Delete the "Jellyfin" connection in Lidarr |
-| 16 | qBittorrent stale-lockfile recovery (found crashed, blocking all *arr downloads) | Host filesystem + `docker start` | N/A — repair, not new behaviour |
-| 17 | SWAG: scoped `api_key`/`apikey` redaction in Jellyfin's access log | `.docker-config/swag/nginx/site-confs/00-jellyfin-log-redact.conf` + one `access_log` line in `jellyfin.subdomain.conf` | Delete both, `nginx -t && nginx -s reload` |
-| 18 | Heap dumps moved off `/tmp` | `/mnt/drive/backups/jellyfin-heap-dumps/` | Delete the `.gcdump` files there |
-| **19** | **Removed duplicate Jellyfin connections.** Radarr and Lidarr each had *two* — a long-standing "Emby / Jellyfin" (id 1) plus the one pass 7 added. The id-1 definitions never fired at all (verified: two connections, one inbound POST) | Radarr/Lidarr `notification` id 1, deleted | Re-add via each app's UI; pre-delete JSON is not in the repo (it contained masked keys and was worthless for restore) |
-| **20** | **`mapFrom`/`mapTo` set on Sonarr's and Radarr's Jellyfin connection** (`/tv` → `/data/movies/series`, `/movies` → `/data/movies/movies`). Without this the notification is a silent no-op for anything Jellyfin does not already know — see §3.1 | Sonarr `notification/1`, Radarr `notification/2` | Blank both fields in each app's Connect settings |
-| **21** | **`scripts/lidarr_jellyfin_bridge.py` + cron `2-59/5`** — the same path mapping for Lidarr, which exposes no `mapFrom`/`mapTo` fields | `scripts/`, crontab, `logs/lidarr_jellyfin_bridge.json` | Remove the cron line; delete the script and its state file |
-| **22** | **Global "Scan Media Library" task disabled** — trigger list emptied (was `IntervalTrigger` 432000000000 ticks = every 12h) | Jellyfin `POST /ScheduledTasks/7738148ffcd07979c7ceb148e06b3aed/Triggers` with `[]`; persisted at `.docker-config/jellyfin/ScheduledTasks/7738148f-….js` | `POST` the same endpoint with `[{"Type":"IntervalTrigger","IntervalTicks":432000000000}]` |
-| **23** | **`scripts/jellyfin_library_scan.py` + three cron entries** — Movies Fri 05:05, TV Shows Sat 05:05, Music Sun 05:05 (Music deliberately after `album_art.py` at 04:45) | `scripts/`, crontab | Remove the three cron lines and re-enable row 22 |
-| **24** | **`ntfy` service added to the stack** — self-hosted, `auth-default-access=deny-all`, user `watchdog` with `rw` on topic `nas-alerts`, published at `ntfy.${PUBLIC_DOMAIN}` | `docker-compose.yml`, `.docker-config/swag/nginx/proxy-confs/ntfy.subdomain.conf`, `${CONFIG_DIRECTORY}/ntfy` | `docker compose stop ntfy && docker compose rm -f ntfy`; delete the service block, the vhost, and the config dir |
-| **25** | **`scripts/stack_watchdog.py` + cron `*/5`** — container health/exit/missing/flapping, Jellyfin `anon` threshold, kernel OOM watcher, ntfy delivery | `scripts/`, crontab, `logs/stack_watchdog.json` | Remove the cron line; delete the script and its state file |
-| **26** | **`NAS_ALERT_WEBHOOK` / `NAS_ALERT_USER` / `NAS_ALERT_PASSWORD`** added to `.env` (and placeholders to `.env.example`) | `.env` | Delete the three lines |
-| **27** | **`media_ops_status.py` cron repaired** — the line ran `.venv/bin/python` with no `cd`, so from cron's `$HOME` it resolved to a path that does not exist. The ops dashboard had been serving 2026-06-10 data ever since | crontab | Not worth reverting — without the `cd /home/tom/nas &&` prefix the job simply does not run |
-| **28** | **Bazarr: `addic7ed` and `opensubtitlescom` removed from `enabled_providers`** — both in permanent `AuthenticationError`. Credentials left in place, so re-enabling is a UI toggle | Bazarr `POST /api/system/settings`; `.docker-config/bazarr/config/config.yaml` | Re-add both names to `enabled_providers`; backup at `docs/jellyfin-config-backups/bazarr-config-*-pre-provider-disable.yaml` |
-| **29** | **SWAG `default.conf`: load-order comment** above the inline `include /config/nginx/proxy-confs/*.subdomain.conf;` | `.docker-config/swag/nginx/site-confs/default.conf` | Restore `default.conf.bak-20260901-*` |
-| **30** | **AAC fallback audio, first batch (Fargo Season 1, 10 files)** + `scripts/aac_fallback_track.py` | `${SHARE_DIRECTORY}/series/Fargo/Season 1`; originals at `${SHARE_DIRECTORY}/backups/aac-remux-originals/` | `mv` each original back over the converted file, then run `jellyfin_library_scan.py --library "TV Shows"` |
-| **31** | Jellyfin request logging (`.docker-config/jellyfin/logging.json`) — added for §3.1, **fully reverted**: file deleted and the container restarted 2026-09-01 20:42, confirmed no further `Request starting` lines | `.docker-config/jellyfin/logging.json` | Already reverted; §4.1 says how to re-add it |
-| **32** | `scripts/jellyfin_mem_sample.py`: `datetime.timezone` → `datetime.UTC` (the file's only `ruff` failure) | `scripts/jellyfin_mem_sample.py` | Cosmetic; revert with `git checkout` once committed |
-| **33** | **`autoheal` restarted.** Stopped since 2026-07-29; cause established as collateral from a bare `docker compose stop` (shell history), not a decision about autoheal — its own log shows it had never restarted anything | `docker compose up -d autoheal` | `docker compose stop autoheal` |
-| **34** | **`AUTOHEAL_DEFAULT_STOP_TIMEOUT=150`** (was the image default of 10s). autoheal ignores compose's `stop_grace_period`; a 10s SIGTERM→SIGKILL on qbittorrent is the documented stale-lockfile trigger | `docker-compose.yml` (autoheal) | Delete the line (reverts to 10s) |
-| **35** | **`CURL_TIMEOUT=180`** (was 30). Must exceed the stop timeout, or autoheal logs a spurious failure and re-issues the restart every interval on top of the one in flight — measured, three overlapping requests | `docker-compose.yml` (autoheal) | Set back to 30 |
-| **36** | **`scripts/cron_job.py`** + all 23 scheduled jobs rewritten to use it. Pushes fatal exits; records `logs/cron-state/<job>.json` so the watchdog can alert on silence | crontab, `scripts/`, `logs/cron-state/` | Restore the crontab from `docs/jellyfin-config-backups/crontab-2026-09-01-pre-cron-wrapper.txt` |
-| **37** | **`scripts/heartbeat.py`** + cron `*/10` + `NAS_HEARTBEAT_URL` in `.env`/`.env.example`. Off-box dead-man's switch; the URL is still empty pending an account | crontab, `scripts/`, `.env` | Remove the cron line and the env var |
-| **38** | **Watchdog gained four checks**: `autoheal` health, off-box heartbeat configured, crontab lint, wrapped-cron-job freshness | `scripts/stack_watchdog.py` | Delete the four `check_*` calls in `main()` |
-| **39** | **`media_ops_status` cron no longer discards output** — it redirected to `/dev/null`, which is part of why three months of failure left nothing to find. Now `>> logs/media_ops_status.log` | crontab | Restore `>/dev/null 2>&1` (do not) |
-| **40** | **AAC disposition flip, 5 files** (Planet Earth S01 E01/E02/E04/E07/E09) — already had a stereo AAC track, only the default flag moved. Lossless, no re-encode, no size change | `${SHARE_DIRECTORY}/series/Planet Earth/Season 1`; originals under `backups/aac-remux-originals/` | `mv` each original back, then `jellyfin_library_scan.py --library "TV Shows"` |
-| **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode | `scripts/aac_fallback_track.py` | n/a, additive |
-| **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history | `.gitignore` | Remove the line (do not) |
-| **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/` | Move it back (do not) |
-| **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green | `scripts/` (10 files) | `git revert` the style commit |
-| **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db` | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account |
-| **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200 | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env` | Delete the `ntfy — *` connections in each *arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
-| **47** | **qBittorrent upload cap 33.55 → 15 Mbps** (`up_limit` 4194304 → 1874944 B/s). The old value was 108% of the link's entire ~31 Mbps upstream, saturating the modem queue: 5% packet loss, 127 ms latency spikes. This is the root cause of the remote stutter (§0) | qBittorrent prefs, and pinned in `DESIRED_PREFS` in `scripts/qbittorrent_settings_enforce.py` | `curl -b <cookie> -d "limit=4194304" .../api/v2/transfer/setUploadLimit` and revert the constant |
-| **48** | **CAKE egress shaper** on internet-bound traffic at 28 Mbit, LAN exempt via an HTB split. `scripts/wan_shaper.sh` + `wan-shaper.service` (enabled), watched by `stack_watchdog.py` | new script, systemd unit | `sudo systemctl disable --now wan-shaper.service` |
-| **49** | **qBittorrent cap raised 15 → 20 Mbps** once CAKE was managing the queue, and **upload slots 50 → 6**. Both pinned in `DESIRED_PREFS`, with a test asserting cap + 8 Mbps remote stream ≤ 28 Mbit shaped. **Superseded by rows 53-55** — that budget assumed one viewer; DSCP replaced it | `scripts/qbittorrent_settings_enforce.py` | Edit the two constants |
-| **50** | **`qbittorrent_settings_enforce.py` on cron** (now `*/5`, see row 55; originally hourly at :47). The live cap was observed drifting back to UNLIMITED with the repo pin untouched — pinning is necessary but something has to re-assert it | crontab | Remove the cron line |
-| **51** | **µTP-only tested and rejected** — measurably worse jitter than TCP+uTP once CAKE is in place. No change left in effect | — | n/a, reverted |
-| **52** | **Jellyfin `RemoteClientBitrateLimit` 0 → 8 Mbps**, server-wide. Remote clients can no longer negotiate a bitrate the link cannot sustain | Jellyfin `/System/Configuration` | `POST` with `RemoteClientBitrateLimit: 0`; pre-change backup in `docs/jellyfin-config-backups/` |
-| **53** | **DSCP CS1 marking** on qBittorrent's and slskd's egress, so CAKE's Bulk tin makes them yield automatically. Replaces the per-viewer arithmetic budget | `scripts/wan_shaper.sh` (`apply_marks`), iptables mangle POSTROUTING | Remove `apply_marks` from `apply`; rules clear on the next run |
-| **54** | **qBittorrent cap 20 → 25 Mbps**, since yielding is now automatic and the cap is no longer a reservation | `scripts/qbittorrent_settings_enforce.py` | Edit `UPLOAD_LIMIT_BYTES_PER_SEC` |
-| **55** | **Two caps, chosen by shaper state**: 25 Mbps shaped / 15 Mbps degraded. Enforcer moved from hourly to `*/5` because it is now a safety net | `scripts/qbittorrent_settings_enforce.py`, crontab | Collapse the two constants back to one |
-| **56** | **`wan_shaper.sh check`** — verifies qdisc *and* shaped rate *and* exact DSCP mark count; watchdog and enforcer both ask it instead of grepping `tc`. Plus a sudoers entry for `apply`/`status`/`check` and an hourly re-apply cron | `scripts/wan_shaper.sh`, `/etc/sudoers.d/wan-shaper`, crontab | Delete the sudoers file and the cron line |
-| **57** | **`clear_marks` teardown bug fixed** — it matched a quoted comment that `iptables -S` prints unquoted, so every `apply` appended another rule pair. Mark count check made exact rather than `>=` | `scripts/wan_shaper.sh` | n/a, pure fix |
-| **58** | **Shaper rate kept at 28 Mbit**; 85% (26 Mbit) A/B'd across 18 samples and rejected — 0% loss at both, spikes uncorrelated with our load (r = +0.20) | `scripts/wan_shaper.sh` `SHAPE_MBIT` | Set to 26 and re-measure |
-| **59** | **`NAS_HEARTBEAT_URL` configured** (by Tom) and the off-box chain drilled in both directions — alive *and* `/fail` — not just the happy path | `.env` | Blank the variable |
-| **60** | **Media-drive watchdog checks**: mount present, not remounted read-only, free space, kernel I/O/USB/EXT4 errors. Added because the USB bridge refuses SMART under every `smartctl -d` type, so no disk-health signal exists | `scripts/stack_watchdog.py` | Delete `check_media_storage` and its call |
-| **61** | **`.sudo-pwd` permissions 664 → 600** — it was group- and world-readable | host filesystem | `chmod 664` (do not) |
-| **62** | **Exposed credential rotated** — see §0.5. `PLAYLIST_GENERATOR_PASSWORD` had been public on GitHub since 2026-05-26; rotated and verified, hardcoded secrets scrubbed from four tracked files | `.env`, `scripts/legacy/qbittorrent-scheduler.py`, `scripts/deduplicate_ebooks*.py`, `scripts/EBOOK_DEDUPLICATION_README.md` | n/a — never restore a published credential |
-| **63** | **`.sudo-pwd` deleted**, replaced by `/etc/sudoers.d/nas-ops`: `wan_shaper.sh apply\|status\|check\|clear` plus a read-only diagnostic set, passwordless, nothing else. No secret on disk | host `/etc/sudoers.d/nas-ops` | `rm` the sudoers file; do **not** restore a stored password |
+| #      | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Where                                                                                                                                                    | Revert                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1      | `devices: [/dev/dri:/dev/dri]`, `group_add: ["991"]` (host `render` GID), VAAPI hardware transcoding enabled                                                                                                                                                                                                                                                                                                                                                                      | `docker-compose.yml` (jellyfin)                                                                                                                          | Remove `devices`/`group_add`, set `HardwareAccelerationType: none` via Jellyfin API                                                            |
+| 2      | Jellyfin encoding config: `HardwareDecodingCodecs` corrected to match real `vainfo` output, `AllowHevcEncoding`/`AllowAv1Encoding`/low-power-encoder settings off                                                                                                                                                                                                                                                                                                                 | Jellyfin `/System/Configuration/encoding`                                                                                                                | `POST` prior JSON from `docs/jellyfin-config-backups/`                                                                                         |
+| 3      | SWAG `jellyfin.subdomain.conf`: `proxy_buffering off`, `proxy_request_buffering off`                                                                                                                                                                                                                                                                                                                                                                                              | `.docker-config/swag/nginx/proxy-confs/jellyfin.subdomain.conf`                                                                                          | Restore `.bak-20260901-133132`                                                                                                                 |
+| 4      | Jellyfin `KnownProxies`: `[] → ["172.30.0.0/24"]`                                                                                                                                                                                                                                                                                                                                                                                                                                 | Jellyfin `/System/Configuration/network`                                                                                                                 | `POST` with `KnownProxies: []`                                                                                                                 |
+| 5      | `mem_limit: 10g` / `memswap_limit: 10g`                                                                                                                                                                                                                                                                                                                                                                                                                                           | `docker-compose.yml` (jellyfin)                                                                                                                          | Delete both lines                                                                                                                              |
+| 6      | Real-time monitoring off on all 3 libraries                                                                                                                                                                                                                                                                                                                                                                                                                                       | Jellyfin `/Library/VirtualFolders/LibraryOptions` (×3)                                                                                                   | Flip `EnableRealtimeMonitor` back to `true`, then **restart the container** — the API-only toggle does not apply live                          |
+| 7      | NFO metadata saving off (Music, TV Shows)                                                                                                                                                                                                                                                                                                                                                                                                                                         | Jellyfin `/Library/VirtualFolders/LibraryOptions` (×2)                                                                                                   | Flip `SaveLocalMetadata` back to `true`                                                                                                        |
+| 8      | OpenCL Docker Mod tried, reverted (needs `CAP_FOWNER`, declined)                                                                                                                                                                                                                                                                                                                                                                                                                  | —                                                                                                                                                        | Already reverted                                                                                                                               |
+| 9      | `scripts/jellyfin_mem_sample.py` (v3) + per-minute cron                                                                                                                                                                                                                                                                                                                                                                                                                           | `scripts/`, crontab                                                                                                                                      | Remove cron line, delete script                                                                                                                |
+| 10     | `MALLOC_ARENA_MAX=2`                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `docker-compose.yml` (jellyfin)                                                                                                                          | Delete the line                                                                                                                                |
+| 11     | `DOTNET_EnableWriteXorExecute=0`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `docker-compose.yml` (jellyfin)                                                                                                                          | Delete the line                                                                                                                                |
+| 12     | Dedicated Jellyfin API key for \*arr integrations (`API_KEY_JELLYFIN_ARR`, Jellyfin key name `arr-integrations`)                                                                                                                                                                                                                                                                                                                                                                  | `.env`                                                                                                                                                   | Delete the var; revoke in Jellyfin Dashboard → API Keys                                                                                        |
+| 13     | Sonarr → Jellyfin "Update Library" notification                                                                                                                                                                                                                                                                                                                                                                                                                                   | Sonarr `/api/v3/notification` id 1                                                                                                                       | Delete the "Jellyfin" connection in Sonarr                                                                                                     |
+| 14     | Radarr → Jellyfin "Update Library" notification                                                                                                                                                                                                                                                                                                                                                                                                                                   | Radarr `/api/v3/notification` id 2                                                                                                                       | Delete the "Jellyfin" connection in Radarr                                                                                                     |
+| 15     | Lidarr → Jellyfin "Update Library" notification                                                                                                                                                                                                                                                                                                                                                                                                                                   | Lidarr `/api/v1/notification` id 6                                                                                                                       | Delete the "Jellyfin" connection in Lidarr                                                                                                     |
+| 16     | qBittorrent stale-lockfile recovery (found crashed, blocking all \*arr downloads)                                                                                                                                                                                                                                                                                                                                                                                                 | Host filesystem + `docker start`                                                                                                                         | N/A — repair, not new behaviour                                                                                                                |
+| 17     | SWAG: scoped `api_key`/`apikey` redaction in Jellyfin's access log                                                                                                                                                                                                                                                                                                                                                                                                                | `.docker-config/swag/nginx/site-confs/00-jellyfin-log-redact.conf` + one `access_log` line in `jellyfin.subdomain.conf`                                  | Delete both, `nginx -t && nginx -s reload`                                                                                                     |
+| 18     | Heap dumps moved off `/tmp`                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `/mnt/drive/backups/jellyfin-heap-dumps/`                                                                                                                | Delete the `.gcdump` files there                                                                                                               |
+| **19** | **Removed duplicate Jellyfin connections.** Radarr and Lidarr each had _two_ — a long-standing "Emby / Jellyfin" (id 1) plus the one pass 7 added. The id-1 definitions never fired at all (verified: two connections, one inbound POST)                                                                                                                                                                                                                                          | Radarr/Lidarr `notification` id 1, deleted                                                                                                               | Re-add via each app's UI; pre-delete JSON is not in the repo (it contained masked keys and was worthless for restore)                          |
+| **20** | **`mapFrom`/`mapTo` set on Sonarr's and Radarr's Jellyfin connection** (`/tv` → `/data/movies/series`, `/movies` → `/data/movies/movies`). Without this the notification is a silent no-op for anything Jellyfin does not already know — see §3.1                                                                                                                                                                                                                                 | Sonarr `notification/1`, Radarr `notification/2`                                                                                                         | Blank both fields in each app's Connect settings                                                                                               |
+| **21** | **`scripts/lidarr_jellyfin_bridge.py` + cron `2-59/5`** — the same path mapping for Lidarr, which exposes no `mapFrom`/`mapTo` fields                                                                                                                                                                                                                                                                                                                                             | `scripts/`, crontab, `logs/lidarr_jellyfin_bridge.json`                                                                                                  | Remove the cron line; delete the script and its state file                                                                                     |
+| **22** | **Global "Scan Media Library" task disabled** — trigger list emptied (was `IntervalTrigger` 432000000000 ticks = every 12h)                                                                                                                                                                                                                                                                                                                                                       | Jellyfin `POST /ScheduledTasks/7738148ffcd07979c7ceb148e06b3aed/Triggers` with `[]`; persisted at `.docker-config/jellyfin/ScheduledTasks/7738148f-….js` | `POST` the same endpoint with `[{"Type":"IntervalTrigger","IntervalTicks":432000000000}]`                                                      |
+| **23** | **`scripts/jellyfin_library_scan.py` + three cron entries** — Movies Fri 05:05, TV Shows Sat 05:05, Music Sun 05:05 (Music deliberately after `album_art.py` at 04:45)                                                                                                                                                                                                                                                                                                            | `scripts/`, crontab                                                                                                                                      | Remove the three cron lines and re-enable row 22                                                                                               |
+| **24** | **`ntfy` service added to the stack** — self-hosted, `auth-default-access=deny-all`, user `watchdog` with `rw` on topic `nas-alerts`, published at `ntfy.${PUBLIC_DOMAIN}`                                                                                                                                                                                                                                                                                                        | `docker-compose.yml`, `.docker-config/swag/nginx/proxy-confs/ntfy.subdomain.conf`, `${CONFIG_DIRECTORY}/ntfy`                                            | `docker compose stop ntfy && docker compose rm -f ntfy`; delete the service block, the vhost, and the config dir                               |
+| **25** | **`scripts/stack_watchdog.py` + cron `*/5`** — container health/exit/missing/flapping, Jellyfin `anon` threshold, kernel OOM watcher, ntfy delivery                                                                                                                                                                                                                                                                                                                               | `scripts/`, crontab, `logs/stack_watchdog.json`                                                                                                          | Remove the cron line; delete the script and its state file                                                                                     |
+| **26** | **`NAS_ALERT_WEBHOOK` / `NAS_ALERT_USER` / `NAS_ALERT_PASSWORD`** added to `.env` (and placeholders to `.env.example`)                                                                                                                                                                                                                                                                                                                                                            | `.env`                                                                                                                                                   | Delete the three lines                                                                                                                         |
+| **27** | **`media_ops_status.py` cron repaired** — the line ran `.venv/bin/python` with no `cd`, so from cron's `$HOME` it resolved to a path that does not exist. The ops dashboard had been serving 2026-06-10 data ever since                                                                                                                                                                                                                                                           | crontab                                                                                                                                                  | Not worth reverting — without the `cd /home/tom/nas &&` prefix the job simply does not run                                                     |
+| **28** | **Bazarr: `addic7ed` and `opensubtitlescom` removed from `enabled_providers`** — both in permanent `AuthenticationError`. Credentials left in place, so re-enabling is a UI toggle                                                                                                                                                                                                                                                                                                | Bazarr `POST /api/system/settings`; `.docker-config/bazarr/config/config.yaml`                                                                           | Re-add both names to `enabled_providers`; backup at `docs/jellyfin-config-backups/bazarr-config-*-pre-provider-disable.yaml`                   |
+| **29** | **SWAG `default.conf`: load-order comment** above the inline `include /config/nginx/proxy-confs/*.subdomain.conf;`                                                                                                                                                                                                                                                                                                                                                                | `.docker-config/swag/nginx/site-confs/default.conf`                                                                                                      | Restore `default.conf.bak-20260901-*`                                                                                                          |
+| **30** | **AAC fallback audio, first batch (Fargo Season 1, 10 files)** + `scripts/aac_fallback_track.py`                                                                                                                                                                                                                                                                                                                                                                                  | `${SHARE_DIRECTORY}/series/Fargo/Season 1`; originals at `${SHARE_DIRECTORY}/backups/aac-remux-originals/`                                               | `mv` each original back over the converted file, then run `jellyfin_library_scan.py --library "TV Shows"`                                      |
+| **31** | Jellyfin request logging (`.docker-config/jellyfin/logging.json`) — added for §3.1, **fully reverted**: file deleted and the container restarted 2026-09-01 20:42, confirmed no further `Request starting` lines                                                                                                                                                                                                                                                                  | `.docker-config/jellyfin/logging.json`                                                                                                                   | Already reverted; §4.1 says how to re-add it                                                                                                   |
+| **32** | `scripts/jellyfin_mem_sample.py`: `datetime.timezone` → `datetime.UTC` (the file's only `ruff` failure)                                                                                                                                                                                                                                                                                                                                                                           | `scripts/jellyfin_mem_sample.py`                                                                                                                         | Cosmetic; revert with `git checkout` once committed                                                                                            |
+| **33** | **`autoheal` restarted.** Stopped since 2026-07-29; cause established as collateral from a bare `docker compose stop` (shell history), not a decision about autoheal — its own log shows it had never restarted anything                                                                                                                                                                                                                                                          | `docker compose up -d autoheal`                                                                                                                          | `docker compose stop autoheal`                                                                                                                 |
+| **34** | **`AUTOHEAL_DEFAULT_STOP_TIMEOUT=150`** (was the image default of 10s). autoheal ignores compose's `stop_grace_period`; a 10s SIGTERM→SIGKILL on qbittorrent is the documented stale-lockfile trigger                                                                                                                                                                                                                                                                             | `docker-compose.yml` (autoheal)                                                                                                                          | Delete the line (reverts to 10s)                                                                                                               |
+| **35** | **`CURL_TIMEOUT=180`** (was 30). Must exceed the stop timeout, or autoheal logs a spurious failure and re-issues the restart every interval on top of the one in flight — measured, three overlapping requests                                                                                                                                                                                                                                                                    | `docker-compose.yml` (autoheal)                                                                                                                          | Set back to 30                                                                                                                                 |
+| **36** | **`scripts/cron_job.py`** + all 23 scheduled jobs rewritten to use it. Pushes fatal exits; records `logs/cron-state/<job>.json` so the watchdog can alert on silence                                                                                                                                                                                                                                                                                                              | crontab, `scripts/`, `logs/cron-state/`                                                                                                                  | Restore the crontab from `docs/jellyfin-config-backups/crontab-2026-09-01-pre-cron-wrapper.txt`                                                |
+| **37** | **`scripts/heartbeat.py`** + cron `*/10` + `NAS_HEARTBEAT_URL` in `.env`/`.env.example`. Off-box dead-man's switch; the URL is still empty pending an account                                                                                                                                                                                                                                                                                                                     | crontab, `scripts/`, `.env`                                                                                                                              | Remove the cron line and the env var                                                                                                           |
+| **38** | **Watchdog gained four checks**: `autoheal` health, off-box heartbeat configured, crontab lint, wrapped-cron-job freshness                                                                                                                                                                                                                                                                                                                                                        | `scripts/stack_watchdog.py`                                                                                                                              | Delete the four `check_*` calls in `main()`                                                                                                    |
+| **39** | **`media_ops_status` cron no longer discards output** — it redirected to `/dev/null`, which is part of why three months of failure left nothing to find. Now `>> logs/media_ops_status.log`                                                                                                                                                                                                                                                                                       | crontab                                                                                                                                                  | Restore `>/dev/null 2>&1` (do not)                                                                                                             |
+| **40** | **AAC disposition flip, 5 files** (Planet Earth S01 E01/E02/E04/E07/E09) — already had a stereo AAC track, only the default flag moved. Lossless, no re-encode, no size change                                                                                                                                                                                                                                                                                                    | `${SHARE_DIRECTORY}/series/Planet Earth/Season 1`; originals under `backups/aac-remux-originals/`                                                        | `mv` each original back, then `jellyfin_library_scan.py --library "TV Shows"`                                                                  |
+| **41** | **`aac_fallback_track.py` gained auto-detected flip mode + `--flip-only`** — a file that already has a browser-safe track only needs the flag moved, not an encode                                                                                                                                                                                                                                                                                                                | `scripts/aac_fallback_track.py`                                                                                                                          | n/a, additive                                                                                                                                  |
+| **42** | **`.sudo-pwd` added to `.gitignore`** — it was untracked and unignored in the repo root, one `git add -A` from a sudo password in the history                                                                                                                                                                                                                                                                                                                                     | `.gitignore`                                                                                                                                             | Remove the line (do not)                                                                                                                       |
+| **43** | **Bazarr config backup moved out of the repo** to `/mnt/drive/backups/nas-config-backups/` (mode 600) — it carries live provider passwords, the Bazarr API key and the flask secret, and was staged for commit                                                                                                                                                                                                                                                                    | `docs/jellyfin-config-backups/` → `/mnt/drive/backups/nas-config-backups/`                                                                               | Move it back (do not)                                                                                                                          |
+| **44** | **`ruff check scripts` backlog cleared** — 137 findings across 10 pre-existing files, 132 auto-fixed, 3 by hand. CI's lint gate is green                                                                                                                                                                                                                                                                                                                                          | `scripts/` (10 files)                                                                                                                                    | `git revert` the style commit                                                                                                                  |
+| **45** | **ntfy hardened properly**: `NTFY_ENABLE_LOGIN=true` (the web UI could not authenticate at all on a deny-all server), Web Push enabled with a VAPID keypair, and three least-privilege accounts replacing one shared read-write login — `watchdog` write-only, `phone` read-only, `admin` for the UI. `NTFY_UPSTREAM_BASE_URL` deliberately **not** set: it exists only to wake iOS via ntfy.sh's APNs relay and would send a hash of every topic off-box; Android needs no relay | `docker-compose.yml` (ntfy), `.env`, ntfy `user.db`                                                                                                      | Drop the new env lines and `docker exec ntfy ntfy access watchdog nas-alerts rw` to go back to one shared account                              |
+| **46** | **Nine services wired to ntfy**, split across two topics by signal: `nas-alerts` (act on it) and `nas-media` (nice to know). Sonarr/Radarr/Lidarr/Prowlarr via their native Ntfy connection, Jellyseerr via its webhook agent, Bazarr via Apprise, Watchtower via shoutrrr, plus the host watchdog. Every one verified by real delivery, not by a Test button returning 200                                                                                                       | each app's own config; `nas-media` topic; `NTFY_ARR_*` in `.env`                                                                                         | Delete the `ntfy — *` connections in each \*arr, disable Jellyseerr's webhook and Bazarr's `ntfy` notifier, drop `WATCHTOWER_NOTIFICATION_URL` |
+| **47** | **qBittorrent upload cap 33.55 → 15 Mbps** (`up_limit` 4194304 → 1874944 B/s). The old value was 108% of the link's entire ~31 Mbps upstream, saturating the modem queue: 5% packet loss, 127 ms latency spikes. This is the root cause of the remote stutter (§0)                                                                                                                                                                                                                | qBittorrent prefs, and pinned in `DESIRED_PREFS` in `scripts/qbittorrent_settings_enforce.py`                                                            | `curl -b <cookie> -d "limit=4194304" .../api/v2/transfer/setUploadLimit` and revert the constant                                               |
+| **48** | **CAKE egress shaper** on internet-bound traffic at 28 Mbit, LAN exempt via an HTB split. `scripts/wan_shaper.sh` + `wan-shaper.service` (enabled), watched by `stack_watchdog.py`                                                                                                                                                                                                                                                                                                | new script, systemd unit                                                                                                                                 | `sudo systemctl disable --now wan-shaper.service`                                                                                              |
+| **49** | **qBittorrent cap raised 15 → 20 Mbps** once CAKE was managing the queue, and **upload slots 50 → 6**. Both pinned in `DESIRED_PREFS`, with a test asserting cap + 8 Mbps remote stream ≤ 28 Mbit shaped. **Superseded by rows 53-55** — that budget assumed one viewer; DSCP replaced it                                                                                                                                                                                         | `scripts/qbittorrent_settings_enforce.py`                                                                                                                | Edit the two constants                                                                                                                         |
+| **50** | **`qbittorrent_settings_enforce.py` on cron** (now `*/5`, see row 55; originally hourly at :47). The live cap was observed drifting back to UNLIMITED with the repo pin untouched — pinning is necessary but something has to re-assert it                                                                                                                                                                                                                                        | crontab                                                                                                                                                  | Remove the cron line                                                                                                                           |
+| **51** | **µTP-only tested and rejected** — measurably worse jitter than TCP+uTP once CAKE is in place. No change left in effect                                                                                                                                                                                                                                                                                                                                                           | —                                                                                                                                                        | n/a, reverted                                                                                                                                  |
+| **52** | **Jellyfin `RemoteClientBitrateLimit` 0 → 8 Mbps**, server-wide. Remote clients can no longer negotiate a bitrate the link cannot sustain                                                                                                                                                                                                                                                                                                                                         | Jellyfin `/System/Configuration`                                                                                                                         | `POST` with `RemoteClientBitrateLimit: 0`; pre-change backup in `docs/jellyfin-config-backups/`                                                |
+| **53** | **DSCP CS1 marking** on qBittorrent's and slskd's egress, so CAKE's Bulk tin makes them yield automatically. Replaces the per-viewer arithmetic budget                                                                                                                                                                                                                                                                                                                            | `scripts/wan_shaper.sh` (`apply_marks`), iptables mangle POSTROUTING                                                                                     | Remove `apply_marks` from `apply`; rules clear on the next run                                                                                 |
+| **54** | **qBittorrent cap 20 → 25 Mbps**, since yielding is now automatic and the cap is no longer a reservation                                                                                                                                                                                                                                                                                                                                                                          | `scripts/qbittorrent_settings_enforce.py`                                                                                                                | Edit `UPLOAD_LIMIT_BYTES_PER_SEC`                                                                                                              |
+| **55** | **Two caps, chosen by shaper state**: 25 Mbps shaped / 15 Mbps degraded. Enforcer moved from hourly to `*/5` because it is now a safety net                                                                                                                                                                                                                                                                                                                                       | `scripts/qbittorrent_settings_enforce.py`, crontab                                                                                                       | Collapse the two constants back to one                                                                                                         |
+| **56** | **`wan_shaper.sh check`** — verifies qdisc _and_ shaped rate _and_ exact DSCP mark count; watchdog and enforcer both ask it instead of grepping `tc`. Plus a sudoers entry for `apply`/`status`/`check` and an hourly re-apply cron                                                                                                                                                                                                                                               | `scripts/wan_shaper.sh`, `/etc/sudoers.d/wan-shaper`, crontab                                                                                            | Delete the sudoers file and the cron line                                                                                                      |
+| **57** | **`clear_marks` teardown bug fixed** — it matched a quoted comment that `iptables -S` prints unquoted, so every `apply` appended another rule pair. Mark count check made exact rather than `>=`                                                                                                                                                                                                                                                                                  | `scripts/wan_shaper.sh`                                                                                                                                  | n/a, pure fix                                                                                                                                  |
+| **58** | **Shaper rate kept at 28 Mbit**; 85% (26 Mbit) A/B'd across 18 samples and rejected — 0% loss at both, spikes uncorrelated with our load (r = +0.20)                                                                                                                                                                                                                                                                                                                              | `scripts/wan_shaper.sh` `SHAPE_MBIT`                                                                                                                     | Set to 26 and re-measure                                                                                                                       |
+| **59** | **`NAS_HEARTBEAT_URL` configured** (by Tom) and the off-box chain drilled in both directions — alive _and_ `/fail` — not just the happy path                                                                                                                                                                                                                                                                                                                                      | `.env`                                                                                                                                                   | Blank the variable                                                                                                                             |
+| **60** | **Media-drive watchdog checks**: mount present, not remounted read-only, free space, kernel I/O/USB/EXT4 errors. Added because the USB bridge refuses SMART under every `smartctl -d` type, so no disk-health signal exists                                                                                                                                                                                                                                                       | `scripts/stack_watchdog.py`                                                                                                                              | Delete `check_media_storage` and its call                                                                                                      |
+| **61** | **`.sudo-pwd` permissions 664 → 600** — it was group- and world-readable                                                                                                                                                                                                                                                                                                                                                                                                          | host filesystem                                                                                                                                          | `chmod 664` (do not)                                                                                                                           |
+| **62** | **Exposed credential rotated** — see §0.5. `PLAYLIST_GENERATOR_PASSWORD` had been public on GitHub since 2026-05-26; rotated and verified, hardcoded secrets scrubbed from four tracked files                                                                                                                                                                                                                                                                                     | `.env`, `scripts/legacy/qbittorrent-scheduler.py`, `scripts/deduplicate_ebooks*.py`, `scripts/EBOOK_DEDUPLICATION_README.md`                             | n/a — never restore a published credential                                                                                                     |
+| **63** | **`.sudo-pwd` deleted**, replaced by `/etc/sudoers.d/nas-ops`: `wan_shaper.sh apply\|status\|check\|clear` plus a read-only diagnostic set, passwordless, nothing else. No secret on disk                                                                                                                                                                                                                                                                                         | host `/etc/sudoers.d/nas-ops`                                                                                                                            | `rm` the sudoers file; do **not** restore a stored password                                                                                    |
 
 ---
 
 ## 3. This pass, item by item
 
-### 3.1 — *arr → Jellyfin notifications: all three now verified, and all three were broken
+### 3.1 — \*arr → Jellyfin notifications: all three now verified, and all three were broken
 
 Pass 7 called Sonarr "verified" on the strength of a `LibraryMonitor …
 will be refreshed` line ~60s after a real import. That reasoning was sound
@@ -653,7 +653,7 @@ mattered.
 **The verification method, done properly.** `LibraryMonitor` emits that
 line whether the refresh came from the filesystem watcher or from an
 external call, so it cannot by itself attribute the refresh. The fix is to
-capture the *inbound request*, which Jellyfin will log if ASP.NET Core's
+capture the _inbound request_, which Jellyfin will log if ASP.NET Core's
 hosting diagnostics are turned up. Full technique in the runbook (§4.1).
 The resulting evidence is a **two-line chain**, and both lines are
 necessary:
@@ -666,7 +666,7 @@ necessary:
 ```
 
 The `Host` header (`jellyfin:8096`, not `localhost:8096`) identifies it as
-an internal *arr call rather than anything of mine, and the ~60s gap is
+an internal \*arr call rather than anything of mine, and the ~60s gap is
 LibraryMonitor's debounce.
 
 **What that exposed: the notification was reaching Jellyfin and doing
@@ -674,11 +674,11 @@ nothing.** Radarr's very first forced import produced a clean `POST … → 204`
 — and no refresh, and no movie in Jellyfin. The cause is a path-namespace
 mismatch:
 
-| App sees | Jellyfin sees |
-|---|---|
-| `/tv/…` | `/data/movies/series/…` |
+| App sees    | Jellyfin sees           |
+| ----------- | ----------------------- |
+| `/tv/…`     | `/data/movies/series/…` |
 | `/movies/…` | `/data/movies/movies/…` |
-| `/music/…` | `/data/movies/music/…` |
+| `/music/…`  | `/data/movies/music/…`  |
 
 `POST /Library/Media/Updated` hands each reported path to LibraryMonitor,
 which resolves it to the library containing it. A path under no library is
@@ -694,7 +694,7 @@ POST {"Updates":[{"Path":"/data/movies/music/Bathory/1988 - Blood Fire Death"}]}
   -> 204, 'LibraryMonitor: "Blood Fire Death" … will be refreshed', updated
 ```
 
-Why Sonarr *looked* fine in pass 7: the MediaBrowser connection first
+Why Sonarr _looked_ fine in pass 7: the MediaBrowser connection first
 queries `GET /Items?…` to find the item in Jellyfin, and when it finds one
 it reports **Jellyfin's own path** for it. Furious already existed in
 Jellyfin, so its path came back correct. A brand-new series would have
@@ -720,11 +720,11 @@ precisely the case a library scan is supposed to stop being needed for.
 **How Radarr and Lidarr were forced** (pass 7 said this was blocked on
 stalled downloads; it was not):
 
-- *Radarr* — added a disposable movie, generated a 3-second test file in
+- _Radarr_ — added a disposable movie, generated a 3-second test file in
   the download folder, ran a real `ManualImport`, which fired the same
   `downloadFolderImported` path as an organic import. Movie, file and
   Jellyfin entry all removed afterwards; verified gone.
-- *Lidarr* — a `RenameFiles` command on a single file Lidarr itself wanted
+- _Lidarr_ — a `RenameFiles` command on a single file Lidarr itself wanted
   renamed (`09 - [untitled].mp3` → `09 - The Winds of Mayhem (Outro).mp3`,
   a title it had learned from MusicBrainz). Same `Update()` code path as an
   import, no content modified, no disposable artist added — which mattered,
@@ -734,7 +734,7 @@ stalled downloads; it was not):
 **Also confirmed: why the Test button lies.** Radarr's log carries exactly
 two `Warn|MediaBrowserProxy|Unable to send notification to Emby` lines from
 pass 7's two Test presses. The `Test()` implementation calls the Emby-style
-*notify* API — which Jellyfin does not implement — **unconditionally, even
+_notify_ API — which Jellyfin does not implement — **unconditionally, even
 with `notify: false`**, and never touches the library-update path. So a
 green Test proves the host is reachable and nothing else.
 
@@ -762,14 +762,14 @@ one run of the script made it appear at the right path.
 
 Cadence, one library per day so two scans never overlap:
 
-| Library | When | Why that cadence |
-|---|---|---|
-| Movies | Fri 05:05 | Radarr verified + path-mapped; scan is a safety net |
-| TV Shows | Sat 05:05 | Sonarr verified + path-mapped; same |
-| Music | Sun 05:05 | Lidarr covered by the bridge — but `album_art.py` writes `folder.jpg` straight to disk at Sun 04:45 where no *arr ever reports it, so this scan is what gets new cover art in |
+| Library  | When      | Why that cadence                                                                                                                                                               |
+| -------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Movies   | Fri 05:05 | Radarr verified + path-mapped; scan is a safety net                                                                                                                            |
+| TV Shows | Sat 05:05 | Sonarr verified + path-mapped; same                                                                                                                                            |
+| Music    | Sun 05:05 | Lidarr covered by the bridge — but `album_art.py` writes `folder.jpg` straight to disk at Sun 04:45 where no \*arr ever reports it, so this scan is what gets new cover art in |
 
 **No `--wait` in the script, deliberately.** Verified on 10.11.11: a
-per-item refresh does *not* drive the `RefreshLibrary` task's state (it
+per-item refresh does _not_ drive the `RefreshLibrary` task's state (it
 stays `Idle` throughout, polled every 3s for 30s) and `BaseItemDto` exposes
 no refresh-progress field. There is no honest REST signal to poll, so the
 script does not pretend to have one.
@@ -794,7 +794,7 @@ script does not pretend to have one.
 plain `POST <topic-url>` with a text body is the entire publish contract, it
 needs no server-side application or token setup before the first alert can
 land, and this repo already spoke it (`SLSKD_ALERT_WEBHOOK` in
-`slskd_login_watch.py`) — Gotify would require standing up a server *and*
+`slskd_login_watch.py`) — Gotify would require standing up a server _and_
 minting per-application tokens before anything could be sent. Self-hosted
 rather than ntfy.sh so alert contents never leave the box; only the phone's
 subscription egresses, through SWAG. **Stated coverage limit:** the
@@ -826,10 +826,10 @@ knew about:**
   > **autoheal is running again** — restarted during the qBittorrent work; do
   > not treat starting it as an open action.
   >
-  > The cause was *not* an explicit stop. `docker inspect` at 18:20 read
+  > The cause was _not_ an explicit stop. `docker inspect` at 18:20 read
   > `Status=exited ExitCode=6 RestartCount=5 Policy=on-failure:5`. That is a
   > capped-out crash loop, not an administrative stop, and the `RestartCount:
-  > 0` / `unless-stopped` premise does not hold: `/usr/local/sbin/nas-restart-guard.sh`
+0` / `unless-stopped` premise does not hold: `/usr/local/sbin/nas-restart-guard.sh`
   > was overwriting the compose file's `unless-stopped` with `on-failure:5`
   > every 15 minutes via `docker update`. autoheal failed five times, exhausted
   > that budget, and Docker gave up permanently.
@@ -839,9 +839,10 @@ knew about:**
   > enforces `unless-stopped` instead, and both `autoheal` and `watchtower`
   > read `unless-stopped:0` as of 19:40. Origin of the cap, for the record:
   > `/home/tom/fix-nas-all.sh` installed it on 2026-06-15 as blast-radius
-  > control for a watchtower crash loop that the *same script run* had already
+  > control for a watchtower crash loop that the _same script run_ had already
   > fixed by disabling `WATCHTOWER_ROLLING_RESTART`. Background in
   > `docs/qbittorrent-crash-fix.md`.
+
 - **The `media_ops_status.py` cron had been dead since 2026-06-10.** Its
   crontab line ran `.venv/bin/python …` with no `cd`, so from cron's
   `$HOME` it resolved to a path that does not exist. `ops-status.json` —
@@ -867,7 +868,7 @@ Batch of ten, as specified. Fargo Season 1 is exactly 10 DTS-only episodes
 (45.8GB), and it is the series the whole investigation started from.
 
 Pass 7's lesson applied: **adding the track is not enough**, because
-Jellyfin's StreamBuilder evaluates the *default* stream. Measured against
+Jellyfin's StreamBuilder evaluates the _default_ stream. Measured against
 the live server with a Chrome device profile, on S01E01:
 
 ```text
@@ -893,7 +894,7 @@ all ten, untouched. Re-running the script over the same folder now reports
 encode of the first audio track and moves the default disposition onto it —
 copies every other stream untouched (`-map 0 -c copy`, so video, the
 original DTS, subtitles, chapters and attachments are byte-identical),
-stages the output *outside* the library (a half-written `*.mkv` in the media
+stages the output _outside_ the library (a half-written `*.mkv` in the media
 folder is something Jellyfin or Sonarr could pick up mid-conversion),
 re-probes the staged file before touching the original, and only then moves
 the original to `${SHARE_DIRECTORY}/backups/aac-remux-originals/` with its
@@ -901,20 +902,20 @@ relative path preserved. Files whose default audio is already browser-safe
 are skipped, so re-running is idempotent. ~2 minutes per episode.
 
 **The trade-off, stated plainly because it is a real cost:** making the
-stereo AAC track default means a client that *can* handle DTS 5.1 — the
+stereo AAC track default means a client that _can_ handle DTS 5.1 — the
 living-room TV app — now gets stereo unless the viewer picks the surround
 track. The DTS stream is still there, byte-identical and first in the file,
 just no longer flagged default. There is no way to have both: the default
 flag is exactly what Jellyfin's decision turns on.
 
 **Scope for later is much larger than "DTS", and the briefing's framing
-understated it.** Surveying every item's *default* audio stream against what
+understated it.** Surveying every item's _default_ audio stream against what
 a browser can Direct Play:
 
-| | already fine | disposition flip only | needs an AAC track |
-|---|---|---|---|
-| Movies | 10 | 0 | **13** |
-| Episodes | 139 | 5 | **933** |
+|          | already fine | disposition flip only | needs an AAC track |
+| -------- | ------------ | --------------------- | ------------------ |
+| Movies   | 10           | 0                     | **13**             |
+| Episodes | 139          | 5                     | **933**            |
 
 DTS is only 164 of those — the bulk is **AC3 and E-AC3**, which browsers
 cannot Direct Play either. So this is not a Fargo-shaped problem with a
@@ -936,7 +937,7 @@ nearly free and worth doing regardless.
 - **SWAG `default.conf`.** Comment added above the inline
   `include …/*.subdomain.conf;` explaining the alphabetical load-order
   constraint and why `00-jellyfin-log-redact.conf` is named that way. It
-  also documents the *other* way that file bites, which cost time again
+  also documents the _other_ way that file bites, which cost time again
   this pass: `proxy.conf` already sets `proxy_http_version 1.1` and 240s
   `proxy_read/send/connect_timeout`, so re-declaring any of them in a
   vhost is `nginx: [emerg] … directive is duplicate`, not an override.
@@ -948,17 +949,17 @@ touching it, because starting a supervisor that had been deliberately silenced
 would reintroduce whatever silenced it. Three lines of evidence say it was not
 a decision about autoheal at all:
 
-* its **entire** log is 42 lines, all startup banners — in five weeks of
+- its **entire** log is 42 lines, all startup banners — in five weeks of
   running it never restarted anything, so it cannot have been stopped for
   misbehaving;
-* shell history contains a bare `docker compose stop` (which stops every
+- shell history contains a bare `docker compose stop` (which stops every
   service) followed by `docker compose start qbittorrent slskd` — only those
   two came back. The dates fit: last autoheal banner 2026-07-29T17:20;
-* nothing in git log, `AGENTS.md`, `CLAUDE.md` or `docs/` says to keep it
+- nothing in git log, `AGENTS.md`, `CLAUDE.md` or `docs/` says to keep it
   down, and `CLAUDE.md` actively documents it as part of the design.
 
 It supervises only `qbittorrent` and `slskd`, and slskd's healthcheck is the
-Soulseek-*independent* web-UI spider `CLAUDE.md` mandates — so the documented
+Soulseek-_independent_ web-UI spider `CLAUDE.md` mandates — so the documented
 restart-spiral hazard does not apply. Started.
 
 **Two defects found while proving it works**, both of the same shape as the
@@ -971,7 +972,7 @@ restart-spiral hazard does not apply. Started.
 2. With that raised, a deliberately-unhealthy probe container showed
    `Restarting container … failed` every 30s. That is `CURL_TIMEOUT=30`
    cutting off a call that blocks for the whole stop timeout. The restart
-   *does* still complete — the probe restarted at exactly t+150s — but
+   _does_ still complete — the probe restarted at exactly t+150s — but
    autoheal believed it had failed and fired **three overlapping restart
    requests** in the meantime. For qbittorrent that is the pile-up that
    creates the very lockfile it is trying to recover from. `CURL_TIMEOUT=180`.
@@ -986,23 +987,23 @@ all autoheal needs" is correct.
 **Closing the class, not the two instances.** `autoheal` dead a month,
 `media_ops_status.py` dead three months — both "a thing that should be running
 isn't", and auditing the crontab for one specific bug only covers jobs that
-fail to *start*. Three mechanisms now, not two more fixes:
+fail to _start_. Three mechanisms now, not two more fixes:
 
-* **`scripts/cron_job.py`** wraps all 23 jobs. A fatal exit pushes an ntfy
+- **`scripts/cron_job.py`** wraps all 23 jobs. A fatal exit pushes an ntfy
   alert with the job name and stderr tail. Every run records
   `logs/cron-state/<job>.json`, and the watchdog alerts when a job has not
-  *succeeded* within the window its own cron line declares — that is the half
+  _succeeded_ within the window its own cron line declares — that is the half
   that catches a job producing nothing at all. `--register` seeds the file so
   a never-yet-run job is watched from the moment it is scheduled.
-  The exit-code contract matters: 1 means *partial* in this repo and several
+  The exit-code contract matters: 1 means _partial_ in this repo and several
   scripts report real findings that way, so `--ok-codes` defaults to `0,1`.
   Treating non-zero as failure would have alarmed constantly and been turned
   off within a week.
-* **A crontab lint in the watchdog**, run every 5 minutes: a line using a
+- **A crontab lint in the watchdog**, run every 5 minutes: a line using a
   relative path without `cd /home/tom/nas`, or naming a script that does not
   exist, is now a critical alert. Verified against the historical bad line —
   it flags it — and against the live crontab, which is clean.
-* **`scripts/heartbeat.py`**, `*/10`, for the failure nothing on this host can
+- **`scripts/heartbeat.py`**, `*/10`, for the failure nothing on this host can
   report: the host. It pings an off-box dead-man's switch, and pings `/fail`
   instead if `stack_watchdog` has itself gone quiet, so a live box with dead
   monitoring cannot keep the light green — the same circular gap that hid
@@ -1027,7 +1028,7 @@ afternoon while actively thinking about it.
 to justify a rollout; the numbers argued against one. 946 files need
 conversion, mostly **AC3 and E-AC3** rather than DTS — so the real finding is
 not "some files have awkward audio" but "most of this library cannot be Direct
-Played *by a browser*", and native clients handle all of it untouched. 32
+Played _by a browser_", and native clients handle all of it untouched. 32
 hours of conversion and a permanent stereo-default cost on every file, versus
 using the app. Tom's call, and the right one.
 
@@ -1068,17 +1069,17 @@ stands. Fargo S01E01 was restored to the stereo version and re-verified.
 just the component that carries it.** Three times in ten passes the same mistake
 produced a green light over a broken system:
 
-| the check | what it actually proved | what was assumed |
-|---|---|---|
-| `LibraryMonitor: "X" will be refreshed` | *a* refresh happened | that the *arr notification caused it — it hadn't; the path was unmapped and the 204 was a no-op |
-| a cgroup match on the OOM kill | the *container* was the victim | that the `jellyfin` **process** was — ffprobe had to be excluded from the per-task table separately |
-| `tc qdisc show \| grep cake` | CAKE is loaded | that egress is *shaped and prioritised* — the DSCP marks can vanish while the qdisc stays, and then torrents silently stop yielding |
+| the check                               | what it actually proved        | what was assumed                                                                                                                    |
+| --------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `LibraryMonitor: "X" will be refreshed` | _a_ refresh happened           | that the \*arr notification caused it — it hadn't; the path was unmapped and the 204 was a no-op                                    |
+| a cgroup match on the OOM kill          | the _container_ was the victim | that the `jellyfin` **process** was — ffprobe had to be excluded from the per-task table separately                                 |
+| `tc qdisc show \| grep cake`            | CAKE is loaded                 | that egress is _shaped and prioritised_ — the DSCP marks can vanish while the qdisc stays, and then torrents silently stop yielding |
 
 Each time the component was present and the property was not. The fix is the
 same shape every time: make the thing being checked answer for its own
 behaviour, rather than inferring behaviour from a component's existence.
-`wan_shaper.sh check` is that — it verifies the qdisc, *and* that the shaped
-rate still matches the line, *and* that every DSCP mark is installed, and both
+`wan_shaper.sh check` is that — it verifies the qdisc, _and_ that the shaped
+rate still matches the line, _and_ that every DSCP mark is installed, and both
 `stack_watchdog.py` and `qbittorrent_settings_enforce.py` ask it rather than
 each grepping `tc` and reaching their own conclusion.
 
@@ -1087,7 +1088,7 @@ then ask whether your check would still pass during it. "The shaper is gone"
 passes a qdisc grep only if the qdisc is gone too — but "torrents stopped
 yielding" passes it every time.
 
-### 4.1 Prove an *arr's "Update Library" actually works
+### 4.1 Prove an \*arr's "Update Library" actually works
 
 Do not trust the Test button (§3.1) and do not trust a `LibraryMonitor`
 line alone. Capture the inbound request.
@@ -1101,6 +1102,7 @@ line alone. Capture the inbound request.
 
    (`Microsoft.AspNetCore.Routing.EndpointMiddleware` at `Information` too
    if you also want the controller name.)
+
 2. `docker restart jellyfin`. **The file is not hot-reloaded** — verified;
    without a restart nothing changes.
 3. Force a real import. Radarr/Sonarr: `ManualImport` of a file already on
@@ -1116,10 +1118,11 @@ line alone. Capture the inbound request.
    LibraryMonitor: "X" ("/data/movies/…") will be refreshed.
    ```
 
-   The `Host` is `jellyfin:8096` for an internal *arr call. **If the first
+   The `Host` is `jellyfin:8096` for an internal \*arr call. **If the first
    line appears and the second does not, the notification is a no-op** —
    check the path mapping (§3.1). Lidarr posts to the legacy
    `/mediabrowser/Library/Media/Updated` prefix; Jellyfin accepts it.
+
 5. `rm .docker-config/jellyfin/logging.json && docker restart jellyfin`.
    Leaving it on is cheap — measured at 5,658 bytes/min, ~2 MB over nine
    hours, mostly healthchecks — so if a restart is inconvenient, deleting
@@ -1147,11 +1150,11 @@ should read ~1 and 0 respectively; if `doublemapper` starts climbing, the
 
 - Test delivery: `python scripts/stack_watchdog.py --self-test`.
 - See what it would say without notifying: `--dry-run`.
-- **Phone setup (Android):** install the ntfy app → *Settings → Manage users →
-  Add user*, server `https://ntfy.<PUBLIC_DOMAIN>`, username/password from
-  `NTFY_PHONE_USER` / `NTFY_PHONE_PASSWORD` in `.env`. Then *Subscribe to
-  topic* → `nas-alerts`, and switch the server from *ntfy.sh* to
-  *Use another server* → the same URL. DNS and the wildcard cert already cover
+- **Phone setup (Android):** install the ntfy app → _Settings → Manage users →
+  Add user_, server `https://ntfy.<PUBLIC_DOMAIN>`, username/password from
+  `NTFY_PHONE_USER` / `NTFY_PHONE_PASSWORD` in `.env`. Then _Subscribe to
+  topic_ → `nas-alerts`, and switch the server from _ntfy.sh_ to
+  _Use another server_ → the same URL. DNS and the wildcard cert already cover
   the subdomain.
 - **Browser:** open `https://ntfy.<PUBLIC_DOMAIN>`, sign in as
   `NTFY_PHONE_USER`, subscribe to `nas-alerts` and allow notifications when
@@ -1169,17 +1172,17 @@ should read ~1 and 0 respectively; if `doublemapper` starts climbing, the
 Two topics, and the split is the whole point — routing informational events at
 the alerts topic would bury the failures the alerting exists to surface.
 
-| source | topic | fires on |
-|---|---|---|
+| source              | topic        | fires on                                                                                                              |
+| ------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `stack_watchdog.py` | `nas-alerts` | container down/unhealthy/missing, restart churn, Jellyfin memory, kernel OOM, autoheal, crontab lint, stale cron jobs |
-| `cron_job.py` | `nas-alerts` | any wrapped cron job exiting fatal |
-| Sonarr / Radarr | `nas-alerts` | health issue, health restored, manual interaction required |
-| Sonarr / Radarr | `nas-media` | import complete, upgrade |
-| Lidarr | `nas-alerts` | health, **download failure, import failure** |
-| Prowlarr | `nas-alerts` | health issue / restored |
-| Jellyseerr | `nas-alerts` | request pending, request failed, issue created |
-| Bazarr | `nas-media` | subtitle events |
-| Watchtower | `nas-alerts` | image updates and failures, one digest per run |
+| `cron_job.py`       | `nas-alerts` | any wrapped cron job exiting fatal                                                                                    |
+| Sonarr / Radarr     | `nas-alerts` | health issue, health restored, manual interaction required                                                            |
+| Sonarr / Radarr     | `nas-media`  | import complete, upgrade                                                                                              |
+| Lidarr              | `nas-alerts` | health, **download failure, import failure**                                                                          |
+| Prowlarr            | `nas-alerts` | health issue / restored                                                                                               |
+| Jellyseerr          | `nas-alerts` | request pending, request failed, issue created                                                                        |
+| Bazarr              | `nas-media`  | subtitle events                                                                                                       |
+| Watchtower          | `nas-alerts` | image updates and failures, one digest per run                                                                        |
 
 **Lidarr publishes nothing to `nas-media` on purpose.** It does hundreds of
 music imports a day; those on a phone would drown everything else.
@@ -1256,7 +1259,7 @@ background with no pollable progress (§3.2).
    alone because it is your editor session.
 2. **79 GB of AAC originals** (§0.6) — they sit on the same disk as the files
    they protect, so they guard against a bad remux, not disk loss. And the
-   original DTS track survives byte-identical *inside* every converted file, so
+   original DTS track survives byte-identical _inside_ every converted file, so
    they do not protect the audio either. Reclaimable if you want the space.
 3. **The media has no second copy.** 4.7 TB on one USB disk, no redundancy, no
    SMART. The watchdog now detects failure (row 60); nothing survives it. A size
@@ -1268,7 +1271,7 @@ background with no pollable progress (§3.2).
    addic7ed Cloudflare cookie. Both providers stay disabled, credentials
    retained, so it is a toggle.
 6. **The playlist pipeline takes 10.7 h and then fails** (§3.6) with `"Stream
-   closed without a completion signal"`. The `flock` works correctly; the
+closed without a completion signal"`. The `flock` works correctly; the
    6-hourly schedule is a fiction. Belongs to playlist-generator, not here.
 7. **One orphaned Jellyfin row** — `tmp-audio-test/prototype.mkv`. Both delete
    routes 404 because its parent library GUID is gone; removing it needs SQLite

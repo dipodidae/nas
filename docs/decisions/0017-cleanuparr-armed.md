@@ -16,7 +16,7 @@ something that deletes media.
   `${CONFIG_DIRECTORY}/cleanuparr/blacklist.txt`, deliberately a **file**, not a
   URL.
 - **Queue Cleaner** — failed-import 3 strikes, metadata 6, stall 12, slow 24,
-  all bounded to 0–99% completion so a *completed* torrent can never be struck
+  all bounded to 0–99% completion so a _completed_ torrent can never be struck
   as "slow".
 - **Download Cleaner** — hourly, one seeding rule matching qBittorrent's own
   goals (0.6 ratio / 34 h).
@@ -26,9 +26,9 @@ something that deletes media.
 - **Unlinked Downloads** — looks safe now that hardlinks work (ADR-0002), but
   the pre-restructure backlog is still `nlink=1` (**425 files vs 1
   hardlinked**), so it would flag the whole download tree.
-- **Dead Torrents** — tried in dry-run and **rejected**. "No seeders" means *no
-  other seeder*, which is true of **25 of 59** completed torrents here. It
-  struck *Friends*, *Fargo* and *Planet Earth III* — all healthy and mid-goal.
+- **Dead Torrents** — tried in dry-run and **rejected**. "No seeders" means _no
+  other seeder_, which is true of **25 of 59** completed torrents here. It
+  struck _Friends_, _Fargo_ and _Planet Earth III_ — all healthy and mid-goal.
 - **Orphaned Files**, **Seeker**, **Blacklist Sync** — off.
 
 ## Two hard rules
@@ -39,7 +39,7 @@ download client is slskd, which Cleanuparr cannot see.
 **`failedImport.skipIfNotFoundInClient` must stay `true`.** That flag is what
 stops Cleanuparr striking a queue it has no view of.
 
-## Why nothing tags torrents from the *arr side
+## Why nothing tags torrents from the \*arr side
 
 Sonarr and Radarr **cannot tag torrents at all** — no tag field exists on their
 qBittorrent client config. The post-import category is empty **on purpose**:

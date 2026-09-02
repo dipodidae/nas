@@ -37,13 +37,13 @@ finally being killed.
 
 ## Recorded exceptions to the baseline
 
-| Service | Exception | Reason |
-|---|---|---|
-| qbittorrent | `+ KILL` | ADR-0004 |
-| swag | `+ NET_BIND_SERVICE` (listed first) | binds :80/:443 |
-| nextcloud | `+ NET_BIND_SERVICE` | bundled nginx binds :443 in-container |
-| nextcloud | logging 25m/3 | far chattier than anything else here |
-| jellyseerr | `+ FOWNER` | init chowns files it does not own in `/app/config` |
-| lingarr | LSIO set minus `DAC_OVERRIDE` | does not need permission bypass |
-| lidarr-bulk | LSIO capabilities without PUID/PGID | not an LSIO image; entrypoint chowns then `su-exec`s to `node` |
-| playlist-generator, its db | **no `cap_drop`** | known gap, ADR-0018 |
+| Service                    | Exception                           | Reason                                                         |
+| -------------------------- | ----------------------------------- | -------------------------------------------------------------- |
+| qbittorrent                | `+ KILL`                            | ADR-0004                                                       |
+| swag                       | `+ NET_BIND_SERVICE` (listed first) | binds :80/:443                                                 |
+| nextcloud                  | `+ NET_BIND_SERVICE`                | bundled nginx binds :443 in-container                          |
+| nextcloud                  | logging 25m/3                       | far chattier than anything else here                           |
+| jellyseerr                 | `+ FOWNER`                          | init chowns files it does not own in `/app/config`             |
+| lingarr                    | LSIO set minus `DAC_OVERRIDE`       | does not need permission bypass                                |
+| lidarr-bulk                | LSIO capabilities without PUID/PGID | not an LSIO image; entrypoint chowns then `su-exec`s to `node` |
+| playlist-generator, its db | **no `cap_drop`**                   | known gap, ADR-0018                                            |

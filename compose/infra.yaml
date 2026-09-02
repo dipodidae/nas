@@ -193,7 +193,7 @@ services:
       service: svc-hardened-tz
     image: binwiederhier/ntfy:latest
     container_name: ntfy
-    command: ['serve']
+    command: [serve]
     # INVARIANT: no LSIO root init here, so ${CONFIG_DIRECTORY}/ntfy must
     # already be ${PUID}:${PGID} or ntfy crash-loops on first start. Same
     # gotcha as `qui`. `make bootstrap` does this. ADR-0014.

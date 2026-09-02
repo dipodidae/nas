@@ -56,7 +56,7 @@ The second half is untested: switching `DiskIOType` to the POSIX-compliant
 backend removes the mmap mechanism but has a throughput cost, and that cost has
 not been measured here. **The setting is therefore left at its default.** The
 decision rule if it is revisited: flip only if a before/after over a full day
-shows `file_mapped` falling by most of that 3.06 GB *and* no drop in observed
+shows `file_mapped` falling by most of that 3.06 GB _and_ no drop in observed
 download/seed throughput. `scripts/check-invariants.sh` reports `disk_io_type`
 as a **warning**, not a rule, so the open question stays visible without
 blocking `make check`.

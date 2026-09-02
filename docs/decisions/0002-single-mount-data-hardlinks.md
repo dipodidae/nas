@@ -14,7 +14,7 @@ mounts** (`/tv` + `/downloads`, `/movies` + `/downloads`, `/music` +
 `/downloads`), every import silently fell back to a full copy despite
 `copyUsingHardlinks=True`. Cost: **0.96 TiB of duplication.**
 
-Silently is the operative word — nothing reported an error. The *arrs did what
+Silently is the operative word — nothing reported an error. The \*arrs did what
 they were told; `link()` failed and the copy path took over.
 
 ## Evidence
@@ -38,13 +38,13 @@ mounts that look redundant. They are not.
 
 ## Consequences
 
-- This prevents *future* duplication. It does not reclaim the existing
+- This prevents _future_ duplication. It does not reclaim the existing
   0.96 TiB — those library copies are already separate inodes, and they collapse
   only as old torrents age out and new imports hardlink in their place.
 - Integrity after the repath: Sonarr 59/59 series, 1080 episode files,
   2.51 TiB, all unchanged. Radarr 37/37 movies, 0.25 TiB, unchanged.
 - qBittorrent was **not** touched and does not need the unified mount:
-  hardlinking happens inside the *arr containers.
+  hardlinking happens inside the \*arr containers.
 - Lidarr **was** the exception; it was migrated on 2026-09-02 by an offline
   SQLite prefix rewrite rather than any API call, and its root folder is now
   `/data/music`. See ADR-0003.

@@ -18,11 +18,11 @@ s6-overlay runs as root and has to signal `qbittorrent-nox`, which runs as
 
 ## Measured on this box, 2026-09-01
 
-| | without `KILL` | with `KILL` |
-|---|---|---|
-| `docker compose stop qbittorrent` | **120.3s** | **6.2s** |
-| "Saving resume data completed" | never logged | logged |
-| lockfile + ipc-socket after stop | left behind | removed by qbit itself |
+|                                   | without `KILL` | with `KILL`            |
+| --------------------------------- | -------------- | ---------------------- |
+| `docker compose stop qbittorrent` | **120.3s**     | **6.2s**               |
+| "Saving resume data completed"    | never logged   | logged                 |
+| lockfile + ipc-socket after stop  | left behind    | removed by qbit itself |
 
 Re-measure with `make measure-qbittorrent-stop` as the torrent count grows;
 ~6s was at 128 torrents. Raise `stop_grace_period` only if the measured time
@@ -30,7 +30,7 @@ approaches it.
 
 ## Corrects an earlier note
 
-An older note in this repo said the crash cycle was *not* a permissions
+An older note in this repo said the crash cycle was _not_ a permissions
 problem. **It was** — a Linux capability one, not a file-ownership one. The
 stale lockfile was only the symptom: because every stop was a hard kill, qbit
 orphaned its `lockfile` and `ipc-socket` every time. With `CAP_KILL` it removes

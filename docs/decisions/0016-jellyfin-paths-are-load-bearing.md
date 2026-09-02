@@ -30,12 +30,12 @@ the odd-looking name is much lower than the cost of that.
 
 ## The two API-key traps
 
-- `API_KEY_JELLYFIN_ARR` is the `arr-integrations` key, used by the *arrs'
+- `API_KEY_JELLYFIN_ARR` is the `arr-integrations` key, used by the \*arrs'
   MediaBrowser connections. `API_KEY_JELLYFIN` is **Jellyseerr's** key, reused
   by `lidarr-bulk` and `playlist-generator`. **They are not interchangeable.**
-- `GET /notification` on Sonarr/Radarr/Lidarr **masks `apiKey` as `********`**.
+- `GET /notification` on Sonarr/Radarr/Lidarr **masks `apiKey` as `**\*\*\***\*`**.
   Write the real key back into the field before the `PUT`, or the connection
-  silently gets a literal `********`. Confirm the result in the DB rather than
+  silently gets a literal `**\*\*\*\***`. Confirm the result in the DB rather than
   by re-`GET`ting, which re-masks.
 - `.docker-config/*/[app].db` is **WAL-mode**: copying only the `.db` without
   `-wal`/`-shm` reads back stale values and will show a just-saved `1` as `0`.
@@ -43,8 +43,8 @@ the odd-looking name is much lower than the cost of that.
 ## Related, and separate
 
 The per-event delete toggles (`onSeriesDelete`, `onMovieDelete`) are a
-different mechanism from path mapping: **mapping decides *where* a call goes,
-the toggles decide *whether* one is made at all.** Both were needed; both are
+different mechanism from path mapping: **mapping decides _where_ a call goes,
+the toggles decide _whether_ one is made at all.** Both were needed; both are
 now on. Lidarr's `onArtistDelete`/`onAlbumDelete` are deliberately left off
 because its MediaBrowser connection exposes no `mapFrom`/`mapTo` fields —
 deletion there is `scripts/lidarr_jellyfin_bridge.py`'s job. Full detail:

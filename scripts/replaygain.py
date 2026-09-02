@@ -171,8 +171,10 @@ def summarize_plan(dirs: list[Path], audio_file_count: int, *, sample_n: int = 5
     if not dirs:
         return "No album directories found containing audio files."
     lines: list[str] = [
-        f"Found {len(dirs)} album director{'y' if len(dirs) == 1 else 'ies'} "
-        f"containing {audio_file_count} audio file(s).",
+        (
+            f"Found {len(dirs)} album director{'y' if len(dirs) == 1 else 'ies'} "
+            f"containing {audio_file_count} audio file(s)."
+        ),
     ]
     sample = dirs[:sample_n]
     lines.append(f"Sample paths (first {len(sample)}):")

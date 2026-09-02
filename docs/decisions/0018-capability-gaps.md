@@ -39,7 +39,7 @@ before that hand-off.
 
 `FOWNER` was missing from the guess and `DAC_OVERRIDE` was in it for the wrong
 reason. `PGDATA` is `drwx------ 999:1000` and the entrypoint walks it with
-`find` **as root** — and root's ability to ignore file modes *is*
+`find` **as root** — and root's ability to ignore file modes _is_
 `CAP_DAC_OVERRIDE`. With it dropped the container looped on `find:
 '/var/lib/postgresql/data': Permission denied` and never started. That failure
 was reached deliberately, with the dump in hand, and is the reason the

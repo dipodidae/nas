@@ -29,7 +29,7 @@ custom-init staleness check compares against.
 
 **If qbittorrent is ever put behind a VPN sidecar** via
 `network_mode: service:<vpn>`, it inherits that container's network namespace
-*and* hostname — pin the hostname on the VPN service instead, because this line
+_and_ hostname — pin the hostname on the VPN service instead, because this line
 would then have no effect. (No VPN today: ADR-0019.)
 
 ## The stale-lock init script proves staleness first

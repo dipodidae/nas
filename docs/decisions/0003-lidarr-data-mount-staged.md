@@ -48,7 +48,7 @@ UI's reported size.
 
 ## Why Lidarr differs — a guess, not a finding
 
-Lidarr is a much older fork of the *arr codebase and its editor endpoint likely
+Lidarr is a much older fork of the \*arr codebase and its editor endpoint likely
 treats a root-folder change as a move, unlinking track files when `moveFiles` is
 false rather than rewriting paths in place. **Lidarr's source was not read to
 confirm this.** It should be verified before any retry.
@@ -63,7 +63,7 @@ exists to catch.
 
 The plan sorted candidate artists ascending by track-file count, and **757 of
 3,345 artists have zero track files**. The first artist moved was therefore
-*certain* to be a zero-file artist, and its verification would have been
+_certain_ to be a zero-file artist, and its verification would have been
 `0 == 0`. Not unlikely — guaranteed.
 
 Worse, the check is backwards. `PUT /api/v1/artist/{id}?moveFiles=false`
@@ -104,12 +104,12 @@ LINK OK                                                # the premise holds
 with verification inside that transaction so a failed check rolls back rather
 than leaving half the rows on a dead root.
 
-| Table.column | Rewritten | Why |
-|---|---:|---|
-| `RootFolders.Path` | 1 | the root itself |
-| `Artists.Path` | 3,345 | artist folders |
-| `TrackFiles.Path` | 150,300 | the only handle Lidarr has on a file |
-| `MetadataFiles.RelativePath` | 14,958 | **absolute despite the column name** |
+| Table.column                 | Rewritten | Why                                  |
+| ---------------------------- | --------: | ------------------------------------ |
+| `RootFolders.Path`           |         1 | the root itself                      |
+| `Artists.Path`               |     3,345 | artist folders                       |
+| `TrackFiles.Path`            |   150,300 | the only handle Lidarr has on a file |
+| `MetadataFiles.RelativePath` |    14,958 | **absolute despite the column name** |
 
 **`MetadataFiles` is the trap.** 14,958 of its 43,299 rows hold absolute
 `/music/...` paths; 28,341 are genuinely relative (`artist.nfo`). A rewrite
@@ -173,14 +173,14 @@ signature of that incident — `0 rows / 0.00 TiB` — is absent.
 
 ### The repath alone would not have produced a single hardlink
 
-Moving the *destination* into `/data` is only half of it. Lidarr's import
+Moving the _destination_ into `/data` is only half of it. Lidarr's import
 **source** is whatever path the download client reports, and slskd reports
 `/downloads/complete/slskd/...` — verified in Lidarr's own import history.
 `/downloads` is a separate bind mount, so the link was still crossing a mount
 boundary and every import would have gone on copying, with nothing to show that
 it had.
 
-The `st_dev` is the giveaway that this is *not* about filesystems:
+The `st_dev` is the giveaway that this is _not_ about filesystems:
 
 ```
 $ docker exec lidarr stat -c '%d %n' /downloads/complete/slskd /data/downloads/complete/slskd

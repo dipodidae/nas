@@ -40,10 +40,10 @@ left `torrents.db` unflushed.
 
 Measured on this box:
 
-| | stop time | shutdown logged | residue |
-|---|---|---|---|
-| without `CAP_KILL` | **120.3 s** | nothing | lockfile + ipc-socket orphaned |
-| with `CAP_KILL` | **6.0 s** | `Saving resume data completed.` | qbit removes both itself |
+|                    | stop time   | shutdown logged                 | residue                        |
+| ------------------ | ----------- | ------------------------------- | ------------------------------ |
+| without `CAP_KILL` | **120.3 s** | nothing                         | lockfile + ipc-socket orphaned |
+| with `CAP_KILL`    | **6.0 s**   | `Saving resume data completed.` | qbit removes both itself       |
 
 `stop_grace_period: 120s` had never once been used gracefully. It was a
 120-second delay in front of a guaranteed hard kill.
@@ -72,7 +72,7 @@ second, then resolving. That is
 [#24405](https://github.com/qbittorrent/qBittorrent/issues/24405)'s tell.
 
 Note the gap this exposes: `custom-cont-init.d` runs **once per container
-start**. If qbit dies and s6 restarts the *service* inside a still-running
+start**. If qbit dies and s6 restarts the _service_ inside a still-running
 container, the init script does not re-run and cannot clear anything.
 
 ### B. libtorrent memory — real and severe
@@ -98,11 +98,11 @@ co-contributor rather than a bystander.
 **The Jellyfin side of this is solved — and `Sep 01 05:34:58` above is the last
 kernel OOM kill on this box.** None since. It was never a Jellyfin application
 leak: two heap dumps showed the managed .NET heap flat at 226–235 MB while
-`anon` swung 217 MB → 1.46 GB → 573 MB. The ~23 GB was two independent *native*
+`anon` swung 217 MB → 1.46 GB → 573 MB. The ~23 GB was two independent _native_
 mechanisms, both now mitigated in `docker-compose.yml`:
 
 1. **glibc malloc arena fragmentation** (dotnet/runtime#122027) — glibc sizes
-   its arena count from the *host's* core count, not the cgroup quota, so
+   its arena count from the _host's_ core count, not the cgroup quota, so
    `mem_limit` cannot restrain it. `MALLOC_ARENA_MAX=2` cut peak from >2.08 GB
    to 1.56 GB on identical load, and finished in under half the time.
 2. **`memfd:doublemapper` accumulation** — .NET's W^X double-mapping of JIT'd
@@ -156,7 +156,7 @@ autoheal was not merely unlabelled. It was **dead since 2026-07-29** — exit co
 `/usr/local/sbin/nas-restart-guard.sh` re-applies every 15 minutes via
 `docker update`.
 
-That guard script only *warns* to the journal and never restarts anything:
+That guard script only _warns_ to the journal and never restarts anything:
 
 ```
 nas-restart-guard[3355817]: WARNING: autoheal is not running (capped-out crash loop? ...)
@@ -201,19 +201,19 @@ to anything that only inspects running containers.
 
 All in `docker-compose.yml` (qbittorrent service only) and the init script.
 
-| Change | Why |
-|---|---|
-| `cap_add: KILL` | **The fix.** Lets s6 signal the uid-1000 process. Verified minimal — FOWNER/FSETID were tested as unnecessary and are deliberately not granted. |
-| `image:` pinned to `5.2.3_v2.0.14-ls473` | Floor of ≥ 5.2.2 for #24357. Verified present in the registry (HTTP 200) before committing. |
-| watchtower label **removed** | Kills the nightly recreate trigger from cause F. Updates are now a deliberate tag bump. |
-| `hostname: qbittorrent` | Stable across recreates, so the lockfile's hostname line is meaningful instead of a random container ID. |
-| init script rewritten | Proves staleness before deleting; checks all three lockfile paths; clears the ipc-socket. |
-| `mem_limit: 4g` + `memswap_limit: 4g` | Backstop for cause B. Scoped exception to the no-mem_limit policy, same pattern as the jellyfin block. |
-| `DiskIOReadMode` / `DiskIOWriteMode` = `DisableOSCache` | The actual fix for cause B. Lives in `qBittorrent.conf`, not the repo. |
-| dropped `QBITTORRENT_USER` / `QBITTORRENT_PASS` | LSIO never read them ([#228](https://github.com/linuxserver/docker-qbittorrent/issues/228), closed as not planned); they only leaked credentials into `docker inspect`. Still in `.env` for `scripts/`. |
-| added `TORRENTING_PORT=6881` | Supported by LSIO, matches the published port. |
-| healthcheck `--max-time 10` | `GET /` was measured returning **200** unauthenticated on 5.2.3, so `curl -f` was already correct; only the timeout bound was missing. |
-| `autoheal=true` label | Backstop only. autoheal itself was restarted. |
+| Change                                                  | Why                                                                                                                                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cap_add: KILL`                                         | **The fix.** Lets s6 signal the uid-1000 process. Verified minimal — FOWNER/FSETID were tested as unnecessary and are deliberately not granted.                                                         |
+| `image:` pinned to `5.2.3_v2.0.14-ls473`                | Floor of ≥ 5.2.2 for #24357. Verified present in the registry (HTTP 200) before committing.                                                                                                             |
+| watchtower label **removed**                            | Kills the nightly recreate trigger from cause F. Updates are now a deliberate tag bump.                                                                                                                 |
+| `hostname: qbittorrent`                                 | Stable across recreates, so the lockfile's hostname line is meaningful instead of a random container ID.                                                                                                |
+| init script rewritten                                   | Proves staleness before deleting; checks all three lockfile paths; clears the ipc-socket.                                                                                                               |
+| `mem_limit: 4g` + `memswap_limit: 4g`                   | Backstop for cause B. Scoped exception to the no-mem_limit policy, same pattern as the jellyfin block.                                                                                                  |
+| `DiskIOReadMode` / `DiskIOWriteMode` = `DisableOSCache` | The actual fix for cause B. Lives in `qBittorrent.conf`, not the repo.                                                                                                                                  |
+| dropped `QBITTORRENT_USER` / `QBITTORRENT_PASS`         | LSIO never read them ([#228](https://github.com/linuxserver/docker-qbittorrent/issues/228), closed as not planned); they only leaked credentials into `docker inspect`. Still in `.env` for `scripts/`. |
+| added `TORRENTING_PORT=6881`                            | Supported by LSIO, matches the published port.                                                                                                                                                          |
+| healthcheck `--max-time 10`                             | `GET /` was measured returning **200** unauthenticated on 5.2.3, so `curl -f` was already correct; only the timeout bound was missing.                                                                  |
+| `autoheal=true` label                                   | Backstop only. autoheal itself was restarted.                                                                                                                                                           |
 
 ### The init script's staleness rules
 
@@ -252,7 +252,7 @@ the case that cannot expose this.
 This is not a regression introduced here — upstream's own
 PID + hostname + machine-id check has the same hole, and the previous
 unconditional `rm -f` was strictly worse (it deleted the lock unconditionally in
-*every* case, including single-container). The rewrite is still an improvement.
+_every_ case, including single-container). The rewrite is still an improvement.
 But "a lock held by a live instance is preserved" is true for one container and
 unproven for two, and the machine-id line is the only field that could
 distinguish them — it is currently read by neither upstream nor this script.
@@ -262,14 +262,14 @@ That was always true; it is just no longer defended against.
 
 ## Verification
 
-| # | Test | Result |
-|---|---|---|
-| 1 | Clean start from stopped | healthy in **10 s**, WebUI HTTP 200 |
-| 2 | `time docker compose stop` | **5.98 s**, `Saving resume data completed.`, no lockfile, no ipc-socket |
-| 3 | 3× `up -d --force-recreate` | healthy in 5–10 s each; container ID changed every time, hostname stayed `qbittorrent` |
-| 4 | `docker kill -s SIGKILL` → `up -d` | recovered **unattended** (see below) |
-| 5 | lockfile hostname | reads `qbittorrent`, not a container ID |
-| 6 | torrent count | **128 / 128**, 0 errored |
+| #   | Test                               | Result                                                                                 |
+| --- | ---------------------------------- | -------------------------------------------------------------------------------------- |
+| 1   | Clean start from stopped           | healthy in **10 s**, WebUI HTTP 200                                                    |
+| 2   | `time docker compose stop`         | **5.98 s**, `Saving resume data completed.`, no lockfile, no ipc-socket                |
+| 3   | 3× `up -d --force-recreate`        | healthy in 5–10 s each; container ID changed every time, hostname stayed `qbittorrent` |
+| 4   | `docker kill -s SIGKILL` → `up -d` | recovered **unattended** (see below)                                                   |
+| 5   | lockfile hostname                  | reads `qbittorrent`, not a container ID                                                |
+| 6   | torrent count                      | **128 / 128**, 0 errored                                                               |
 
 Test 4 is the one that matters, and the init script logged exactly the expected
 rule:
@@ -286,7 +286,7 @@ synthetic lockfiles, including the safety case: a lock held by a live
 it proves the single-container case only — see
 [The two-container safety property is NOT proven](#the-two-container-safety-property-is-not-proven).
 
-Torrent count was 127 at the start of the session and 128 at the end; the *arr
+Torrent count was 127 at the start of the session and 128 at the end; the \*arr
 stack added one mid-session. Nothing was lost.
 
 ### Backups taken before any change
@@ -306,7 +306,7 @@ Safe to delete once you are satisfied the fix holds.
   remedy is correct either way.
 - **`mem_limit: 4g` — the OOM risk is smaller than it looks, and the real risk
   is elsewhere.** A cgroup reclaims file-backed pages before it OOM-kills, so
-  the cache-driven growth that produced the 21.1 GB figure will *not* trip the
+  the cache-driven growth that produced the 21.1 GB figure will _not_ trip the
   limit; it will just cap the cache. What can OOM-kill is anonymous growth, and
   that sits at ~78 MiB steady state (with `memswap_limit == mem_limit` there is
   no swap to spill into either). So 4 g is comfortable. The actual exposure is
@@ -319,7 +319,7 @@ Safe to delete once you are satisfied the fix holds.
   monitored.** A supervisor that gives up permanently is worse than none: it is
   what killed autoheal silently for five weeks. Origin: it was installed by
   `/home/tom/fix-nas-all.sh` on 2026-06-15 after a hard freeze, as blast-radius
-  control for a watchtower crash loop that the *same script* root-caused and
+  control for a watchtower crash loop that the _same script_ root-caused and
   fixed (`WATCHTOWER_ROLLING_RESTART` was incompatible with the stack's
   dependencies). So the cap outlived the loop it was capping. That script's own
   item 4 shows the author knew a permanent cap needs a "notice it disappeared"
@@ -364,7 +364,7 @@ docker compose logs qbittorrent | grep init-qbit-lockfile
 
 **Do not** reintroduce an unconditional `rm -f` of the lockfile. If the script
 says it is keeping a lock, that is the safety property working — find out why a
-live `qbittorrent-nox` is holding it. Conversely, if it says it is *removing* a
+live `qbittorrent-nox` is holding it. Conversely, if it says it is _removing_ a
 lock, that judgement is only trustworthy while exactly one container is using
 this `/config`; see the caveat above.
 

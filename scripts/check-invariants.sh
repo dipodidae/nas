@@ -745,7 +745,18 @@ for name, svc in sorted(services.items()):
     if _tracked:
         continue
     (_untracked if _live else _missing).append(name)
-if _missing:
+_swag_dir_readable = bool(_swag_dir) and os.path.isdir(_swag_dir)
+if _missing and not _swag_dir_readable:
+    # CI has no .docker-config/, so "not in the tracked dir" cannot be
+    # distinguished from "not routed at all". Degrade rather than fail the
+    # build on something only the host can answer -- the same treatment
+    # jellyfin-mounts-frozen gets.
+    warn("swag-labels-are-routed", "ADR-0020",
+         f"the SWAG config dir is not readable from here (expected in CI), so "
+         f"routing for {_missing} could not be verified. `make check` on the "
+         "host is what distinguishes 'routed from .docker-config' from "
+         "'not routed at all'.")
+elif _missing:
     fail("swag-labels-are-routed", "ADR-0020",
          f"{_missing} carry swag=enable with no proxy-conf anywhere. The label "
          "is what publishes a subdomain, and without a matching "

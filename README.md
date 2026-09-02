@@ -8,14 +8,14 @@ project, one reverse proxy, one 10 TB disk.
 > means managing one Compose project. The word appears nowhere else in this
 > repo on purpose — if a service is down, nothing else is going to pick it up.
 
-| | |
-|---|---|
-| Host | Minisforum MS01, 30 GiB usable RAM, Intel QSV for transcoding |
-| Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0 |
-| Media disk | `/mnt/drive`, ext4, 9.1 T (51 % used) |
-| Config disk | `${CONFIG_DIRECTORY}` on the OS NVMe |
-| Services | 26 (4 built locally, 16 auto-updated, 6 deliberately not) |
-| Public entry | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01 |
+|                 |                                                               |
+| --------------- | ------------------------------------------------------------- |
+| Host            | Minisforum MS01, 30 GiB usable RAM, Intel QSV for transcoding |
+| Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0              |
+| Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                         |
+| Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe                          |
+| Services        | 26 (4 built locally, 16 auto-updated, 6 deliberately not)     |
+| Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01     |
 
 ---
 
@@ -103,13 +103,13 @@ make check                                 # the incident-derived assertions
 Restart cadence is what the module grouping encodes, so check which file a
 service lives in before you cycle it:
 
-| Module | Safe to restart | Notes |
-|---|---|---|
-| `compose/media-manage.yaml` | **Freely** | Stateless HTTP apps over SQLite |
-| `compose/media-serve.yaml` | Deliberately | User-visible; Jellyfin is slow to stop |
-| `compose/storage.yaml` | Deliberately | Nextcloud holds live sync sessions |
-| `compose/infra.yaml` | **Carefully** | `dockerproxy` is watchtower's and autoheal's only Docker route |
-| `compose/media-download.yaml` | **Carefully** | See below |
+| Module                        | Safe to restart | Notes                                                          |
+| ----------------------------- | --------------- | -------------------------------------------------------------- |
+| `compose/media-manage.yaml`   | **Freely**      | Stateless HTTP apps over SQLite                                |
+| `compose/media-serve.yaml`    | Deliberately    | User-visible; Jellyfin is slow to stop                         |
+| `compose/storage.yaml`        | Deliberately    | Nextcloud holds live sync sessions                             |
+| `compose/infra.yaml`          | **Carefully**   | `dockerproxy` is watchtower's and autoheal's only Docker route |
+| `compose/media-download.yaml` | **Carefully**   | See below                                                      |
 
 Two services need real care, both for recorded reasons:
 
@@ -183,12 +183,12 @@ Full reasoning, including what was rejected and why:
 
 ### Where state lives
 
-| Path | Contents |
-|---|---|
-| `${CONFIG_DIRECTORY}/<service>` | Per-service config + SQLite. Bind mount, not a named volume, so host tooling and backups can read it |
-| `${SHARE_DIRECTORY}/` | `movies/ series/ music/ books/ downloads/ playlists/ nextcloud-data/` — **lowercase**, the compose files depend on it |
+| Path                                    | Contents                                                                                                                                                 |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `${CONFIG_DIRECTORY}/<service>`         | Per-service config + SQLite. Bind mount, not a named volume, so host tooling and backups can read it                                                     |
+| `${SHARE_DIRECTORY}/`                   | `movies/ series/ music/ books/ downloads/ playlists/ nextcloud-data/` — **lowercase**, the compose files depend on it                                    |
 | `${SHARE_DIRECTORY}` mounted at `/data` | Single-mount view for sonarr/radarr/lidarr/bazarr. Hardlinks cannot cross a mount point → [ADR-0002](docs/decisions/0002-single-mount-data-hardlinks.md) |
-| `logs/` | Cron job output (gitignored, pruned weekly) |
+| `logs/`                                 | Cron job output (gitignored, pruned weekly)                                                                                                              |
 
 > `*.db` files under `${CONFIG_DIRECTORY}` are **WAL-mode SQLite**. Copying only
 > the `.db` without `-wal`/`-shm` reads back stale values — a just-saved `1`
@@ -203,59 +203,59 @@ forgotten — [ADR-0006](docs/decisions/0006-watchtower-opt-outs.md) says why fo
 
 ### Control plane — `compose/infra.yaml`
 
-| Service | Image | Ports | wt | Notes |
-|---|---|---|---|---|
-| `swag` | lscr.io/…/swag | `443`, `80` | yes | TLS + auto-proxy. Waits on `4eva-rootpage:healthy` |
-| `dockerproxy` | tecnativa/docker-socket-proxy | — | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
-| `watchtower` | containrrr/watchtower | — | **NO** | Daily 04:00. Never self-updates |
-| `autoheal` | willfarrell/autoheal | — | **NO** | Restarts unhealthy `qbittorrent`/`slskd` |
-| `ntfy` | binwiederhier/ntfy | `127.0.0.1:8410` | yes | Push alerts. Needs a pre-chowned config dir |
+| Service       | Image                         | Ports            | wt     | Notes                                                                                                                        |
+| ------------- | ----------------------------- | ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `swag`        | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                           |
+| `dockerproxy` | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
+| `watchtower`  | containrrr/watchtower         | —                | **NO** | Daily 04:00. Never self-updates                                                                                              |
+| `autoheal`    | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                     |
+| `ntfy`        | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                  |
 
 ### Download path — `compose/media-download.yaml`
 
-| Service | Image | Ports | wt | Notes |
-|---|---|---|---|---|
-| `qbittorrent` | lscr.io/…/qbittorrent **pinned** | `127.0.0.1:8080`, `6881` tcp+udp | **NO** | Tag pinned, floor ≥ 5.2.2. `mem_limit 4g`. Needs `CAP_KILL` |
-| `qui` | ghcr.io/autobrr/qui | `127.0.0.1:7476` | yes | UI *over* qBittorrent — no torrent engine of its own |
-| `slskd` | slskd/slskd | `127.0.0.1:5030`, `50300` | yes | Soulseek. Healthcheck is Soulseek-**independent** on purpose |
-| `prowlarr` | lscr.io/…/prowlarr | `127.0.0.1:9696` | yes | Indexer aggregator |
-| `byparr` | ghcr.io/thephaseless/byparr | `127.0.0.1:8191` | yes | FlareSolverr-compatible CF solver |
+| Service       | Image                            | Ports                            | wt     | Notes                                                        |
+| ------------- | -------------------------------- | -------------------------------- | ------ | ------------------------------------------------------------ |
+| `qbittorrent` | lscr.io/…/qbittorrent **pinned** | `127.0.0.1:8080`, `6881` tcp+udp | **NO** | Tag pinned, floor ≥ 5.2.2. `mem_limit 4g`. Needs `CAP_KILL`  |
+| `qui`         | ghcr.io/autobrr/qui              | `127.0.0.1:7476`                 | yes    | UI _over_ qBittorrent — no torrent engine of its own         |
+| `slskd`       | slskd/slskd                      | `127.0.0.1:5030`, `50300`        | yes    | Soulseek. Healthcheck is Soulseek-**independent** on purpose |
+| `prowlarr`    | lscr.io/…/prowlarr               | `127.0.0.1:9696`                 | yes    | Indexer aggregator                                           |
+| `byparr`      | ghcr.io/thephaseless/byparr      | `127.0.0.1:8191`                 | yes    | FlareSolverr-compatible CF solver                            |
 
 **No VPN.** Both P2P services egress over the home IP; inbound needs `6881`
 and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-home-ip.md)
 
 ### Library management — `compose/media-manage.yaml`
 
-| Service | Image | Ports | wt | Notes |
-|---|---|---|---|---|
-| `sonarr` | lscr.io/…/sonarr | `127.0.0.1:8989` | yes | TV |
-| `radarr` | lscr.io/…/radarr | `127.0.0.1:7878` | yes | Movies |
-| `lidarr` | lscr.io/…/lidarr **:nightly** | `127.0.0.1:8686` | yes | Music. `/data` in use → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md) |
-| `bazarr` | lscr.io/…/bazarr | `127.0.0.1:6767` | yes | Subtitles + subcleaner post-processing |
-| `whisper` | onerahmet/…-whisper-asr | `127.0.0.1:9000` | yes | CPU ASR, `small` model. `bazarr` depends on it |
-| `lingarr` | lingarr/lingarr | `127.0.0.1:9876` | yes | Subtitle translation. Healthcheck disabled upstream |
-| `cleanuparr` | ghcr.io/cleanuparr/cleanuparr | `127.0.0.1:11011` | yes | **Armed deletion engine** → [ADR-0017](docs/decisions/0017-cleanuparr-armed.md) |
-| `recyclarr` | recyclarr/recyclarr:8 | — | yes | TRaSH profiles into sonarr/radarr, own cron |
+| Service      | Image                         | Ports             | wt  | Notes                                                                               |
+| ------------ | ----------------------------- | ----------------- | --- | ----------------------------------------------------------------------------------- |
+| `sonarr`     | lscr.io/…/sonarr              | `127.0.0.1:8989`  | yes | TV                                                                                  |
+| `radarr`     | lscr.io/…/radarr              | `127.0.0.1:7878`  | yes | Movies                                                                              |
+| `lidarr`     | lscr.io/…/lidarr **:nightly** | `127.0.0.1:8686`  | yes | Music. `/data` in use → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md) |
+| `bazarr`     | lscr.io/…/bazarr              | `127.0.0.1:6767`  | yes | Subtitles + subcleaner post-processing                                              |
+| `whisper`    | onerahmet/…-whisper-asr       | `127.0.0.1:9000`  | yes | CPU ASR, `small` model. `bazarr` depends on it                                      |
+| `lingarr`    | lingarr/lingarr               | `127.0.0.1:9876`  | yes | Subtitle translation. Healthcheck disabled upstream                                 |
+| `cleanuparr` | ghcr.io/cleanuparr/cleanuparr | `127.0.0.1:11011` | yes | **Armed deletion engine** → [ADR-0017](docs/decisions/0017-cleanuparr-armed.md)     |
+| `recyclarr`  | recyclarr/recyclarr:8         | —                 | yes | TRaSH profiles into sonarr/radarr, own cron                                         |
 
 ### Playback and storage
 
-| Service | Image | Ports | wt | Notes |
-|---|---|---|---|---|
-| `jellyfin` | lscr.io/…/jellyfin **pinned** | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
-| `jellyseerr` | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056` | yes | Requests |
-| `nextcloud` | lscr.io/…/nextcloud | `127.0.0.1:8087` | yes | Whole share at `/external/*`. Log budget 25m/3 |
+| Service      | Image                          | Ports                                  | wt     | Notes                                                                                                                     |
+| ------------ | ------------------------------ | -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `jellyfin`   | lscr.io/…/jellyfin **pinned**  | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
+| `jellyseerr` | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056`                       | yes    | Requests                                                                                                                  |
+| `nextcloud`  | lscr.io/…/nextcloud            | `127.0.0.1:8087`                       | yes    | Whole share at `/external/*`. Log budget 25m/3                                                                            |
 
 ### Locally built — `webapps/*/compose.yaml`
 
 All four are Watchtower-opt-out **by construction**: it cannot pull a local image.
 
-| Service | Source | Ports | Notes |
-|---|---|---|---|
-| `4eva-rootpage` | `webapps/4eva-rootpage` | `127.0.0.1:8088` | Apex landing page + `/ops.html` dashboard |
-| `lidarr-bulk` | `webapps/lidarr-bulk` | `127.0.0.1:3000` | Bulk Lidarr ops; AI/Spotify tabs hide when unset |
-| `ongehoord` | `webapps/ongehoord` (+ nested submodule) | — | Nuxt preview, basic auth at the proxy. **buildx only** |
-| `playlist-generator` | `webapps/jellyfin-playlist-generator` (submodule) | — | Nuxt + FastAPI + nginx |
-| `playlist-generator-db` | pgvector/pgvector:pg16 | — | Never auto-updated: no engine bump under live data |
+| Service                 | Source                                            | Ports            | Notes                                                  |
+| ----------------------- | ------------------------------------------------- | ---------------- | ------------------------------------------------------ |
+| `4eva-rootpage`         | `webapps/4eva-rootpage`                           | `127.0.0.1:8088` | Apex landing page + `/ops.html` dashboard              |
+| `lidarr-bulk`           | `webapps/lidarr-bulk`                             | `127.0.0.1:3000` | Bulk Lidarr ops; AI/Spotify tabs hide when unset       |
+| `ongehoord`             | `webapps/ongehoord` (+ nested submodule)          | —                | Nuxt preview, basic auth at the proxy. **buildx only** |
+| `playlist-generator`    | `webapps/jellyfin-playlist-generator` (submodule) | —                | Nuxt + FastAPI + nginx                                 |
+| `playlist-generator-db` | pgvector/pgvector:pg16                            | —                | Never auto-updated: no engine bump under live data     |
 
 ### Startup order
 
@@ -288,15 +288,15 @@ served SWAG's default page instead. Proxy-confs this repo owns live in
 version-controlled rather than backup-controlled; the rest still live only in
 the gitignored SWAG config dir and `make check` warns about them by name.
 
-| URL | Service |
-|---|---|
-| `4eva.me` | `4eva-rootpage` (apex, via the mounted `root.conf`) |
-| `4eva.me/ops.html` | Live stack dashboard, fed by `media_ops_status.py` |
-| `jellyfin.` · `jellyseerr.` | Playback and requests |
-| `sonarr.` · `radarr.` · `lidarr.` · `bazarr.` · `prowlarr.` · `lingarr.` | The *arr suite |
-| `qui.` | qBittorrent UI (**qBittorrent's own subdomain is disabled**) |
-| `slskd.` | Soulseek daemon UI |
-| `cleanuparr.` · `lidarr-bulk.` · `playlist-generator.` · `ongehoord.` · `nextcloud.` · `ntfy.` | Rest |
+| URL                                                                                            | Service                                                      |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `4eva.me`                                                                                      | `4eva-rootpage` (apex, via the mounted `root.conf`)          |
+| `4eva.me/ops.html`                                                                             | Live stack dashboard, fed by `media_ops_status.py`           |
+| `jellyfin.` · `jellyseerr.`                                                                    | Playback and requests                                        |
+| `sonarr.` · `radarr.` · `lidarr.` · `bazarr.` · `prowlarr.` · `lingarr.`                       | The \*arr suite                                              |
+| `qui.`                                                                                         | qBittorrent UI (**qBittorrent's own subdomain is disabled**) |
+| `slskd.`                                                                                       | Soulseek daemon UI                                           |
+| `cleanuparr.` · `lidarr-bulk.` · `playlist-generator.` · `ongehoord.` · `nextcloud.` · `ntfy.` | Rest                                                         |
 
 Intentionally public ports: `443`, `80`, `8096`, `8920`, `7359`, `1900`,
 `6881`, `50300`. Anything else published on `0.0.0.0` fails `make check`.
@@ -315,19 +315,19 @@ These are asserted mechanically by `scripts/check-invariants.sh`. Each failure
 prints the ADR that explains why the rule exists — **read it before changing
 the rule.** Compose lines carrying `INVARIANT:` are the same contract.
 
-| Rule | Why | ADR |
-|---|---|---|
-| `qbittorrent` keeps `CAP_KILL` | s6 (root) must signal `qbittorrent-nox` (uid 1000). Without it every stop is a 120.3 s SIGKILL instead of 6.2 s | [0004](docs/decisions/0004-qbittorrent-cap-kill.md) |
-| `qbittorrent` tag stays pinned, ≥ 5.2.2 | 5.2.0/5.2.1 can't prove their lockfile is stale after a recreate and refuse to start | [0005](docs/decisions/0005-qbittorrent-pinned-tag.md) |
-| Watchtower is `MONITOR_ONLY` | Its recreate is not atomic; a failed remove leaves **no container at all** (13 h, then 7 days). The capability is removed, not defended | [0020](docs/decisions/0020-watchtower-replaced-and-demoted.md) |
-| `memswap_limit == mem_limit` wherever `mem_limit` is set | Otherwise it balloons into host swap and thrashes everything else first | [0007](docs/decisions/0007-qbittorrent-memory-cap.md) |
-| slskd's healthcheck stays Soulseek-**independent** | A login-aware healthcheck + autoheal = permanent restart spiral | [0009](docs/decisions/0009-slskd-healthcheck.md) |
-| autoheal stop timeout ≥ 120 s, `CURL_TIMEOUT` > that | Otherwise restarts are cut off mid-stop and pile up three deep | [0010](docs/decisions/0010-autoheal-timeouts.md) |
-| No `QBITTORRENT_USER`/`PASS` on the container | The image never read them; it only leaked them into `docker inspect` | [0011](docs/decisions/0011-qbittorrent-credentials.md) |
-| Only `dockerproxy` mounts `/var/run/docker.sock` | The socket is root on the host | [0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
-| sonarr/radarr/lidarr/**bazarr** mount `/data` | Hardlinks can't cross a mount point (cost 0.96 TiB); bazarr needs it to resolve *arr paths | [0002](docs/decisions/0002-single-mount-data-hardlinks.md), [0015](docs/decisions/0015-bazarr-no-data-mount.md) |
-| Jellyfin's volume mappings are **not** changed | Owner instruction, and 3 systems are calibrated to `/data/movies` | [0016](docs/decisions/0016-jellyfin-paths-are-load-bearing.md) |
-| Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI | The hardening baseline. **No exceptions** — the last two waivers were closed with measured sets on 2026-09-02 | [0001](docs/decisions/0001-hardening-baseline.md), [0018](docs/decisions/0018-capability-gaps.md) |
+| Rule                                                                          | Why                                                                                                                                     | ADR                                                                                                             |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `qbittorrent` keeps `CAP_KILL`                                                | s6 (root) must signal `qbittorrent-nox` (uid 1000). Without it every stop is a 120.3 s SIGKILL instead of 6.2 s                         | [0004](docs/decisions/0004-qbittorrent-cap-kill.md)                                                             |
+| `qbittorrent` tag stays pinned, ≥ 5.2.2                                       | 5.2.0/5.2.1 can't prove their lockfile is stale after a recreate and refuse to start                                                    | [0005](docs/decisions/0005-qbittorrent-pinned-tag.md)                                                           |
+| Watchtower is `MONITOR_ONLY`                                                  | Its recreate is not atomic; a failed remove leaves **no container at all** (13 h, then 7 days). The capability is removed, not defended | [0020](docs/decisions/0020-watchtower-replaced-and-demoted.md)                                                  |
+| `memswap_limit == mem_limit` wherever `mem_limit` is set                      | Otherwise it balloons into host swap and thrashes everything else first                                                                 | [0007](docs/decisions/0007-qbittorrent-memory-cap.md)                                                           |
+| slskd's healthcheck stays Soulseek-**independent**                            | A login-aware healthcheck + autoheal = permanent restart spiral                                                                         | [0009](docs/decisions/0009-slskd-healthcheck.md)                                                                |
+| autoheal stop timeout ≥ 120 s, `CURL_TIMEOUT` > that                          | Otherwise restarts are cut off mid-stop and pile up three deep                                                                          | [0010](docs/decisions/0010-autoheal-timeouts.md)                                                                |
+| No `QBITTORRENT_USER`/`PASS` on the container                                 | The image never read them; it only leaked them into `docker inspect`                                                                    | [0011](docs/decisions/0011-qbittorrent-credentials.md)                                                          |
+| Only `dockerproxy` mounts `/var/run/docker.sock`                              | The socket is root on the host                                                                                                          | [0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md)                                                   |
+| sonarr/radarr/lidarr/**bazarr** mount `/data`                                 | Hardlinks can't cross a mount point (cost 0.96 TiB); bazarr needs it to resolve \*arr paths                                             | [0002](docs/decisions/0002-single-mount-data-hardlinks.md), [0015](docs/decisions/0015-bazarr-no-data-mount.md) |
+| Jellyfin's volume mappings are **not** changed                                | Owner instruction, and 3 systems are calibrated to `/data/movies`                                                                       | [0016](docs/decisions/0016-jellyfin-paths-are-load-bearing.md)                                                  |
+| Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI | The hardening baseline. **No exceptions** — the last two waivers were closed with measured sets on 2026-09-02                           | [0001](docs/decisions/0001-hardening-baseline.md), [0018](docs/decisions/0018-capability-gaps.md)               |
 
 Start at [`docs/decisions/README.md`](docs/decisions/README.md) for the full index.
 
@@ -351,7 +351,7 @@ archived in December 2025. → [ADR-0020](docs/decisions/0020-watchtower-replace
 Applying an update is `make pull && make up`, or one of the watched
 single-service targets below.
 
-Monitor-only still *pulls* the images it checks, and `WATCHTOWER_CLEANUP` only
+Monitor-only still _pulls_ the images it checks, and `WATCHTOWER_CLEANUP` only
 removes an image after a container is restarted with it — so pulled images
 accumulate until the weekly `docker image prune -f` cron (Sundays 03:00).
 
@@ -396,14 +396,14 @@ Before 2026-09-01 **nothing on this box reported failure** — Jellyfin was
 OOM-killed five times in 48 h and qBittorrent sat dead for 14 h, both found by
 accident. Four layers now cover it:
 
-| Layer | What it catches | Blind to |
-|---|---|---|
-| Docker healthchecks | A service answering wrong | A service that no longer exists |
-| `autoheal` | Unhealthy `qbittorrent`/`slskd`, restarts within ~30 s | Anything unlabelled |
-| `scripts/stack_watchdog.py` (`*/5`) | A service defined in compose with **no container at all**, plus unhealthy ones | The host itself |
-| `scripts/heartbeat.py` (`*/10`) → healthchecks.io | **The host being down** | — |
-| `make verify-runtime` (daily 06:15) | Running containers drifting from the invariants — a missing container, a lost capability, a stray `compose.override.yaml` | Anything the config alone can prove (that is `make check`'s job) |
-| `scripts/offsite_backup.sh` (daily 02:00) | Config surviving the loss of this machine | Media — 4.6 T is not backed up anywhere, by choice |
+| Layer                                             | What it catches                                                                                                           | Blind to                                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Docker healthchecks                               | A service answering wrong                                                                                                 | A service that no longer exists                                  |
+| `autoheal`                                        | Unhealthy `qbittorrent`/`slskd`, restarts within ~30 s                                                                    | Anything unlabelled                                              |
+| `scripts/stack_watchdog.py` (`*/5`)               | A service defined in compose with **no container at all**, plus unhealthy ones                                            | The host itself                                                  |
+| `scripts/heartbeat.py` (`*/10`) → healthchecks.io | **The host being down**                                                                                                   | —                                                                |
+| `make verify-runtime` (daily 06:15)               | Running containers drifting from the invariants — a missing container, a lost capability, a stray `compose.override.yaml` | Anything the config alone can prove (that is `make check`'s job) |
+| `scripts/offsite_backup.sh` (daily 02:00)         | Config surviving the loss of this machine                                                                                 | Media — 4.6 T is not backed up anywhere, by choice               |
 
 All alerts go to self-hosted `ntfy` (`nas-alerts`), published over loopback so
 contents never leave the box; only the phone's subscription goes out through
@@ -434,19 +434,19 @@ and staleness to ntfy — a job that stops running is itself an alert.
 > **Every cron line must `cd /home/tom/nas` first.** The scripts resolve `.env`
 > and `logs/` relative to the working directory.
 
-| When | Job |
-|---|---|
-| `*/5` | `stack_watchdog`, `media_ops_status`, `qbittorrent_settings_enforce` |
-| `2-59/5` | `lidarr_jellyfin_bridge` (Lidarr has no working path mapping) |
-| `*/10` | `heartbeat` (off-box dead-man's switch) |
-| `*/15` | `slskd_login_watch` |
-| `5,20,35,50` | `lidarr_monitor_sweep --no-search` |
-| `12,27,42,57` | `lidarr_backlog_drip` |
-| `:07 :22 :37 :52` | Tubifarry/slskd unclog chain — **shares one flock**, do not run these concurrently |
-| `:17` | `wan_shaper.sh apply` (scoped sudo) |
-| daily | `config_backup` 01:00 · `offsite_backup` 02:00 (commented until a destination is set) · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 |
-| every 6 h | `playlist-sync` |
-| weekly | `log_pruner` · `docker prune` · `album_art` · per-library Jellyfin scans (Fri/Sat/Sun 05:05) |
+| When              | Job                                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `*/5`             | `stack_watchdog`, `media_ops_status`, `qbittorrent_settings_enforce`                                                                                                                                    |
+| `2-59/5`          | `lidarr_jellyfin_bridge` (Lidarr has no working path mapping)                                                                                                                                           |
+| `*/10`            | `heartbeat` (off-box dead-man's switch)                                                                                                                                                                 |
+| `*/15`            | `slskd_login_watch`                                                                                                                                                                                     |
+| `5,20,35,50`      | `lidarr_monitor_sweep --no-search`                                                                                                                                                                      |
+| `12,27,42,57`     | `lidarr_backlog_drip`                                                                                                                                                                                   |
+| `:07 :22 :37 :52` | Tubifarry/slskd unclog chain — **shares one flock**, do not run these concurrently                                                                                                                      |
+| `:17`             | `wan_shaper.sh apply` (scoped sudo)                                                                                                                                                                     |
+| daily             | `config_backup` 01:00 · `offsite_backup` 02:00 (commented until a destination is set) · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 |
+| every 6 h         | `playlist-sync`                                                                                                                                                                                         |
+| weekly            | `log_pruner` · `docker prune` · `album_art` · per-library Jellyfin scans (Fri/Sat/Sun 05:05)                                                                                                            |
 
 ```bash
 crontab -l                          # the real list
@@ -503,7 +503,7 @@ docker exec sonarr stat -c '%h %n' /data/series/<show>/<file>   # %h > 1 = hardl
 ```
 
 **Both ends means both ends.** Moving the root folder into `/data` is only half
-of it — the import *source* is whatever path the download client reports, and
+of it — the import _source_ is whatever path the download client reports, and
 `link()` refuses across a mount point even when `st_dev` is identical. If `%h`
 is still `1`, look at the import history's `droppedPath` before anything else:
 
@@ -523,7 +523,7 @@ never be used for this. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-sta
 
 Two independent mechanisms, and both have to be right: `mapFrom`/`mapTo`
 decides **where** the call goes, the `onXxx` toggles decide **whether** one is
-made at all. The *arr "Test" button proves nothing — it returns `200` while
+made at all. The \*arr "Test" button proves nothing — it returns `200` while
 exercising an Emby API Jellyfin doesn't implement.
 
 ```bash
@@ -538,7 +538,7 @@ that looks perfect in Sonarr and on disk.
 
 ### Subtitles aren't appearing
 
-Bazarr resolves *arr paths verbatim, so it needs `/data` mounted:
+Bazarr resolves \*arr paths verbatim, so it needs `/data` mounted:
 
 ```bash
 docker exec bazarr python3 -c "

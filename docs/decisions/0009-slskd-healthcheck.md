@@ -36,10 +36,10 @@ autoheal restart is the exact opposite of the cure.
 
 The old `docker-compose.yml` contained two comments that disagreed:
 
-- on slskd's healthcheck: *"deliberately Soulseek-INDEPENDENT (just spiders the
-  web UI)"*
-- on autoheal: *"Used for slskd, whose Soulseek login can drop while its web
-  server stays up (see slskd's **login-aware** healthcheck)"*
+- on slskd's healthcheck: _"deliberately Soulseek-INDEPENDENT (just spiders the
+  web UI)"_
+- on autoheal: _"Used for slskd, whose Soulseek login can drop while its web
+  server stays up (see slskd's **login-aware** healthcheck)"_
 
 **The slskd comment was correct; the autoheal comment was stale and is now
 fixed.** Settled from two independent pieces of evidence, not by preference:
@@ -47,16 +47,16 @@ fixed.** Settled from two independent pieces of evidence, not by preference:
 1. The healthcheck command itself is a bare web-UI spider — there is no login
    probe in it.
 2. `scripts/slskd_login_watch.py`'s docstring states the design directly:
-   *"So the container healthcheck is deliberately liveness-only (web UI spider)
+   _"So the container healthcheck is deliberately liveness-only (web UI spider)
    and autoheal never restarts slskd for a login drop. This script is the
-   separate, alert-only path… It NEVER restarts or stops slskd."*
+   separate, alert-only path… It NEVER restarts or stops slskd."_
 
 The autoheal comment now says so, and points here.
 
 ## Do not reintroduce
 
 A login-aware healthcheck on the autoheal path. Not for slskd, not for any
-service whose recovery requires *staying down*.
+service whose recovery requires _staying down_.
 
 ## Amendment 2026-09-02 — `start_period` must outlast a full share scan
 

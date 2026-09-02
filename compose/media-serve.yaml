@@ -35,7 +35,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "991" # host 'render' GID, grants access to /dev/dri/renderD128 for QSV
+      - '991' # host 'render' GID, grants access to /dev/dri/renderD128 for QSV
     # INVARIANT: Jellyfin's volume mappings are NOT to be changed, per the
     # owner's standing instruction. ${SHARE_DIRECTORY}:/data/movies:ro is
     # intentional even though it looks misnamed -- every Jellyfin library path,

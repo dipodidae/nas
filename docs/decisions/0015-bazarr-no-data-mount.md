@@ -16,7 +16,7 @@ Correct: Bazarr never imports, moves, or hardlinks. It writes subtitle sidecars
 next to a media file it already has a path to, and runs `subcleaner` over them
 as post-processing. There is no cross-mount `link()` for `EXDEV` to break.
 
-So the *hardlink* rationale for `/data` is genuinely absent here.
+So the _hardlink_ rationale for `/data` is genuinely absent here.
 
 ## But it needs `/data` for a different reason, and is broken without it
 

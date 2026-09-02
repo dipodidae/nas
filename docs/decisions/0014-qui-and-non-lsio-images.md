@@ -3,11 +3,11 @@
 **Date:** 2026-09-01
 **Status:** accepted
 
-## qui is a UI *over* qBittorrent, not a replacement client
+## qui is a UI _over_ qBittorrent, not a replacement client
 
 `qui` (autobrr/qui) has **no BitTorrent engine**. It manages the existing
 qBittorrent daemon over the WebUI API at `qbittorrent:8080`, exactly like the
-*arr clients do, and is published at `qui.${PUBLIC_DOMAIN}`.
+\*arr clients do, and is published at `qui.${PUBLIC_DOMAIN}`.
 
 qBittorrent's own WebUI is retired as a **public** surface: the SWAG preset
 `qbittorrent.subdomain.conf` was disabled (`.disabled`), and the route is now
@@ -15,7 +15,7 @@ the manually-enabled `qui.subdomain.conf` (container `qui`, port 7476).
 
 ## INVARIANT: qBittorrent's `127.0.0.1:8080:8080` publish must stay
 
-Retiring the *public* WebUI is not the same as removing the loopback publish.
+Retiring the _public_ WebUI is not the same as removing the loopback publish.
 `scripts/` authenticate against qBittorrent at `localhost:8080` using qbit's
 localhost auth-bypass:
 
@@ -45,7 +45,7 @@ directory. Both run directly as `${PUID}:${PGID}` and write their own state
 
 If Docker auto-creates the host directory as **root** on first `up`, the
 container **crash-loops on `permission denied`.** The host directory must be
-owned by `${PUID}:${PGID}` *before* starting:
+owned by `${PUID}:${PGID}` _before_ starting:
 
 ```sh
 mkdir -p ${CONFIG_DIRECTORY}/qui  && chown ${PUID}:${PGID} ${CONFIG_DIRECTORY}/qui

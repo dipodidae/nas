@@ -532,7 +532,7 @@ Environment: `API_KEY_LIDARR` + `API_KEY_SLSKD` (both required), `LIDARR_HOST` (
 
 ### `jellyfin_subtitle_css.py`
 
-Fixes the "large subtitles wrap onto a second line constantly" problem. jellyfin-web renders each cue into `.videoSubtitlesInner`, which ships with a hardcoded **`max-width: 70%`** — the subtitle *size* setting scales the font but never the box, so comfortable text immediately outgrows its container. Jellyfin exposes no API field for the box geometry; the only server-side lever is **Branding → Custom CSS**, which every jellyfin-web client (browser, webOS, Tizen, Fire TV) fetches from `/Branding/Css` on load. This script merges a sentinel-delimited managed block into `BrandingOptions.CustomCss` over `POST /System/Configuration/branding`.
+Fixes the "large subtitles wrap onto a second line constantly" problem. jellyfin-web renders each cue into `.videoSubtitlesInner`, which ships with a hardcoded **`max-width: 70%`** — the subtitle _size_ setting scales the font but never the box, so comfortable text immediately outgrows its container. Jellyfin exposes no API field for the box geometry; the only server-side lever is **Branding → Custom CSS**, which every jellyfin-web client (browser, webOS, Tizen, Fire TV) fetches from `/Branding/Css` on load. This script merges a sentinel-delimited managed block into `BrandingOptions.CustomCss` over `POST /System/Configuration/branding`.
 
 Idempotent by construction: the `/* >>> nas-managed: subtitle-layout >>> */` sentinels mean a re-run **replaces** the block in place instead of appending, and any CSS you added by hand outside the markers is preserved byte-for-byte. `--remove` strips the block cleanly. Writes the full `BrandingOptions` object back (not just `CustomCss`) — a partial POST blanks `LoginDisclaimer`/`SplashscreenEnabled`.
 
@@ -679,7 +679,7 @@ Safe by design: no deletions, no forceful state resets. One reannounce per batch
 
 Backfills **missing external album covers** (`folder.jpg`) across the music library by delegating to [sacad](https://github.com/desbma/sacad)'s recursive `sacad_r` CLI, which searches Deezer/Discogs/iTunes/Last.fm and writes one image per album folder. Lidarr already writes `folder.jpg` for most albums (the convention this matches); this fills the few hundred gaps — and any future imports Lidarr fails to art — so Jellyfin always has a cover. `sacad_r` natively skips folders that already contain the cover file, so runs are incremental and idempotent (only the gaps trigger network calls). Albums with no cover on any source are simply left untouched and retried next run (sacad has no negative cache).
 
-**Overwrite-once (`--overwrite-once`)** — much Lidarr/embedded art is low quality. This mode overwrites each album's cover *once* with a fresh sacad image (`sacad_r -i` per folder), then drops a hidden `.album_art_done` marker so consecutive runs skip that folder forever. New albums arrive unmarked and get their one pass on the next run. `--limit N` (default 300) caps folders per run so the first big pass drains across several runs. **A cover is never blanked** — sacad leaves existing art in place when no source has a replacement. A folder that still has no cover after its attempt stays unmarked and is retried next run (identical to plain gap-fill). `--marker` overrides the sidecar filename. This is the mode the weekly cron uses.
+**Overwrite-once (`--overwrite-once`)** — much Lidarr/embedded art is low quality. This mode overwrites each album's cover _once_ with a fresh sacad image (`sacad_r -i` per folder), then drops a hidden `.album_art_done` marker so consecutive runs skip that folder forever. New albums arrive unmarked and get their one pass on the next run. `--limit N` (default 300) caps folders per run so the first big pass drains across several runs. **A cover is never blanked** — sacad leaves existing art in place when no source has a replacement. A folder that still has no cover after its attempt stays unmarked and is retried next run (identical to plain gap-fill). `--marker` overrides the sidecar filename. This is the mode the weekly cron uses.
 
 **Dry-run is the default** — a bare invocation walks the tree and prints a plan (album dirs found / already have the cover / missing, plus a sample of missing paths) and downloads nothing. `--apply` is required to fetch.
 
@@ -701,11 +701,11 @@ Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$S
 
 The thing that shouts. Nothing on this box reported failure before it existed: Jellyfin was OOM-killed five times in 48 hours and only surfaced because an episode stuttered, qBittorrent sat dead for fourteen hours twice and was found by accident, `autoheal` was absent from the stack for over a month, and the `media_ops_status.py` cron had been silently writing nothing since June (a missing `cd` in the crontab line). Four checks, one push notification.
 
-1. **Every compose service** exists, is running, and is not `unhealthy` — compared against `docker compose config --services`, so a service defined but *never created* is caught too. "Not unhealthy" and "not there at all" look identical to anything that only inspects running containers.
+1. **Every compose service** exists, is running, and is not `unhealthy` — compared against `docker compose config --services`, so a service defined but _never created_ is caught too. "Not unhealthy" and "not there at all" look identical to anything that only inspects running containers.
 2. **Restart churn** — a climbing `RestartCount` between runs is flapping even if the container is "up" at the moment the check fires. First run never alerts (no baseline).
 3. **Jellyfin anon-RSS** from `logs/jellyfin-mem.log` (see `jellyfin_mem_sample.py`). `anon` is the OOM-relevant number; `memory.current`/`mem_peak` include page cache and read high for benign reasons. A stale (>15 min) or `SAMPLE_FAILED` sampler is itself an alert — a monitor that quietly stops is worse than none.
-4. **Kernel OOM kills** from `journalctl -k` (readable unprivileged here; `dmesg` is not, under `kernel.dmesg_restrict`). Catches kills of *any* process, including ones that leave no trace in a container's log.
-5. **The media drive**, because nothing else can watch it. All ~4.7 TB lives on a single USB external disk with no redundancy, and its bridge refuses SMART under every `smartctl -d` type. So this watches the only signals that do exist: the mount vanishing, ext4 remounting **read-only** (its default on error — at which point every *arr import fails while the stack still looks healthy), free space, and kernel I/O / USB-reset errors, which are the earliest warning available on a dying USB disk.
+4. **Kernel OOM kills** from `journalctl -k` (readable unprivileged here; `dmesg` is not, under `kernel.dmesg_restrict`). Catches kills of _any_ process, including ones that leave no trace in a container's log.
+5. **The media drive**, because nothing else can watch it. All ~4.7 TB lives on a single USB external disk with no redundancy, and its bridge refuses SMART under every `smartctl -d` type. So this watches the only signals that do exist: the mount vanishing, ext4 remounting **read-only** (its default on error — at which point every \*arr import fails while the stack still looks healthy), free space, and kernel I/O / USB-reset errors, which are the earliest warning available on a dying USB disk.
 6. **`autoheal` itself** — running, actually supervising something, and its restarts succeeding. A supervisor going quiet is invisible by construction: everything it watches stays healthy, so the only symptom is an absence.
 7. **That an off-box heartbeat is configured at all.** Nothing running on this host can report that this host is down.
 8. **The crontab, textually** — a line using a relative path without a `cd` into the repo cannot work from cron's `$HOME`, and a line naming a script that does not exist never will. Both are invisible in the job's output because there is none.
@@ -731,9 +731,9 @@ Exit codes: `0` all healthy, `1` at least one alert active, `2` fatal (docker un
 
 Scans **one** Jellyfin library. Jellyfin's built-in "Scan Media Library" (`RefreshLibrary`) task is global-only — there is no way to schedule TV Shows weekly while keeping Music daily — and a library scan is the largest memory event on this box (~1.56 GB peak `anon`-RSS). This drives the per-library endpoint instead, so cron can give each library its own cadence and the global task's trigger list can be emptied.
 
-The call is `POST /Items/{virtualFolderItemId}/Refresh?metadataRefreshMode=Default&imageRefreshMode=Default&replaceAllMetadata=false&replaceAllImages=false&recursive=true` — the same one Jellyfin's own per-library "Scan library" button makes. `Default` mode fetches metadata for *new* items only, so it is safe on a schedule. Verified end-to-end: a file dropped straight onto disk was invisible to Jellyfin, and one run of this script made it appear.
+The call is `POST /Items/{virtualFolderItemId}/Refresh?metadataRefreshMode=Default&imageRefreshMode=Default&replaceAllMetadata=false&replaceAllImages=false&recursive=true` — the same one Jellyfin's own per-library "Scan library" button makes. `Default` mode fetches metadata for _new_ items only, so it is safe on a schedule. Verified end-to-end: a file dropped straight onto disk was invisible to Jellyfin, and one run of this script made it appear.
 
-**There is deliberately no `--wait`.** On 10.11.11 a per-item refresh does *not* drive the `RefreshLibrary` scheduled task's state (it stays `Idle` throughout) and `BaseItemDto` exposes no refresh-progress field, so there is no honest REST signal to poll. A zero exit means *accepted*, not *finished*.
+**There is deliberately no `--wait`.** On 10.11.11 a per-item refresh does _not_ drive the `RefreshLibrary` scheduled task's state (it stays `Idle` throughout) and `BaseItemDto` exposes no refresh-progress field, so there is no honest REST signal to poll. A zero exit means _accepted_, not _finished_.
 
 ```bash
 python scripts/jellyfin_library_scan.py --list
@@ -742,11 +742,11 @@ python scripts/jellyfin_library_scan.py --library Movies --library Music
 python scripts/jellyfin_library_scan.py --all --dry-run
 ```
 
-Exit codes: `0` all accepted, `1` partial, `2` fatal. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_HOST`. Cron: Movies Fri 05:05, TV Shows Sat 05:05, Music Sun 05:05 (Music deliberately after the 04:45 `album_art.py` pass, because sacad writes `folder.jpg` straight to disk where no *arr ever reports it).
+Exit codes: `0` all accepted, `1` partial, `2` fatal. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_HOST`. Cron: Movies Fri 05:05, TV Shows Sat 05:05, Music Sun 05:05 (Music deliberately after the 04:45 `album_art.py` pass, because sacad writes `folder.jpg` straight to disk where no \*arr ever reports it).
 
 ### `lidarr_jellyfin_bridge.py`
 
-Makes Lidarr's imports actually reach Jellyfin. Lidarr's own "Update Library" connection *does* fire and Jellyfin *does* answer `204` — and it is still a silent no-op, which is exactly what the 204 hides. Lidarr reports `/music/...` paths; Jellyfin's Music library is `/data/movies/music/...`; `Library/Media/Updated` drops a path that resolves to no library without logging anything. Proven by A/B against the live server:
+Makes Lidarr's imports actually reach Jellyfin. Lidarr's own "Update Library" connection _does_ fire and Jellyfin _does_ answer `204` — and it is still a silent no-op, which is exactly what the 204 hides. Lidarr reports `/music/...` paths; Jellyfin's Music library is `/data/movies/music/...`; `Library/Media/Updated` drops a path that resolves to no library without logging anything. Proven by A/B against the live server:
 
 ```text
 POST {"Updates":[{"Path":"/music/Bathory/1988 - Blood Fire Death"}]}
@@ -755,7 +755,7 @@ POST {"Updates":[{"Path":"/data/movies/music/Bathory/1988 - Blood Fire Death"}]}
   -> 204, 'LibraryMonitor: "Blood Fire Death" ... will be refreshed', updated
 ```
 
-Sonarr and Radarr have `mapFrom`/`mapTo` fields on their MediaBrowser connection for this and they are now set. **Lidarr's does not expose them**, so this script is the mapping, applied outside Lidarr: poll Lidarr's history for `trackFileImported|Renamed|Retagged|Deleted`, take the album folder of each path, translate the prefix, and report it to Jellyfin. It reports the *album folder*, not the library root, so Jellyfin does a targeted refresh rather than the 1.56 GB whole-library walk. History is paged backwards to the cursor rather than trusting one page — one album alone produces ~25 records, so a single 200-record page does not reliably cover five minutes during a backlog drain.
+Sonarr and Radarr have `mapFrom`/`mapTo` fields on their MediaBrowser connection for this and they are now set. **Lidarr's does not expose them**, so this script is the mapping, applied outside Lidarr: poll Lidarr's history for `trackFileImported|Renamed|Retagged|Deleted`, take the album folder of each path, translate the prefix, and report it to Jellyfin. It reports the _album folder_, not the library root, so Jellyfin does a targeted refresh rather than the 1.56 GB whole-library walk. History is paged backwards to the cursor rather than trusting one page — one album alone produces ~25 records, so a single 200-record page does not reliably cover five minutes during a backlog drain.
 
 ```bash
 python scripts/lidarr_jellyfin_bridge.py --dry-run --since-min 120
@@ -767,7 +767,7 @@ Exit codes: `0` nothing to do or all reported, `1` partial (some folders outside
 
 ### `aac_fallback_track.py`
 
-Adds a **default** stereo AAC track to DTS-only media so browsers Direct Play it. Browsers cannot decode DTS and cannot play MKV, so a DTS-only file makes Jellyfin remux the container *and* transcode the audio for every web client — the exact path the Fargo stutter came down.
+Adds a **default** stereo AAC track to DTS-only media so browsers Direct Play it. Browsers cannot decode DTS and cannot play MKV, so a DTS-only file makes Jellyfin remux the container _and_ transcode the audio for every web client — the exact path the Fargo stutter came down.
 
 The non-obvious half, and the reason a naive "just add an AAC track" pass changes nothing: **Jellyfin's StreamBuilder evaluates the default audio stream.** With DTS still flagged default, `PlaybackInfo` returns `SupportsDirectPlay: false` even with a good AAC track present. Measured on Fargo S01E01 against the live server with a Chrome device profile:
 
@@ -776,7 +776,7 @@ before: DirectPlay=False DirectStream=False   audio: [dts 6ch DEFAULT]
 after:  DirectPlay=True  DirectStream=True    audio: [dts 6ch, aac 2ch DEFAULT]
 ```
 
-So the script always does both: append the track *and* move the default disposition. **Trade-off:** a client that could handle DTS 5.1 — the living-room TV app — now gets stereo unless the viewer picks the surround track. The DTS stream is still there, byte-identical and first in the file, just no longer default.
+So the script always does both: append the track _and_ move the default disposition. **Trade-off:** a client that could handle DTS 5.1 — the living-room TV app — now gets stereo unless the viewer picks the surround track. The DTS stream is still there, byte-identical and first in the file, just no longer default.
 
 Nothing is destroyed: the untouched original is moved to `<SHARE>/backups/aac-remux-originals/` with its path under the media root preserved, so a revert is a plain `mv` back. Conversion is staged outside the library (a half-written `*.mkv` in the media folder is something Jellyfin or Sonarr could pick up mid-conversion) and the staged file is re-probed before the original is touched. Files whose default audio is already browser-safe are skipped, so re-running is idempotent. There is no host ffmpeg, so by default it runs Jellyfin's own binary out of the Jellyfin image (`--ffmpeg`/`--ffprobe` override that).
 
@@ -790,7 +790,7 @@ Exit codes: `0` all processed, `1` partial, `2` fatal. Environment: `SHARE_DIREC
 
 ### `cron_job.py`
 
-Wraps a cron job so that **both** halves of failure are loud. A job that runs and exits fatal pushes an ntfy alert naming itself, its exit code and the tail of its stderr. A job that *stops running at all* produces no output to notice, so each run also writes `logs/cron-state/<name>.json` and `stack_watchdog.py` alerts when a job has not succeeded within the window its own cron line declares. That second half is what would have caught `media_ops_status.py`, dead since 2026-06-10 because its line ran `.venv/bin/python` with no `cd` — it failed at launch, produced nothing, and the ops dashboard served June data for three months.
+Wraps a cron job so that **both** halves of failure are loud. A job that runs and exits fatal pushes an ntfy alert naming itself, its exit code and the tail of its stderr. A job that _stops running at all_ produces no output to notice, so each run also writes `logs/cron-state/<name>.json` and `stack_watchdog.py` alerts when a job has not succeeded within the window its own cron line declares. That second half is what would have caught `media_ops_status.py`, dead since 2026-06-10 because its line ran `.venv/bin/python` with no `cd` — it failed at launch, produced nothing, and the ops dashboard served June data for three months.
 
 `--register` writes the state file without running anything, so a job that has never run once is still watched (staleness is measured from registration until the first success replaces it).
 

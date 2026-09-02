@@ -24,7 +24,7 @@ this host serves API 1.55.
 ADR-0006 handled the non-atomic recreate by opting six services out, one at a
 time, each with a comment explaining itself. That defence has three problems:
 
-1. It is opt-*out*, so the dangerous default applies to every new service until
+1. It is opt-_out_, so the dangerous default applies to every new service until
    someone remembers.
 2. It only protects the services someone thought to protect. The 16 still
    labelled were all exposed to the same failure — qbittorrent was simply the
@@ -52,7 +52,7 @@ containers.
 Per Watchtower's documentation, monitor-only **still pulls** images — HEAD
 digest checks let it skip a pull when nothing changed, but it pulls whenever the
 repository digest differs from the local one. And `--cleanup` only removes an
-old image *after* a container is restarted with a new one, so under monitor-only
+old image _after_ a container is restarted with a new one, so under monitor-only
 it never fires and pulled images accumulate.
 
 `WATCHTOWER_CLEANUP=true` is therefore left set but inert. The accumulation is
@@ -83,7 +83,7 @@ consequences worth stating rather than discovering:
 
 So the two services whose updates most want to be chosen deliberately get no
 notification at all — and relabelling them would not help, because the pin
-silences them anyway. Closing that needs a *version-aware* watcher (DIUN,
+silences them anyway. Closing that needs a _version-aware_ watcher (DIUN,
 WUD, or Renovate against the compose files), which is a different tool and its
 own decision. Recorded as an open gap in `README.md` rather than half-solved
 here.

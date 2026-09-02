@@ -38,7 +38,13 @@ if (Object.keys(overrides).length && !/^overrides:/m.test(ws)) {
 
 // 2) pnpm-workspace.yaml `onlyBuiltDependencies:` (list) → `allowBuilds:` (map)
 if (!/^allowBuilds:/m.test(ws)) {
-  const block = ws.match(/^onlyBuiltDependencies:[ \t]*\n((?:[ \t]+-[ \t].*\n?)+)/m)
+  // Each item line must end in \n, and the haystack is newline-terminated
+  // below: with `\n?` optional, `.*` and the next iteration's `[ \t]+` can
+  // trade characters, which is polynomial backtracking (regexp/no-super-
+  // linear-backtracking). Behaviour is otherwise identical -- verified against
+  // space-indented, tab-indented, mid-file and end-of-file blocks.
+  const wsNl = ws.endsWith('\n') ? ws : `${ws}\n`
+  const block = wsNl.match(/^onlyBuiltDependencies:[ \t]*\n((?:[ \t]+-[ \t][^\n]*\n)+)/m)
   const deps = block
     ? block[1].split('\n')
         .map(l => l.replace(/^[ \t]+-[ \t]*/, '').trim().replace(/^['"]|['"]$/g, ''))

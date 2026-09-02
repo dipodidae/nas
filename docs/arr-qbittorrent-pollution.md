@@ -1,4 +1,4 @@
-# qBittorrent pollution: what the *arrs leave behind, and why
+# qBittorrent pollution: what the \*arrs leave behind, and why
 
 **Date:** 2026-09-01
 **Scope:** diagnosis pass, then an approved execution pass. See
@@ -13,20 +13,20 @@ actually changed — including one thing that went wrong and was rolled back.
 **The removal contract is not broken. It is working exactly as designed, and it
 has removed everything it is still able to see.**
 
-The bucket the brief predicted would dominate — *"imported, goal met, but never
-paused because no share limit exists"* — is **empty**. Zero torrents. qBittorrent
+The bucket the brief predicted would dominate — _"imported, goal met, but never
+paused because no share limit exists"_ — is **empty**. Zero torrents. qBittorrent
 has global share limits enabled (`max_ratio=0.6`, `max_seeding_time=2000` min)
 with the action correctly set to **Pause**, so condition 4 fires routinely, and
 Sonarr/Radarr honour those globals.
 
-What actually accumulates is three things the contract structurally *cannot*
+What actually accumulates is three things the contract structurally _cannot_
 reach:
 
-| | why the *arr can never clean it |
-|---|---|
+|                             | why the \*arr can never clean it                                                                                                 |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | **28 torrents / 210.9 GiB** | the series was **deleted from Sonarr**, which deleted its history rows, so nothing associates the torrent with anything any more |
-| **32 torrents / 309.6 GiB** | never finished downloading — dead swarms, no seeders |
-| **11 torrents / 13.1 GiB** | finished, but Sonarr **refuses to import** them (fake releases containing `.exe`/`.scr`) |
+| **32 torrents / 309.6 GiB** | never finished downloading — dead swarms, no seeders                                                                             |
+| **11 torrents / 13.1 GiB**  | finished, but Sonarr **refuses to import** them (fake releases containing `.exe`/`.scr`)                                         |
 
 **71 torrents, 533.6 GiB.** The other 57 torrents (797.4 GiB) are seeding
 correctly toward the configured goal and should be left alone.
@@ -39,16 +39,16 @@ duplicating 0.96 TiB.** See §7.
 
 ## Hypotheses from the brief, graded
 
-| # | Hypothesis | Verdict |
-|---|---|---|
-| 1 | No share limits → condition 4 never fires → "the most common cause" | **FALSE.** `max_ratio_enabled=True`, `max_ratio=0.6`, `max_seeding_time_enabled=True`, `max_seeding_time=2000`. 33 torrents are in `stoppedUP` right now — the limit demonstrably fires. |
-| 2 | Share-limit action set to Remove rather than Pause | **FALSE.** `max_ratio_act=0` (Pause). Correct, and the *arrs would have rejected the client otherwise. |
-| 3 | Post-import category move orphaning torrents (condition 2) | **FALSE.** `tvImportedCategory` and `movieImportedCategory` are both `''`. No category moves. Every torrent is still in `arr-sonarr` / `arr-radarr`. |
-| 4 | `Initial State: Forced` bypassing seed thresholds | **FALSE.** `initialState=0` (Start) in both. `force_start=true` on **0/128** torrents. |
-| 5 | Seed goals set per-indexer then changed, leaving a mismatch | **FALSE, but not for the reason implied.** No seed criteria exist *anywhere* — `seedCriteria.seedRatio`/`seedTime`/`seasonPackSeedTime` are `None` on all 14 Sonarr and 11 Radarr indexers, and all 16 Prowlarr definitions. Consistent with all 128 torrents reporting `ratio_limit=-2` / `seeding_time_limit=-2` ("use global"). There is no mismatch because there is only one goal source: qBittorrent's global limit, which Sonarr and Radarr both read and honour. |
-| 6 | Radarr has no failed-download handling for torrents | **TRUE but immaterial here.** Radarr's queue holds 4 items total, 3 stalled. Radarr contributes 7 torrents / 33.6 GiB to the whole picture. This is a Sonarr problem by volume (121 of 128 torrents). |
-| 7 | Torrents added outside the *arrs / in unowned categories | **PARTLY.** No uncategorised torrents exist. But `arr-lidarr`, `arr-slskd` and `prowlarr` are categories **no download client claims** — see §4. They are currently empty of torrents, so the present cost is zero. |
-| 8 | Stuck queue items pile up | **TRUE**, and quantified in bucket D/E. |
+| #   | Hypothesis                                                          | Verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | No share limits → condition 4 never fires → "the most common cause" | **FALSE.** `max_ratio_enabled=True`, `max_ratio=0.6`, `max_seeding_time_enabled=True`, `max_seeding_time=2000`. 33 torrents are in `stoppedUP` right now — the limit demonstrably fires.                                                                                                                                                                                                                                                                                 |
+| 2   | Share-limit action set to Remove rather than Pause                  | **FALSE.** `max_ratio_act=0` (Pause). Correct, and the \*arrs would have rejected the client otherwise.                                                                                                                                                                                                                                                                                                                                                                  |
+| 3   | Post-import category move orphaning torrents (condition 2)          | **FALSE.** `tvImportedCategory` and `movieImportedCategory` are both `''`. No category moves. Every torrent is still in `arr-sonarr` / `arr-radarr`.                                                                                                                                                                                                                                                                                                                     |
+| 4   | `Initial State: Forced` bypassing seed thresholds                   | **FALSE.** `initialState=0` (Start) in both. `force_start=true` on **0/128** torrents.                                                                                                                                                                                                                                                                                                                                                                                   |
+| 5   | Seed goals set per-indexer then changed, leaving a mismatch         | **FALSE, but not for the reason implied.** No seed criteria exist _anywhere_ — `seedCriteria.seedRatio`/`seedTime`/`seasonPackSeedTime` are `None` on all 14 Sonarr and 11 Radarr indexers, and all 16 Prowlarr definitions. Consistent with all 128 torrents reporting `ratio_limit=-2` / `seeding_time_limit=-2` ("use global"). There is no mismatch because there is only one goal source: qBittorrent's global limit, which Sonarr and Radarr both read and honour. |
+| 6   | Radarr has no failed-download handling for torrents                 | **TRUE but immaterial here.** Radarr's queue holds 4 items total, 3 stalled. Radarr contributes 7 torrents / 33.6 GiB to the whole picture. This is a Sonarr problem by volume (121 of 128 torrents).                                                                                                                                                                                                                                                                    |
+| 7   | Torrents added outside the \*arrs / in unowned categories           | **PARTLY.** No uncategorised torrents exist. But `arr-lidarr`, `arr-slskd` and `prowlarr` are categories **no download client claims** — see §4. They are currently empty of torrents, so the present cost is zero.                                                                                                                                                                                                                                                      |
+| 8   | Stuck queue items pile up                                           | **TRUE**, and quantified in bucket D/E.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 **Cause not in the brief, and the largest single bucket:** deleting a series from
 Sonarr silently orphans its torrents forever (§A/F).
@@ -61,26 +61,26 @@ Sonarr silently orphans its torrents forever (§A/F).
 
 **By category** — only two are in use:
 
-| Category | N | Size | Claimed by |
-|---|---|---|---|
-| `arr-sonarr` | 121 | 1297.5 GiB | Sonarr |
-| `arr-radarr` | 7 | 33.6 GiB | Radarr |
-| `arr-lidarr` | 0 | — | **nobody** (Lidarr uses Slskd, not qBittorrent) |
-| `arr-slskd` | 0 | — | **nobody** (slskd is not a qBittorrent category) |
-| `prowlarr` | 0 | — | **nobody** (empty savePath) |
+| Category     | N   | Size       | Claimed by                                       |
+| ------------ | --- | ---------- | ------------------------------------------------ |
+| `arr-sonarr` | 121 | 1297.5 GiB | Sonarr                                           |
+| `arr-radarr` | 7   | 33.6 GiB   | Radarr                                           |
+| `arr-lidarr` | 0   | —          | **nobody** (Lidarr uses Slskd, not qBittorrent)  |
+| `arr-slskd`  | 0   | —          | **nobody** (slskd is not a qBittorrent category) |
+| `prowlarr`   | 0   | —          | **nobody** (empty savePath)                      |
 
 There are **no uncategorised torrents**.
 
 **By state:**
 
-| State | N | Size |
-|---|---|---|
-| `queuedUP` | 62 | 803.3 GiB |
-| `stoppedUP` | 33 | 178.9 GiB |
-| `stalledDL` | 17 | 280.0 GiB |
-| `queuedDL` | 8 | 5.3 GiB |
-| `metaDL` | 6 | 0.0 GiB |
-| `downloading` | 2 | 63.6 GiB |
+| State         | N   | Size      |
+| ------------- | --- | --------- |
+| `queuedUP`    | 62  | 803.3 GiB |
+| `stoppedUP`   | 33  | 178.9 GiB |
+| `stalledDL`   | 17  | 280.0 GiB |
+| `queuedDL`    | 8   | 5.3 GiB   |
+| `metaDL`      | 6   | 0.0 GiB   |
+| `downloading` | 2   | 63.6 GiB  |
 
 No `error`, no `missingFiles`, no `checkingUP`. The client itself is healthy.
 
@@ -91,13 +91,13 @@ Every torrent defers entirely to the global setting.
 
 **Age since completion** (95 completed torrents):
 
-| Age | N | Size |
-|---|---|---|
-| <1d | 3 | 5.2 GiB |
-| 1–7d | 49 | 629.7 GiB |
-| 7–30d | 15 | 174.6 GiB |
-| 30–90d | 11 | 56.3 GiB |
-| 90–365d | 17 | 116.3 GiB |
+| Age     | N   | Size      |
+| ------- | --- | --------- |
+| <1d     | 3   | 5.2 GiB   |
+| 1–7d    | 49  | 629.7 GiB |
+| 7–30d   | 15  | 174.6 GiB |
+| 30–90d  | 11  | 56.3 GiB  |
+| 90–365d | 17  | 116.3 GiB |
 
 The 90–365d tail is almost entirely bucket F.
 
@@ -130,23 +130,23 @@ working as designed, just slowly.
 
 ---
 
-## 3. *arr download-client configuration
+## 3. \*arr download-client configuration
 
-| | Sonarr 4.0.19.2979 | Radarr 6.3.0.10514 | Lidarr 3.1.4.5029 |
-|---|---|---|---|
-| qBittorrent client | enabled | enabled | **none — uses Slskd** |
-| Category | `arr-sonarr` | `arr-radarr` | n/a |
-| `removeCompletedDownloads` | **True** | **True** | True (Slskd) |
-| `removeFailedDownloads` | **True** | **True** | True (Slskd) |
-| Post-import category | `''` (none) | `''` (none) | n/a |
-| `initialState` | 0 (Start) | 0 (Start) | n/a |
-| Completed Download Handling | **True** | **True** | True |
-| `checkForFinishedDownloadInterval` | `None` | 1 | `None` |
-| Root folder | `/tv` | `/movies` | `/music` |
-| Remote path mappings | none | none | none |
+|                                    | Sonarr 4.0.19.2979 | Radarr 6.3.0.10514 | Lidarr 3.1.4.5029     |
+| ---------------------------------- | ------------------ | ------------------ | --------------------- |
+| qBittorrent client                 | enabled            | enabled            | **none — uses Slskd** |
+| Category                           | `arr-sonarr`       | `arr-radarr`       | n/a                   |
+| `removeCompletedDownloads`         | **True**           | **True**           | True (Slskd)          |
+| `removeFailedDownloads`            | **True**           | **True**           | True (Slskd)          |
+| Post-import category               | `''` (none)        | `''` (none)        | n/a                   |
+| `initialState`                     | 0 (Start)          | 0 (Start)          | n/a                   |
+| Completed Download Handling        | **True**           | **True**           | True                  |
+| `checkForFinishedDownloadInterval` | `None`             | 1                  | `None`                |
+| Root folder                        | `/tv`              | `/movies`          | `/music`              |
+| Remote path mappings               | none               | none               | none                  |
 
 Both versions postdate qBittorrent 5.0's `pausedUP` → `stoppedUP` state rename,
-so the "old *arr can't read the new state" failure mode does not apply here. I
+so the "old \*arr can't read the new state" failure mode does not apply here. I
 verified this behaviourally rather than by changelog: Sonarr's queue correctly
 reports 18 items as `completed`/`importPending`, which requires it to be reading
 the completed state.
@@ -174,7 +174,7 @@ None set, anywhere:
 - Radarr, 11 indexers: same, all `None`.
 - Prowlarr, 16 definitions: `torrentBaseSettings.seedRatio`, `.seedTime`,
   `.packSeedTime` all `None`.
-- `minimumSeeders: 1` everywhere (this is a *grab* filter, not a seed goal).
+- `minimumSeeders: 1` everywhere (this is a _grab_ filter, not a seed goal).
 
 This matches the client state exactly (`-2` on every torrent) and is
 **self-consistent, not a misconfiguration**. It means qBittorrent's global limit
@@ -186,10 +186,10 @@ per indexer.
 
 ## 6. Queues
 
-| | Sonarr | Radarr | Lidarr |
-|---|---|---|---|
-| Queue records | 158 | 4 | 0 |
-| Distinct torrents behind them | 121 | 7 | 0 |
+|                               | Sonarr | Radarr | Lidarr |
+| ----------------------------- | ------ | ------ | ------ |
+| Queue records                 | 158    | 4      | 0      |
+| Distinct torrents behind them | 121    | 7      | 0      |
 
 158 records over 121 torrents is not duplication — a season pack produces one
 queue record per episode, all sharing a `downloadId`. **Every queue item has a
@@ -198,23 +198,23 @@ item that no longer exists.** The two systems agree.
 
 **Sonarr queue by status:**
 
-| N | status | tracked | state |
-|---|---|---|---|
-| 88 | warning | ok | downloading |
-| 32 | downloading | ok | downloading |
-| 20 | queued | ok | downloading |
-| 18 | completed | **warning** | **importPending** |
+| N   | status      | tracked     | state             |
+| --- | ----------- | ----------- | ----------------- |
+| 88  | warning     | ok          | downloading       |
+| 32  | downloading | ok          | downloading       |
+| 20  | queued      | ok          | downloading       |
+| 18  | completed   | **warning** | **importPending** |
 
 **Grouped messages** — five root causes, not forty:
 
-| Count | Message |
-|---|---|
-| 88 | `The download is stalled with no connections` |
-| 13 | `qBittorrent is downloading metadata` |
-| 9 | `Caution: Found executable file with extension: '.exe'` |
-| 4 | `Unable to parse file` |
-| 3 | `Caution: Found potentially dangerous file with extension: .scr` |
-| 2 | `Invalid season or episode` |
+| Count | Message                                                          |
+| ----- | ---------------------------------------------------------------- |
+| 88    | `The download is stalled with no connections`                    |
+| 13    | `qBittorrent is downloading metadata`                            |
+| 9     | `Caution: Found executable file with extension: '.exe'`          |
+| 4     | `Unable to parse file`                                           |
+| 3     | `Caution: Found potentially dangerous file with extension: .scr` |
+| 2     | `Invalid season or episode`                                      |
 
 ---
 
@@ -260,11 +260,11 @@ are restructured. Fix in §B.
 
 Almost none, which is good news:
 
-| Path | Size | Assessment |
-|---|---|---|
-| `/mnt/drive/downloads/complete/slskd` | 16.54 GiB | slskd's own tree, not qBittorrent's. Out of scope. |
-| `/mnt/drive/downloads/complete/manual` | 0.91 GiB | qBittorrent's default save path; manual adds. |
-| `/mnt/drive/downloads/incomplete/slskd` | 0.18 GiB | slskd. Out of scope. |
+| Path                                    | Size      | Assessment                                         |
+| --------------------------------------- | --------- | -------------------------------------------------- |
+| `/mnt/drive/downloads/complete/slskd`   | 16.54 GiB | slskd's own tree, not qBittorrent's. Out of scope. |
+| `/mnt/drive/downloads/complete/manual`  | 0.91 GiB  | qBittorrent's default save path; manual adds.      |
+| `/mnt/drive/downloads/incomplete/slskd` | 0.18 GiB  | slskd. Out of scope.                               |
 
 6 torrents report a `content_path` that does not exist on disk — all 6 are
 `metaDL` (metadata not yet fetched, so the path is not created yet). **Not**
@@ -276,17 +276,17 @@ There is no meaningful orphan-file problem. The pollution is torrents, not files
 
 ## A. Bucket classification
 
-| Bucket | N | Size | Verdict |
-|---|---|---|---|
-| **A. Seeding toward the global goal** | 51 | 781.9 GiB | working as intended — leave alone |
-| **A2. Imported, still tracked, seeding** | 6 | 15.5 GiB | working as intended — leave alone |
-| **B. Imported, goal met, never paused** | **0** | **0** | *the predicted bucket is empty* |
-| **C. Orphaned by category change** | **0** | **0** | no post-import category is configured |
-| **D. Completed, import blocked** | 11 | 13.1 GiB | junk — fake releases |
-| **E. Never imported: stalled/dead** | 32 | 309.6 GiB | mostly junk, partly in-flight |
-| **F. Orphaned: no *arr history** | 28 | 210.9 GiB | junk — deleted series |
-| **G. Dead data (no hardlink outside downloads)** | n/a | — | **not measurable here** — see note |
-| **H. Errored / missingFiles / unregistered** | 0 | 0 | none in these states |
+| Bucket                                           | N     | Size      | Verdict                               |
+| ------------------------------------------------ | ----- | --------- | ------------------------------------- |
+| **A. Seeding toward the global goal**            | 51    | 781.9 GiB | working as intended — leave alone     |
+| **A2. Imported, still tracked, seeding**         | 6     | 15.5 GiB  | working as intended — leave alone     |
+| **B. Imported, goal met, never paused**          | **0** | **0**     | _the predicted bucket is empty_       |
+| **C. Orphaned by category change**               | **0** | **0**     | no post-import category is configured |
+| **D. Completed, import blocked**                 | 11    | 13.1 GiB  | junk — fake releases                  |
+| **E. Never imported: stalled/dead**              | 32    | 309.6 GiB | mostly junk, partly in-flight         |
+| **F. Orphaned: no \*arr history**                | 28    | 210.9 GiB | junk — deleted series                 |
+| **G. Dead data (no hardlink outside downloads)** | n/a   | —         | **not measurable here** — see note    |
+| **H. Errored / missingFiles / unregistered**     | 0     | 0         | none in these states                  |
 
 **Total junk: 71 torrents, 533.6 GiB. Total legitimate: 57 torrents, 797.4 GiB.**
 
@@ -299,11 +299,11 @@ There is no meaningful orphan-file problem. The pollution is torrents, not files
 
 ### Bucket D detail (11 torrents, 13.1 GiB)
 
-| Count | Reason |
-|---|---|
-| 7 | `.exe` in the release |
-| 3 | `.scr` in the release |
-| 1 | `Invalid season or episode` |
+| Count | Reason                      |
+| ----- | --------------------------- |
+| 7     | `.exe` in the release       |
+| 3     | `.scr` in the release       |
+| 1     | `Invalid season or episode` |
 
 All are complete and paused (goal met), sitting in Sonarr's queue as
 `importPending` with a warning. Sonarr will never import them and will never
@@ -328,7 +328,7 @@ Carbon, Lang Leve De Liefde, Lucky.
 
 **None of the eight exists in Sonarr's 59-series library.** Verified by direct
 substring probe against the real title list, with a control group: torrents that
-*do* have history all match a library series.
+_do_ have history all match a library series.
 
 All 28 have **no history record at all** across the complete 2347-record Sonarr
 history and 53-record Radarr history (I paged the full set — an initial 2000-record
@@ -341,21 +341,21 @@ torrents on the box).
 
 ## B. Root cause and correct fix, per bucket
 
-### F — orphaned by series deletion (28 / 210.9 GiB) · *the main event*
+### F — orphaned by series deletion (28 / 210.9 GiB) · _the main event_
 
 **Cause.** Deleting a series in Sonarr removes its history rows. Sonarr's cleanup
 is driven by tracked downloads, which are matched to history. No history → no
 tracking → the torrent is invisible to Sonarr forever, regardless of category,
-state, or seed goal. Nothing in the *arr stack will ever reclaim it.
+state, or seed goal. Nothing in the \*arr stack will ever reclaim it.
 
 **Fix — config, and it prevents recurrence:** this is precisely what
 **cleanuparr's Download Cleaner** exists for. It compares the client's torrents
-against what the *arrs actually know about and cleans the difference, with
+against what the \*arrs actually know about and cleans the difference, with
 per-category seeding rules. Cleanuparr is **already deployed and running in this
 stack** — every module is switched off (§E).
 
-**Also:** when deleting a series in future, tick *"Delete downloads from download
-client"* in the Sonarr delete dialog. That handles it at source.
+**Also:** when deleting a series in future, tick _"Delete downloads from download
+client"_ in the Sonarr delete dialog. That handles it at source.
 
 ### E — stalled/dead downloads (32 / 309.6 GiB)
 
@@ -368,7 +368,7 @@ and there is no timeout by default.
 tells Sonarr to grab an alternative. That is strictly better than deleting,
 because it triggers a re-search. Note `queue_cleaner_configs.downloading_metadata_max_strikes`
 and `failed_import_max_strikes` are currently `0` (disabled) and
-`arr_configs.failed_import_max_strikes` is `-1` on all five *arr rows.
+`arr_configs.failed_import_max_strikes` is `-1` on all five \*arr rows.
 
 ### D — blocked imports, fake releases (11 / 13.1 GiB)
 
@@ -377,13 +377,13 @@ them; refusal means removal never triggers.
 
 **Fix — config:** cleanuparr's **Content Blocker** (currently `enabled=0`) with a
 blacklist covering executable extensions. It removes and blocklists the release
-so the *arr re-grabs something else. This also stops the malware reaching the
+so the \*arr re-grabs something else. This also stops the malware reaching the
 library, which matters more than the 13 GiB.
 
 ### A / A2 — legitimate seeding (57 / 797.4 GiB)
 
 **No action.** These are working. If 797 GiB of seeding is more than you want to
-carry, the lever is the *goal*, not deletion: lower `max_ratio` below 0.6 or
+carry, the lever is the _goal_, not deletion: lower `max_ratio` below 0.6 or
 `max_seeding_time` below 2000 minutes and the existing machinery will pause and
 remove them on its own. Do not delete them by hand — that fights the system that
 is working.
@@ -394,14 +394,14 @@ is working.
 bind mounts. `link()` returns `EXDEV` across mount points even on one filesystem,
 so `copyUsingHardlinks=True` silently degrades to copy.
 
-**Fix — compose change, prevents recurrence:** give each *arr and qBittorrent a
+**Fix — compose change, prevents recurrence:** give each \*arr and qBittorrent a
 **single** mount covering both trees, e.g. `/mnt/drive:/data`, and move root
 folders to `/data/series`, `/data/movies`, `/data/music` with downloads at
 `/data/downloads`. Then hardlinks work, imports are instant instead of a
 multi-gigabyte copy, and a seeding torrent costs no extra disk.
 
 **This is a migration, not a toggle.** It changes every root folder path and
-every download client path, and the *arrs must be updated in step or they will
+every download client path, and the \*arrs must be updated in step or they will
 lose track of the library. It should be its own change, planned separately, with
 its own rollback. I am flagging it, not proposing to do it in the cleanup below.
 
@@ -425,13 +425,13 @@ python scripts/qbit_cleanup_plan.py --bucket F --detail                # one buc
 
 Ordered by risk, lowest first:
 
-| Step | Action | N | Reclaims | Risk |
-|---|---|---|---|---|
-| **1** | Enable cleanuparr **Content Blocker** (bucket D) | 11 | 13.1 GiB | **Low.** Fake releases with executables. Blocklists and re-grabs. |
-| **2** | Enable cleanuparr **Queue Cleaner**, stalled + metadata strikes (bucket E, provably-dead subset only) | 2 | 2.0 GiB | **Low.** Only torrents >14d old *and* 0% progress *and* `availability<1`. Triggers a re-search. |
-| **3** | Enable cleanuparr **Download Cleaner** for unlinked/unknown (bucket F) | 28 | 210.9 GiB | **Medium.** Deletes data for series you deliberately removed. Irreversible — re-downloading means re-grabbing. |
-| **4** | Delete the three orphan categories `arr-lidarr`, `arr-slskd`, `prowlarr` | 0 | 0 | **None.** Cosmetic; no torrents attached. |
-| **5** | *(separate change)* single-mount restructure for hardlinks | — | up to 0.96 TiB | **High.** Path migration. Plan and roll back independently. |
+| Step  | Action                                                                                                | N   | Reclaims       | Risk                                                                                                           |
+| ----- | ----------------------------------------------------------------------------------------------------- | --- | -------------- | -------------------------------------------------------------------------------------------------------------- |
+| **1** | Enable cleanuparr **Content Blocker** (bucket D)                                                      | 11  | 13.1 GiB       | **Low.** Fake releases with executables. Blocklists and re-grabs.                                              |
+| **2** | Enable cleanuparr **Queue Cleaner**, stalled + metadata strikes (bucket E, provably-dead subset only) | 2   | 2.0 GiB        | **Low.** Only torrents >14d old _and_ 0% progress _and_ `availability<1`. Triggers a re-search.                |
+| **3** | Enable cleanuparr **Download Cleaner** for unlinked/unknown (bucket F)                                | 28  | 210.9 GiB      | **Medium.** Deletes data for series you deliberately removed. Irreversible — re-downloading means re-grabbing. |
+| **4** | Delete the three orphan categories `arr-lidarr`, `arr-slskd`, `prowlarr`                              | 0   | 0              | **None.** Cosmetic; no torrents attached.                                                                      |
+| **5** | _(separate change)_ single-mount restructure for hardlinks                                            | —   | up to 0.96 TiB | **High.** Path migration. Plan and roll back independently.                                                    |
 
 **Steps 1–3 total 41 torrents / 226.1 GiB** — not the full 533.6 GiB of junk.
 The difference is deliberate. Of bucket E's 32 torrents, only 6 satisfy all three
@@ -452,7 +452,7 @@ me if you want it and it becomes step 2b.
   warning, will never import.
 - Step 2: bucket E ∧ `added_on` > 14d ∧ `progress == 0` ∧ `availability < 1` —
   no complete copy exists in the swarm, so it can never finish.
-- Step 3: bucket F — no history row in either *arr across the full history set,
+- Step 3: bucket F — no history row in either \*arr across the full history set,
   **and** the parent series is absent from the library. Both conditions, not
   either.
 
@@ -503,7 +503,7 @@ courtesy seeding on public trackers, and you may well decide it is not worth
 > One finding worth pulling forward: the **Dead Torrents** module was tried,
 > dry-run, and rejected. It struck 22 torrents, every one of them 100%
 > complete and seeding toward the goal — bucket A. "No seeders" means no
-> *other* seeder, which is the resting state of 25 of the 59 completed
+> _other_ seeder, which is the resting state of 25 of the 59 completed
 > torrents here. Bucket G's `-links 1` heuristic remains unusable for a
 > second reason too: hardlinks work now (commit `13dbdb9`), but the
 > pre-restructure backlog is still `nlink=1`.
@@ -511,24 +511,24 @@ courtesy seeding on public trackers, and you may well decide it is not worth
 **You already have one, and it is switched off.**
 
 `cleanuparr` is deployed, running, healthy, published at its own subdomain, wired
-to all three *arrs and to qBittorrent, and it has been up for two weeks. Every
+to all three \*arrs and to qBittorrent, and it has been up for two weeks. Every
 functional module is disabled:
 
-| Module | State |
-|---|---|
-| Queue Cleaner | `enabled=0` |
-| Content Blocker | `enabled=0` |
-| Download Cleaner | `enabled=0` |
-| Blacklist Sync | `enabled=0` |
+| Module                                   | State                         |
+| ---------------------------------------- | ----------------------------- |
+| Queue Cleaner                            | `enabled=0`                   |
+| Content Blocker                          | `enabled=0`                   |
+| Download Cleaner                         | `enabled=0`                   |
+| Blacklist Sync                           | `enabled=0`                   |
 | Unlinked / Orphaned / Dead-torrent rules | **0 rows — never configured** |
-| qBittorrent seeding rules | **0 rows — never configured** |
+| qBittorrent seeding rules                | **0 rows — never configured** |
 
 `general_configs.dry_run = 0`, so once a module is enabled it acts immediately.
 **Enable one at a time and watch it**, ideally after setting `dry_run=1` first.
 
 **So the honest answer is neither of your two options.** It is not "fix four
 settings and this stops", because the two largest buckets (F and E) are
-structurally outside what Sonarr and Radarr can ever clean — no *arr setting
+structurally outside what Sonarr and Radarr can ever clean — no \*arr setting
 reaches a torrent whose history has been deleted. And it is not "you need a
 janitor process", because you already installed one; nothing new should be added
 to the stack.
@@ -566,7 +566,7 @@ or, in the no-hardlink case, actively misleading on this box until §7 is fixed.
   inference.
 - **Bucket F's series matching used title normalisation.** I sanity-checked it
   with a direct substring probe on all eight shows and with a control group of
-  torrents that *do* have history, and it held. But an alternate-title edge case
+  torrents that _do_ have history, and it held. But an alternate-title edge case
   could in principle misclassify one.
 - **I did not verify cleanuparr's behaviour**, only its stored configuration. Its
   modules have never run on this stack, so there is no observed behaviour to
@@ -601,13 +601,12 @@ torrents, about 0.4 MiB per torrent.** Removing 71 torrents would save on the
 order of **30 MiB of anon**, against a host with 30 GiB.
 
 For context, the last kernel OOM kill on this box was `2026-09-01 05:34:58`, and
-it was Jellyfin at ~23 GiB of *anonymous* RSS — a different mechanism entirely,
+it was Jellyfin at ~23 GiB of _anonymous_ RSS — a different mechanism entirely,
 already fixed (`docs/jellyfin-playback-audit.md`).
 
 **The real benefit of this cleanup is disk: 533.6 GiB of junk, and separately
 0.96 TiB of duplication from the hardlink defect.** That is a genuine and large
 win. Memory is a rounding error and should not appear in the justification.
-
 
 ---
 
@@ -619,14 +618,14 @@ waived for the restructure.
 
 ### Cleanup — done, clean
 
-| | |
-|---|---|
-| Removed | 41 torrents, 226.1 GiB |
-| Torrents 128 → | **88** (87 remaining + 1 new grab from the blocklist re-search) |
-| Total size 1331.1 GiB → | **1116.4 GiB** |
-| Errored / missingFiles after | **0** |
-| `stoppedUP` after | **0** (all 33 were in buckets D and F) |
-| Sonarr queue warnings 88 → | **7** |
+|                              |                                                                 |
+| ---------------------------- | --------------------------------------------------------------- |
+| Removed                      | 41 torrents, 226.1 GiB                                          |
+| Torrents 128 →               | **88** (87 remaining + 1 new grab from the blocklist re-search) |
+| Total size 1331.1 GiB →      | **1116.4 GiB**                                                  |
+| Errored / missingFiles after | **0**                                                           |
+| `stoppedUP` after            | **0** (all 33 were in buckets D and F)                          |
+| Sonarr queue warnings 88 →   | **7**                                                           |
 
 Buckets D and E went out through the *arr queue API with `blocklist=true`, so
 those releases are blocklisted and re-searched rather than silently dropped —
@@ -642,7 +641,7 @@ Pre-change backups: `/mnt/drive/backups/pre-cleanup-1788287701/`.
 mounts rather than replacing them, so the change is reversible. Root folders
 moved to `/data/series` and `/data/movies` via each app's bulk editor with
 `moveFiles=false`, and a remote path mapping (`qbittorrent:/downloads/` →
-`/data/downloads/`) makes the *arr resolve downloads under the same mount.
+`/data/downloads/`) makes the \*arr resolve downloads under the same mount.
 
 Verified by probe, which is the whole point:
 
@@ -656,7 +655,7 @@ Integrity after repath: Sonarr 59/59 series, 1080 episode files, 2.51 TiB —
 all unchanged. Radarr 37/37 movies, 0.25 TiB — unchanged.
 
 **qBittorrent was not touched.** It does not need the unified mount: hardlinking
-happens inside the *arr containers, so the earlier day's fix stayed under
+happens inside the \*arr containers, so the earlier day's fix stayed under
 observation with 0 restarts.
 
 **This prevents future duplication; it does not reclaim the existing 0.96 TiB.**
@@ -691,13 +690,13 @@ hardlinks.** That is the status quo, not a regression — but it is unfinished
 work, and it should not be retried with the same method.
 
 **Why it differs from Sonarr/Radarr — a guess, not a finding.** Lidarr is a
-much older fork of the *arr codebase and its editor endpoint likely treats a
+much older fork of the \*arr codebase and its editor endpoint likely treats a
 root-folder change as a move and unlinks track files when `moveFiles` is false,
 rather than rewriting paths in place. I did not read Lidarr's source to confirm
 this, and it should be verified before any retry.
 
 **Safer approach if you want Lidarr on `/data` later:** add the root folder,
-move a *single* artist, verify `TrackFiles` is intact for it, and only then
+move a _single_ artist, verify `TrackFiles` is intact for it, and only then
 proceed — or skip the editor entirely and rewrite `Artists.Path` plus
 `TrackFiles.Path` directly with Lidarr stopped, which is more invasive but has
 predictable semantics.
@@ -713,10 +712,10 @@ call to make unattended, so it was left alone.
 **The three toggles that close the recurrence loop**, in the UI at
 `http://127.0.0.1:11011`, ideally with `dry_run` on first:
 
-| Module | Setting | Closes bucket |
-|---|---|---|
-| Content Blocker | enable; blacklist executable extensions | D — fake releases |
-| Queue Cleaner | enable; set stalled + `downloading metadata` strikes (both are `0`/disabled now) | E — dead swarms |
-| Download Cleaner | enable; add a qBittorrent seeding rule (`q_bit_seeding_rules` has 0 rows) | F — orphaned by deleted series |
+| Module           | Setting                                                                          | Closes bucket                  |
+| ---------------- | -------------------------------------------------------------------------------- | ------------------------------ |
+| Content Blocker  | enable; blacklist executable extensions                                          | D — fake releases              |
+| Queue Cleaner    | enable; set stalled + `downloading metadata` strikes (both are `0`/disabled now) | E — dead swarms                |
+| Download Cleaner | enable; add a qBittorrent seeding rule (`q_bit_seeding_rules` has 0 rows)        | F — orphaned by deleted series |
 
 Until those are on, all three buckets will refill.
