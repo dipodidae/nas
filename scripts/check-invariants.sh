@@ -413,6 +413,92 @@ if _ah:
     ok("autoheal-healthchecks-local", f"liveness-only on {', '.join(_ah)}")
 
 # ==========================================================================
+# 12. autoheal's own timeouts must exceed the longest graceful stop it can hit
+# ==========================================================================
+# autoheal ignores compose's stop_grace_period and uses its own stop timeout
+# (default 10s). Its restart call blocks for that whole timeout, so a shorter
+# CURL_TIMEOUT makes it log a failure and re-issue the restart every
+# AUTOHEAL_INTERVAL while the first is still in flight -- measured 2026-09-01
+# as three overlapping requests against a restart that succeeded at t+150s.
+#
+# Scope: ONLY services autoheal actually monitors. A long grace period on an
+# unmonitored service is autoheal's business never. And a per-container
+# `autoheal.stop.timeout` label overrides the global default, so it has to be
+# checked against that service's own grace period, not the global floor.
+# ADR-0010.
+def _secs(v):
+    """Compose duration ('2m0s', '90s', '1m') or bare seconds; None if unparseable."""
+    s = str(v).strip()
+    if s.isdigit():
+        return int(s)
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", s)
+    if not m or not any(m.groups()):
+        return None
+    h, mi, se = m.groups()
+    return int(int(h or 0) * 3600 + int(mi or 0) * 60 + float(se or 0))
+
+def _labels(svc):
+    lbls = svc.get("labels") or {}
+    if isinstance(lbls, list):
+        lbls = dict(x.split("=", 1) for x in lbls if "=" in x)
+    return lbls
+
+ae = env_of("autoheal")
+stop_to = _secs(ae.get("AUTOHEAL_DEFAULT_STOP_TIMEOUT", "10"))
+curl_to = _secs(ae.get("CURL_TIMEOUT", "30"))
+
+monitored = {s: v for s, v in services.items()
+             if str(_labels(v).get("autoheal", "")).lower() == "true"}
+graces, unparseable = {}, []
+for s, v in monitored.items():
+    if not v.get("stop_grace_period"):
+        continue
+    secs = _secs(v["stop_grace_period"])
+    (unparseable.append(f"{s}={v['stop_grace_period']!r}") if secs is None
+     else graces.__setitem__(s, secs))
+
+if stop_to is None or curl_to is None:
+    fail("autoheal-timeouts", "ADR-0010",
+         "could not parse AUTOHEAL_DEFAULT_STOP_TIMEOUT="
+         f"{ae.get('AUTOHEAL_DEFAULT_STOP_TIMEOUT')!r} / CURL_TIMEOUT="
+         f"{ae.get('CURL_TIMEOUT')!r}.")
+elif unparseable:
+    fail("autoheal-timeouts", "ADR-0010",
+         f"unparseable stop_grace_period on {', '.join(unparseable)} -- the "
+         "floor cannot be computed, so it cannot be trusted. Use a plain "
+         "compose duration like '120s' or '2m0s'.")
+else:
+    worst = max(graces.values(), default=0)
+    worst_svc = max(graces, key=graces.get) if graces else "(none)"
+    # A per-container override must clear THAT service's own grace period.
+    per_bad = []
+    for s, v in monitored.items():
+        override = _secs(_labels(v).get("autoheal.stop.timeout", "")) if \
+            _labels(v).get("autoheal.stop.timeout") else None
+        if override is not None and override < graces.get(s, 0):
+            per_bad.append(f"{s}: autoheal.stop.timeout={override}s < its own "
+                           f"stop_grace_period {graces[s]}s")
+    if stop_to < worst:
+        fail("autoheal-timeouts", "ADR-0010",
+             f"AUTOHEAL_DEFAULT_STOP_TIMEOUT={stop_to}s < the longest "
+             f"stop_grace_period among autoheal-monitored services ({worst}s, "
+             f"{worst_svc}). autoheal would SIGKILL mid-flush, which is exactly "
+             "the ungraceful kill that orphans qbittorrent's lockfile.")
+    elif per_bad:
+        fail("autoheal-timeouts", "ADR-0010",
+             "per-container override defeats the global floor -- " + "; ".join(per_bad))
+    elif curl_to <= stop_to:
+        fail("autoheal-timeouts", "ADR-0010",
+             f"CURL_TIMEOUT={curl_to}s must be strictly greater than "
+             f"AUTOHEAL_DEFAULT_STOP_TIMEOUT={stop_to}s, or the restart call is "
+             "cut off mid-stop, logged as failed, and re-issued on top of the "
+             "one still in flight.")
+    else:
+        ok("autoheal-timeouts",
+           f"stop={stop_to}s > worst monitored grace {worst}s ({worst_svc}); "
+           f"curl={curl_to}s; {len(monitored)} monitored")
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
