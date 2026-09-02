@@ -82,16 +82,32 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
-try:                                    # optional: lets it run outside cron's env
-    from dotenv import load_dotenv
 
-    load_dotenv()
-except ImportError:
-    pass
+def _load_env_file(path: Path) -> None:
+    """Read KEY=value out of .env into os.environ without python-dotenv.
+
+    Deliberately dependency-free: the cron line for this sampler runs
+    `/usr/bin/python3`, NOT the venv, so `import dotenv` fails there -- which
+    made `scanning=` record NA on every scheduled sample while working fine by
+    hand. A field that is only populated when you run it manually is worse than
+    no field, because it looks present.
+    """
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+    except OSError:
+        return
 
 CONTAINER = "jellyfin"
 LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "jellyfin-mem.log"
 MAX_LOG_BYTES = 10 * 1024 * 1024  # ~10MB
+
+_load_env_file(Path(__file__).resolve().parent.parent / ".env")
 
 
 def _rotate_if_needed(path: Path) -> None:
