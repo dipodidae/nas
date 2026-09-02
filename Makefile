@@ -218,6 +218,12 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
 	  | grep docker.sock | grep -v '^/dockerproxy ' || true); \
 	  if [ -z "$$bad" ]; then echo "    ok: dockerproxy only"; else echo "    !!! $$bad"; rc=1; fi; \
+	echo "==> qui and qbittorrent see /downloads on the SAME filesystem (ADR-0027)"; \
+	a=$$(docker exec qui stat -c '%d' /downloads 2>/dev/null); \
+	b=$$(docker exec qbittorrent stat -c '%d' /downloads 2>/dev/null); \
+	if [ -n "$$a" ] && [ "$$a" = "$$b" ]; then echo "    ok: device $$a on both"; \
+	else echo "    !!! qui=$$a qbittorrent=$$b -- hardlinks cannot cross a mount point,"; \
+	     echo "        so cross-seed would silently COPY instead (0.96 TiB, ADR-0002)"; rc=1; fi; \
 	echo "==> scrutiny's collector has reported within 24h (ADR-0023)"; \
 	scripts/check-smart-freshness.py || rc=1; \
 	echo "==> unhealthy or exited containers"; \

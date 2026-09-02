@@ -121,6 +121,15 @@ services:
       - QUI__SESSION_SECRET=${QUI_SESSION_SECRET}
     volumes:
       - ${CONFIG_DIRECTORY}/qui:/config
+      # INVARIANT: the SAME host path at the SAME container path as
+      # qbittorrent's, and nothing wider. qui's cross-seed creates hardlinks
+      # ITSELF -- it does not ask qBittorrent to -- so it needs a view of the
+      # data, and the two must agree on paths or qui writes links qBittorrent
+      # cannot find. Narrowed to `downloads` rather than the whole share on
+      # purpose: cross-seed only ever touches what qBittorrent manages, and a
+      # UI has no business seeing /music or /movies. `make check` asserts the
+      # pairing in both directions. ADR-0002, ADR-0027.
+      - ${SHARE_DIRECTORY}/downloads:/downloads
     ports:
       - '127.0.0.1:7476:7476'
     depends_on:

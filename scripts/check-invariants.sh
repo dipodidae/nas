@@ -1051,6 +1051,59 @@ for _svc, (_floor, _why) in sorted(START_PERIOD_FLOOR.items()):
     else:
         ok("start-period-floor", f"{_svc} {_sp}s >= {_floor}s")
 
+
+# ==========================================================================
+# 23. qui's data view is path-identical to qBittorrent's, and no wider
+# ==========================================================================
+# qui's cross-seed creates hardlinks ITSELF -- it does not ask qBittorrent to --
+# so it needs a view of the data. Two things must hold or it silently does the
+# wrong thing:
+#
+#   * SAME container path for the SAME host path. qui writes link paths that
+#     qBittorrent is then told to seed from. If the two disagree, qui creates
+#     links at paths qBittorrent cannot find, and every cross-seed fails in a
+#     way that looks like an indexer problem.
+#   * ONE mount. Hardlinks cannot cross a mount point: a link target on a
+#     different filesystem silently becomes a COPY, which is how this stack
+#     paid 0.96 TiB before (ADR-0002). Asserting the host paths share a prefix
+#     is the config-time half; `make verify-runtime` compares the actual
+#     device numbers, which is the only real proof.
+#
+# Narrow on purpose: qui gets `downloads`, not the whole share. Cross-seed only
+# ever touches what qBittorrent manages, and a torrent UI has no business
+# reading /music or /movies. ADR-0027.
+def _mounts(svc):
+    return {v.get("target"): str(v.get("source", ""))
+            for v in (services.get(svc, {}).get("volumes") or [])}
+
+if "qui" in services and "qbittorrent" in services:
+    _q, _qb = _mounts("qui"), _mounts("qbittorrent")
+    _qb_dl = _qb.get("/downloads")
+    _qui_dl = _q.get("/downloads")
+    if not _qb_dl:
+        fail("qui-data-alignment", "ADR-0027",
+             "qbittorrent does not mount /downloads, so nothing can be aligned "
+             "to it. Everything below assumes that mount.")
+    elif not _qui_dl:
+        fail("qui-data-alignment", "ADR-0027",
+             "qui does not mount /downloads. Its cross-seed creates hardlinks "
+             "itself, so with no view of the data it cannot link at all -- and "
+             "the failure surfaces as a cross-seed that never matches.")
+    elif _qui_dl != _qb_dl:
+        fail("qui-data-alignment", "ADR-0027",
+             f"qui's /downloads is host {_qui_dl!r} but qbittorrent's is "
+             f"{_qb_dl!r}. qui writes link paths qBittorrent then reads, so a "
+             "mismatch means links at paths qBittorrent cannot find.")
+    else:
+        _extra = sorted(t for t in _q if t not in ("/config", "/downloads"))
+        if _extra:
+            fail("qui-data-alignment", "ADR-0027",
+                 f"qui mounts {_extra} on top of /config and /downloads. Keep "
+                 "its filesystem view to what qBittorrent manages -- a torrent "
+                 "UI has no business reading the media libraries.")
+        else:
+            ok("qui-data-alignment", f"/downloads -> {_qui_dl} on both")
+
 # ==========================================================================
 # Report
 # ==========================================================================
