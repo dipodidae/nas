@@ -230,7 +230,7 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 |---|---|---|---|---|
 | `sonarr` | lscr.io/…/sonarr | `127.0.0.1:8989` | yes | TV |
 | `radarr` | lscr.io/…/radarr | `127.0.0.1:7878` | yes | Movies |
-| `lidarr` | lscr.io/…/lidarr **:nightly** | `127.0.0.1:8686` | yes | Music. `/data` staged but unused → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md) |
+| `lidarr` | lscr.io/…/lidarr **:nightly** | `127.0.0.1:8686` | yes | Music. `/data` in use → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md) |
 | `bazarr` | lscr.io/…/bazarr | `127.0.0.1:6767` | yes | Subtitles + subcleaner post-processing |
 | `whisper` | onerahmet/…-whisper-asr | `127.0.0.1:9000` | yes | CPU ASR, `small` model. `bazarr` depends on it |
 | `lingarr` | lingarr/lingarr | `127.0.0.1:9876` | yes | Subtitle translation. Healthcheck disabled upstream |
@@ -500,9 +500,22 @@ docker exec sonarr sh -c 'ln /data/downloads/<f> /data/series/<f>.probe && echo 
 docker exec sonarr stat -c '%h %n' /data/series/<show>/<file>   # %h > 1 = hardlinked
 ```
 
-Lidarr still copies — its root folder is `/music`, deliberately. Retrying that
-repath must **not** use `PUT /api/v1/artist/editor`, which wiped 150,187
-`TrackFiles` rows. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md)
+**Both ends means both ends.** Moving the root folder into `/data` is only half
+of it — the import *source* is whatever path the download client reports, and
+`link()` refuses across a mount point even when `st_dev` is identical. If `%h`
+is still `1`, look at the import history's `droppedPath` before anything else:
+
+```bash
+K=$(sed -n 's/^API_KEY_LIDARR=//p' .env)
+curl -s -H "X-Api-Key: $K" 'http://127.0.0.1:8686/api/v1/history?pageSize=3&eventType=3' \
+  | python3 -c "import sys,json;[print(r['data'].get('droppedPath')) for r in json.load(sys.stdin)['records']]"
+```
+
+A `/downloads/...` answer means it needs a remote path mapping to
+`/data/downloads/`, which is what Lidarr has. Lidarr was migrated on 2026-09-02
+by an **offline SQLite prefix rewrite** (`scripts/lidarr_repath_db.py`), not by
+`PUT /api/v1/artist/editor` — that call wiped 150,187 `TrackFiles` rows and must
+never be used for this. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md)
 
 ### Jellyfin doesn't see new or deleted media
 
@@ -626,8 +639,6 @@ The pre-split `docker-compose.yml` is recoverable:
 
 Honest list of things that are wrong or unfinished, all tracked:
 
-- **Lidarr still copies instead of hardlinking.** The repath is staged and
-  parked. → [ADR-0003](docs/decisions/0003-lidarr-data-mount-staged.md)
 - **Jellyfin's memory leak is not root-caused.** Three mitigations contain it;
   none fixes it. → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md)
 - **No update notification for `jellyfin` or `qbittorrent`.** Both are pinned

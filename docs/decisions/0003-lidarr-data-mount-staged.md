@@ -149,3 +149,77 @@ One incidental finding worth keeping: the backup guard refused a first attempt
 because the rehearsal's dry run had opened the copy read-write, so SQLite
 checkpointed and **removed** the `-wal`/`-shm` files. The backup must be a
 separate directory taken before any run touches the database.
+
+---
+
+## Executed 2026-09-02 — and the half the plan nearly missed
+
+**Status: resolved.** Run with Lidarr stopped, after a three-file backup to
+`/mnt/drive/backups/pre-lidarr-repath/20260902-1727/`, with the four
+Lidarr-writing crons commented out for the duration and restored afterwards
+(crontab diffed byte-identical to its pre-run copy).
+
+The real run matched the rehearsal exactly: `1 / 3345 / 150300 / 14958` rows
+rewritten, row counts preserved at `1 / 3345 / 150300 / 43299`, zero rows left
+on `/music`, 28,341 relative `MetadataFiles` rows untouched, no double
+prefixes, and **1000/1000** sampled paths present on disk.
+
+After restart: healthy in 20 s, no errors in the log, one root folder
+`/data/music` with `accessible=True`, and a `RescanFolders` command polled to
+`completed` rather than slept through. Post-rescan Lidarr reports **3,345
+artists, 1.52 TiB on disk**, and `TrackFiles` still holds all 150,300 rows.
+1.52 TiB is the figure from before the September incident; the ADR-0003
+signature of that incident — `0 rows / 0.00 TiB` — is absent.
+
+### The repath alone would not have produced a single hardlink
+
+Moving the *destination* into `/data` is only half of it. Lidarr's import
+**source** is whatever path the download client reports, and slskd reports
+`/downloads/complete/slskd/...` — verified in Lidarr's own import history.
+`/downloads` is a separate bind mount, so the link was still crossing a mount
+boundary and every import would have gone on copying, with nothing to show that
+it had.
+
+The `st_dev` is the giveaway that this is *not* about filesystems:
+
+```
+$ docker exec lidarr stat -c '%d %n' /downloads/complete/slskd /data/downloads/complete/slskd
+2049 /downloads/complete/slskd
+2049 /data/downloads/complete/slskd          # same device...
+$ docker exec lidarr sh -c 'ln /downloads/.probe /data/music/.p1'
+ln: failed to create hard link: Cross-device link       # ...and still EXDEV
+$ docker exec lidarr sh -c 'ln /data/downloads/.probe /data/music/.p2'
+OK
+```
+
+Same device, different **mount points**, and `link()` refuses across a mount
+point regardless. So a Lidarr remote path mapping was added — host `slskd`,
+remote `/downloads/` → local `/data/downloads/` — which makes the source
+resolve inside the same mount as the destination. There were previously no
+remote path mappings at all.
+
+### What is proven, and what still is not
+
+Proven: the destination is `/data/music`; the source now resolves to
+`/data/downloads`; and a `link()` between those two paths succeeds.
+
+**Not yet proven: an actual import hardlinking.** No download has completed
+since the change. The pre-existing library is uniformly `nlink=1` (200/200
+sampled) and stays that way — that is the documented backlog, not a regression.
+The check on the next import is:
+
+```sh
+docker exec lidarr sh -c 'find /data/music \( -name "*.flac" -o -name "*.mp3" \) \
+  -newermt "-2 hours" -print0 | head -z -n 5 | xargs -0 -r stat -c "%h %n"'
+```
+
+`%h` of **2 or more** confirms it. A `1` means something in the source path is
+still outside `/data` — look at the import history's `droppedPath` first, which
+is how the mount-point problem above was found.
+
+### Rollback
+
+`/mnt/drive/backups/pre-lidarr-repath/20260902-1727/` holds all three WAL files.
+Lidarr's `/music` and `/downloads` bind mounts are **deliberately left in
+place** — they cost nothing and are the fastest rollback if something surfaces
+weeks later. Removing them is a follow-up once a full cycle has run clean.

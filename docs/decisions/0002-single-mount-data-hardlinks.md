@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01
 **Status:** accepted
-**Applies to:** sonarr, radarr, lidarr (staged only — ADR-0003)
+**Applies to:** sonarr, radarr, lidarr (all three live as of 2026-09-02 — ADR-0003)
 **Background:** `docs/arr-qbittorrent-pollution.md` §7 "Import paths and
 hardlinks — the biggest disk finding", and "The hardlink defect (0.96 TiB)"
 
@@ -45,7 +45,15 @@ mounts that look redundant. They are not.
   2.51 TiB, all unchanged. Radarr 37/37 movies, 0.25 TiB, unchanged.
 - qBittorrent was **not** touched and does not need the unified mount:
   hardlinking happens inside the *arr containers.
-- Lidarr is the exception — see ADR-0003.
+- Lidarr **was** the exception; it was migrated on 2026-09-02 by an offline
+  SQLite prefix rewrite rather than any API call, and its root folder is now
+  `/data/music`. See ADR-0003.
+- A mount alone is not sufficient — **both ends of the link must be inside the
+  same mount point.** Lidarr's destination moved into `/data` while its import
+  source was still the download client's reported `/downloads/...`, and
+  `link()` refuses across a mount point even when `st_dev` is identical. A
+  remote path mapping (`/downloads/` → `/data/downloads/`) is what closes that
+  half. Check the source path, not just the root folder.
 - Bazarr does not need it at all — see ADR-0015.
 
 ## Invariant
