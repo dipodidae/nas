@@ -117,6 +117,7 @@ WATCHTOWER_OPTOUT = {
     "watchtower":            "must not self-update",
     "autoheal":              "control plane",
     "playlist-generator-db": "never auto-update a database engine under its data",
+    "scrutiny":              "omnibus bundles InfluxDB; same rule as playlist-generator-db",
 }
 
 def is_locally_built(svc):
@@ -795,6 +796,121 @@ if _undeclared:
          "compose file does not declare. Add the label, or delete the conf.")
 else:
     ok("swag-routes-are-declared", "no undeclared public routes")
+
+
+# ==========================================================================
+# 19. Raw disk access and CAP_SYS_ADMIN belong to scrutiny alone
+# ==========================================================================
+# The hardening baseline is cap_drop: ALL (ADR-0001). scrutiny is the single
+# scoped exception, because reading SMART from an NVMe needs
+# NVME_IOCTL_ADMIN_CMD, which the kernel gates on CAP_SYS_ADMIN. Measured
+# 2026-09-02, deliberately narrower than the upstream example:
+#   SYS_RAWIO alone -> Permission denied;  SYS_ADMIN alone -> works;
+#   both            -> no better than SYS_ADMIN alone.
+# So SYS_RAWIO is redundant here and must NOT be granted -- same discipline as
+# the FOWNER/FSETID refusal on qbittorrent (ADR-0004).
+#
+# The device passthrough is asserted too, in three ways, because each was a
+# real trap:
+#   * only scrutiny may hold a raw DISK. jellyfin's /dev/dri (a GPU) is fine
+#     and is not a disk, so this is a disk-shaped test, not a devices-shaped one.
+#   * it must be the NVMe CONTROLLER char device (/dev/nvme0), not the namespace
+#     block device: `smartctl --scan` returns EMPTY with only /dev/nvme0n1, so
+#     the collector silently monitors nothing while looking installed.
+#   * it must be granted `:r`. Read is measurably sufficient.
+# ADR-0023.
+_DISK_DEV = re.compile(r"^/dev/(nvme\d+n?\d*|sd[a-z]+\d*|hd[a-z]+|vd[a-z]+)")
+_RAW_CAPS = {"SYS_ADMIN", "SYS_RAWIO"}
+
+_disk_holders, _rawcap_holders = [], []
+for svc, sv in sorted(services.items()):
+    for d in (sv.get("devices") or []):
+        if _DISK_DEV.match(str(d.get("source", ""))):
+            _disk_holders.append((svc, d))
+    if {str(c).upper().removeprefix("CAP_") for c in (sv.get("cap_add") or [])} & _RAW_CAPS:
+        _rawcap_holders.append(svc)
+
+_bad_disk = sorted({s for s, _ in _disk_holders if s != "scrutiny"})
+if _bad_disk:
+    fail("raw-disk-access", "ADR-0023",
+         f"{_bad_disk} pass a raw disk device through. Only scrutiny may -- raw "
+         "block access to the disks holding this stack's config and 4.6 TB of "
+         "un-backed-up media is not something a media app gets for convenience.")
+else:
+    ok("raw-disk-access", "scrutiny only")
+
+_bad_caps = sorted(s for s in _rawcap_holders if s != "scrutiny")
+if _bad_caps:
+    fail("raw-cap-access", "ADR-0023",
+         f"{_bad_caps} request SYS_ADMIN and/or SYS_RAWIO. Only scrutiny may, and "
+         "only because the NVMe SMART ioctl is gated on CAP_SYS_ADMIN. SYS_ADMIN "
+         "is close enough to root that it defeats most of ADR-0001.")
+else:
+    ok("raw-cap-access", "scrutiny only")
+
+if "scrutiny" in services:
+    _sc = services["scrutiny"]
+    _sc_caps = {str(c).upper().removeprefix("CAP_") for c in (_sc.get("cap_add") or [])}
+    if "SYS_RAWIO" in _sc_caps:
+        fail("scrutiny-caps-narrow", "ADR-0023",
+             "scrutiny has SYS_RAWIO, which was measured NOT needed: SYS_ADMIN "
+             "alone reads the NVMe fully, and SYS_RAWIO alone cannot. The "
+             "upstream example asks for both; this host measured one.")
+    elif "SYS_ADMIN" not in _sc_caps:
+        fail("scrutiny-caps-narrow", "ADR-0023",
+             "scrutiny is missing SYS_ADMIN, so smartctl gets "
+             "'NVME_IOCTL_ADMIN_CMD: Permission denied' and the collector "
+             "reports a device with no data -- which looks like a working "
+             "install in the UI.")
+    else:
+        ok("scrutiny-caps-narrow", "SYS_ADMIN only")
+
+    _devs = [d for _s, d in _disk_holders if _s == "scrutiny"]
+    _srcs = {str(d.get("source", "")) for d in _devs}
+    if not _devs:
+        fail("scrutiny-device", "ADR-0023",
+             "scrutiny passes through no disk device, so it monitors nothing.")
+    elif any(re.match(r"^/dev/nvme\d+n\d", s) for s in _srcs):
+        fail("scrutiny-device", "ADR-0023",
+             f"scrutiny is given an NVMe NAMESPACE block device ({sorted(_srcs)}). "
+             "`smartctl --scan` enumerates controller char devices and returns "
+             "EMPTY for a namespace, so the collector finds no disks at all -- "
+             "silently. Pass /dev/nvme0, not /dev/nvme0n1.")
+    elif any(d.get("permissions", "rwm") != "r" for d in _devs):
+        fail("scrutiny-device", "ADR-0023",
+             "scrutiny's disk device is not granted read-only (`:r`). Read was "
+             "measured sufficient, so anything wider is an unearned grant on a "
+             "container that already holds CAP_SYS_ADMIN.")
+    else:
+        ok("scrutiny-device", f"{sorted(_srcs)} read-only")
+
+# ==========================================================================
+# 20. No two services publish the same host port
+# ==========================================================================
+# `docker compose config` does NOT catch this -- the collision only surfaces at
+# `up` time, as a bind failure on whichever service starts second, which then
+# looks like that service being broken. It is not hypothetical: scrutiny serves
+# on 8080 inside and its upstream example publishes host 8080, which
+# qbittorrent already owns on 127.0.0.1 -- and scripts/ reach qbit there via its
+# localhost auth-bypass, so losing that publish breaks three scripts silently.
+# ADR-0014, ADR-0023.
+_claimed = {}
+for svc, sv in sorted(services.items()):
+    for pt in (sv.get("ports") or []):
+        pub = pt.get("published")
+        if pub is None:
+            continue
+        key = (pt.get("host_ip", ""), str(pub), pt.get("protocol", "tcp"))
+        _claimed.setdefault(key, []).append(svc)
+_dupes = {k: v for k, v in _claimed.items() if len(set(v)) > 1}
+if _dupes:
+    for (ip, pub, proto), svcs in sorted(_dupes.items()):
+        fail("port-collision", "ADR-0023",
+             f"{sorted(set(svcs))} all publish {ip or '0.0.0.0'}:{pub}/{proto}. "
+             "compose config renders this fine; the second container to start "
+             "just fails to bind, and looks broken rather than conflicted.")
+else:
+    ok("port-collision", f"{len(_claimed)} published host ports, all distinct")
 
 # ==========================================================================
 # Report

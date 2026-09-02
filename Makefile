@@ -60,6 +60,12 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	@# qui and ntfy are NOT linuxserver images: no root init chowns /config, so
 	@# if Docker auto-creates these as root on first `up` they crash-loop on
 	@# `permission denied`. ADR-0014.
+	@# Deliberately NOT scrutiny: it is the inverse case. It runs as root (it
+	@# must, to hold CAP_SYS_ADMIN for the NVMe ioctl) and has no DAC_OVERRIDE,
+	@# so a ${PUID}-owned config dir makes root fall through to the "other"
+	@# permission bits and fail with `Permission denied` on influxdb's config.
+	@# Docker's default -- auto-creating the bind-mount source as root:root --
+	@# is correct there. Do not add it to this loop. ADR-0023.
 	@for d in qui ntfy; do \
 	  p="$(CONFIG_DIRECTORY)/$$d"; \
 	  echo "==> $$p -> $(PUID):$(PGID)"; \
@@ -207,6 +213,8 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
 	  | grep docker.sock | grep -v '^/dockerproxy ' || true); \
 	  if [ -z "$$bad" ]; then echo "    ok: dockerproxy only"; else echo "    !!! $$bad"; rc=1; fi; \
+	echo "==> scrutiny's collector has reported within 24h (ADR-0023)"; \
+	scripts/check-smart-freshness.py || rc=1; \
 	echo "==> unhealthy or exited containers"; \
 	u=$$(docker compose ps -a --format '{{.Name}}\t{{.Status}}' \
 	     | grep -iE 'unhealthy|exited|restarting' || true); \

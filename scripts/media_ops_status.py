@@ -13,6 +13,10 @@ Sources gathered
 3. slskd — ``GET /api/v0/application`` on :5030; reports up + download counts.
 4. qBittorrent — best-effort login + torrent count on :8080 (via gluetun).
 5. Cron log freshness — ``~/nas/logs/*.log`` mtime age + last non-empty line.
+6. Disk health — NVMe SMART via ``smartctl`` and the media disk's ext4
+   superblock error counter via ``tune2fs`` (both passwordless read-only in
+   /etc/sudoers.d/nas-ops). The USB media disk passes no SMART at all, so the
+   ext4 counter is its only durable signal. ADR-0023.
 
 Port map (confirmed against the compose files under compose/)
 -----------------------------------------------
@@ -193,7 +197,252 @@ class OpsReport:
     qbittorrent: QbitStatus | None = None
     logs: list[LogStatus] = field(default_factory=list)
     listenbrainz: ListenBrainzStatus | None = None
+    disks: list[DiskHealth] = field(default_factory=list)
 
+
+
+# ---------------------------------------------------------------------------
+# Disk health
+# ---------------------------------------------------------------------------
+# Two devices, two completely different observability stories, and conflating
+# them is how a dying disk gets mistaken for "Jellyfin being weird".
+#
+# ${CONFIG_DIRECTORY}, the Docker graph and this repo all live on the NVMe, and
+# it answers SMART in full -- so it gets real telemetry (wear, spare, media
+# errors). ${SHARE_DIRECTORY} is a single USB disk whose bridge passes no SMART
+# through under ANY `smartctl -d` type, so its only durable signal is ext4's own
+# superblock error counter, which -- unlike the kernel log -- survives a reboot
+# and journal rotation. `scrutiny` covers the first device and structurally
+# cannot see the second. ADR-0023.
+
+NVME_SMART_DEVICE = "/dev/nvme0"   # controller char device, not the namespace
+MEDIA_FS_DEVICE = "/dev/sda1"      # the ext4 filesystem under ${SHARE_DIRECTORY}
+
+# percentage_used is the vendor's own endurance estimate. 100 is not "dead", it
+# is "past the modelled life" -- which on a device with no redundancy is when
+# you want a warning rather than news.
+NVME_WEAR_WARN_PCT = 80
+NVME_WEAR_CRIT_PCT = 90
+NVME_SPARE_WARN_PCT = 20
+NVME_TEMP_WARN_C = 70
+
+
+@dataclass
+class DiskHealth:
+    """Health of one physical device or filesystem."""
+
+    device: str
+    kind: str                                    # "nvme" | "ext4"
+    status: str                                  # "ok" / "warn" / "crit" / "unknown"
+    model: str | None = None
+    notes: list[str] = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)
+    error: str | None = None
+
+
+def parse_nvme_smart(payload: str) -> dict:
+    """Extract the metrics we act on from `smartctl -a -j` output.
+
+    Pure. Raises ValueError if the payload is not the JSON smartctl emits.
+    """
+    try:
+        doc = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"not smartctl JSON: {exc}") from exc
+
+    log = doc.get("nvme_smart_health_information_log") or {}
+    if not log:
+        raise ValueError("no nvme_smart_health_information_log in smartctl output")
+
+    passed = (doc.get("smart_status") or {}).get("passed")
+    return {
+        "model": doc.get("model_name"),
+        "smart_passed": passed,
+        "percentage_used": log.get("percentage_used"),
+        "available_spare": log.get("available_spare"),
+        "available_spare_threshold": log.get("available_spare_threshold"),
+        "critical_warning": log.get("critical_warning"),
+        "media_errors": log.get("media_errors"),
+        "err_log_entries": log.get("num_err_log_entries"),
+        "temperature_c": log.get("temperature"),
+        "power_on_hours": log.get("power_on_hours"),
+        "power_cycles": log.get("power_cycles"),
+        "unsafe_shutdowns": log.get("unsafe_shutdowns"),
+        # 1 data unit = 512000 bytes, per the NVMe spec.
+        "written_tb": round((log.get("data_units_written") or 0) * 512000 / 1e12, 2),
+        "read_tb": round((log.get("data_units_read") or 0) * 512000 / 1e12, 2),
+    }
+
+
+def classify_nvme(m: dict) -> tuple[str, list[str]]:
+    """Grade parsed NVMe metrics. Pure. Returns (status, notes).
+
+    `critical_warning`, `media_errors` and a failed overall self-assessment are
+    the three that mean "this device is telling you it is in trouble"; wear and
+    spare are the slow curve you want to see coming.
+    """
+    notes: list[str] = []
+    status = "ok"
+
+    def escalate(level: str) -> None:
+        nonlocal status
+        rank = {"ok": 0, "warn": 1, "crit": 2}
+        if rank[level] > rank[status]:
+            status = level
+
+    if m.get("smart_passed") is False:
+        escalate("crit")
+        notes.append("SMART overall self-assessment FAILED")
+
+    cw = m.get("critical_warning")
+    if isinstance(cw, int) and cw != 0:
+        escalate("crit")
+        notes.append(f"critical_warning=0x{cw:02x}")
+
+    me = m.get("media_errors")
+    if isinstance(me, int) and me > 0:
+        escalate("crit")
+        notes.append(f"{me} media/data integrity error(s)")
+
+    wear = m.get("percentage_used")
+    if isinstance(wear, int):
+        if wear >= NVME_WEAR_CRIT_PCT:
+            escalate("crit")
+            notes.append(f"endurance {wear}% used (>= {NVME_WEAR_CRIT_PCT}%)")
+        elif wear >= NVME_WEAR_WARN_PCT:
+            escalate("warn")
+            notes.append(f"endurance {wear}% used (>= {NVME_WEAR_WARN_PCT}%)")
+
+    spare = m.get("available_spare")
+    thresh = m.get("available_spare_threshold")
+    if isinstance(spare, int):
+        if isinstance(thresh, int) and spare <= thresh:
+            escalate("crit")
+            notes.append(f"available spare {spare}% at/below the device threshold {thresh}%")
+        elif spare < NVME_SPARE_WARN_PCT:
+            escalate("warn")
+            notes.append(f"available spare {spare}%")
+
+    temp = m.get("temperature_c")
+    if isinstance(temp, int) and temp >= NVME_TEMP_WARN_C:
+        escalate("warn")
+        notes.append(f"{temp} C")
+
+    return status, notes
+
+
+def parse_tune2fs(text: str) -> dict[str, str]:
+    """Parse `tune2fs -l` into its "Field name: value" pairs. Pure."""
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and not key.startswith(" "):
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def classify_ext4(fields: dict[str, str]) -> tuple[str, list[str]]:
+    """Grade a `tune2fs -l` field map. Pure. Returns (status, notes).
+
+    `FS Error count` is the durable signal: ext4 records it in the superblock,
+    so it survives the reboot and the journal rotation that hide the kernel-log
+    version of the same event. tune2fs omits the field entirely when it is
+    zero, so its ABSENCE is the healthy state -- do not treat missing as
+    unknown.
+    """
+    notes: list[str] = []
+    status = "ok"
+
+    # ext4 reports exactly one of: clean / not clean / clean with errors /
+    # not clean with errors. Only the first is healthy, so this must be an
+    # equality test -- a substring test for "clean" passes during BOTH
+    # "clean with errors" and "not clean with errors", i.e. it would be green
+    # during the failure it exists to catch.
+    state = fields.get("Filesystem state", "").strip()
+    if state and state != "clean":
+        status = "crit"
+        notes.append(f"filesystem state: {state}")
+
+    raw = fields.get("FS Error count")
+    if raw:
+        try:
+            count = int(raw)
+        except ValueError:
+            count = -1
+        if count != 0:
+            status = "crit"
+            first = fields.get("First error time", "?")
+            last = fields.get("Last error time", "?")
+            notes.append(f"{raw} ext4 error(s) recorded in the superblock (first {first}, last {last})")
+
+    return status, notes
+
+
+def gather_disk_health(
+    nvme_device: str = NVME_SMART_DEVICE,
+    media_fs_device: str = MEDIA_FS_DEVICE,
+) -> list[DiskHealth]:
+    """Read SMART from the NVMe and the ext4 error counter from the media disk.
+
+    Both commands are in the passwordless read-only grant in
+    /etc/sudoers.d/nas-ops, so this needs no password and no new privilege.
+    Neither is fatal: a machine where sudo is not configured degrades to
+    status "unknown" rather than failing the whole report.
+    """
+    disks: list[DiskHealth] = []
+
+    # --- NVMe: real SMART.
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", "smartctl", "-a", "-j", nvme_device],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        # smartctl uses a bitmask exit status; low bits mean "device problem",
+        # not "command failed", so parse the JSON whenever there is any.
+        metrics = parse_nvme_smart(proc.stdout)
+        status, notes = classify_nvme(metrics)
+        disks.append(
+            DiskHealth(
+                device=nvme_device, kind="nvme", status=status,
+                model=metrics.pop("model", None), notes=notes, metrics=metrics,
+            )
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        disks.append(
+            DiskHealth(device=nvme_device, kind="nvme", status="unknown", error=str(exc)[:200])
+        )
+
+    # --- Media disk: no SMART exists, so the ext4 superblock is the channel.
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", "tune2fs", "-l", media_fs_device],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        fields = parse_tune2fs(proc.stdout)
+        if not fields:
+            raise ValueError((proc.stderr or "tune2fs produced no fields").strip()[:200])
+        status, notes = classify_ext4(fields)
+        disks.append(
+            DiskHealth(
+                device=media_fs_device, kind="ext4", status=status,
+                notes=notes,
+                metrics={
+                    "state": fields.get("Filesystem state"),
+                    "fs_error_count": int(fields.get("FS Error count") or 0),
+                    "lifetime_writes": fields.get("Lifetime writes"),
+                    "last_checked": fields.get("Last checked"),
+                    # Stated, not inferred: this device answers no SMART at all,
+                    # so nothing here is a substitute for it. ADR-0023.
+                    "smart_available": False,
+                },
+            )
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        disks.append(
+            DiskHealth(device=media_fs_device, kind="ext4", status="unknown", error=str(exc)[:200])
+        )
+
+    return disks
 
 # ---------------------------------------------------------------------------
 # Pure helper functions (no I/O — unit-testable)
@@ -258,6 +507,7 @@ def derive_overall_status(
     slskd: SlskdStatus | None,
     qbit: QbitStatus | None,
     logs: list[LogStatus],
+    disks: list[DiskHealth] | None = None,
 ) -> str:
     """Derive the overall health label from all gathered data.
 
@@ -267,7 +517,8 @@ def derive_overall_status(
     - ``'down'``:    no containers at all visible, OR all critical *arr services
                      unreachable.
     - ``'degraded'``: any container unhealthy, any *arr error-level health issue,
-                      any critical service unreachable, or any stale log.
+                      any critical service unreachable, any stale log, or a
+                      disk reporting warn/crit.
     - ``'ok'``:      everything else.
 
     Critical services for "down" determination: sonarr, radarr, lidarr, prowlarr.
@@ -296,6 +547,13 @@ def derive_overall_status(
         return "degraded"
 
     if any(lg.stale for lg in logs):
+        return "degraded"
+
+    # A failing disk is degraded, never "down": the stack is still serving, and
+    # "down" is reserved for "nothing works". Urgency is the alerter's job
+    # (scrutiny -> ntfy for SMART, stack_watchdog for the media disk), not the
+    # dashboard's. "unknown" is not a fault -- sudo may not be configured.
+    if any(d.status in ("warn", "crit") for d in (disks or [])):
         return "degraded"
 
     return "ok"
@@ -408,6 +666,30 @@ def format_summary(report: OpsReport) -> str:
         ago = f"{round(age / 60)}m ago" if age < 3600 else f"{round(age / 3600)}h ago"
         user_str = f"{lb.user} · " if lb.user else ""
         lines.append(f"  ✓ {user_str}last scrobble {ago}")
+
+    # --- Disks ---
+    lines.append("\nDisks:")
+    if not report.disks:
+        lines.append("  - not checked")
+    for d in report.disks:
+        icon = {"ok": "✓", "warn": "⚠", "crit": "✗"}.get(d.status, "-")
+        if d.error:
+            lines.append(f"  {icon} {d.device} ({d.kind}): {d.error}")
+            continue
+        if d.kind == "nvme":
+            m = d.metrics
+            detail = (
+                f"wear={m.get('percentage_used')}% spare={m.get('available_spare')}% "
+                f"{m.get('temperature_c')}C written={m.get('written_tb')}TB "
+                f"unsafe_shutdowns={m.get('unsafe_shutdowns')}"
+            )
+        else:
+            detail = (
+                f"state={d.metrics.get('state')} "
+                f"fs_errors={d.metrics.get('fs_error_count')} (no SMART on this bridge)"
+            )
+        note = f"  {'; '.join(d.notes)}" if d.notes else ""
+        lines.append(f"  {icon} {d.device}: {detail}{note}")
 
     # --- Log freshness ---
     lines.append("\nCron logs:")
@@ -799,6 +1081,7 @@ def _report_to_dict(report: OpsReport) -> dict:
         "qbittorrent": asdict(report.qbittorrent) if report.qbittorrent else None,
         "logs": [asdict(lg) for lg in report.logs],
         "listenbrainz": asdict(report.listenbrainz) if report.listenbrainz else None,
+        "disks": [asdict(d) for d in report.disks],
     }
 
 
@@ -846,9 +1129,12 @@ def main(argv: list[str] | None = None) -> int:
         now_epoch=now_epoch,
     )
 
+    # 7. Disk health -- NVMe SMART + the media disk's ext4 error counter. ADR-0023.
+    disks = gather_disk_health()
+
     # Assemble.  ListenBrainz is intentionally NOT fed into derive_overall_status
     # — a stale scrobble must not mark the whole stack degraded.
-    overall = derive_overall_status(containers, arr_services, slskd, qbit, logs)
+    overall = derive_overall_status(containers, arr_services, slskd, qbit, logs, disks)
     report = OpsReport(
         generated_at=now.isoformat(),
         overall=overall,
@@ -858,6 +1144,7 @@ def main(argv: list[str] | None = None) -> int:
         qbittorrent=qbit,
         logs=logs,
         listenbrainz=listenbrainz,
+        disks=disks,
     )
 
     report_dict = _report_to_dict(report)

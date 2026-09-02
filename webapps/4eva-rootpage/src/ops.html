@@ -238,6 +238,11 @@
       </div>
 
       <div class="panel" style="margin-top: 1rem">
+        <h2>Disks</h2>
+        <div id="disks"></div>
+      </div>
+
+      <div class="panel" style="margin-top: 1rem">
         <h2>Cron logs</h2>
         <div id="logs"></div>
       </div>
@@ -326,6 +331,33 @@
           `<div class="row">${dot(lb.reachable ? 'ok' : 'warn')}<div class="name">music loop<div class="sub">${lbSub}</div></div></div>`,
         )
         $('downloaders').innerHTML = dl.join('')
+
+        // disks — NVMe SMART + the media disk's ext4 error counter (ADR-0023).
+        // One SMART-capable device is CORRECT: the 9.1T USB media disk answers
+        // no SMART at all, so its row shows the ext4 counter instead. A green
+        // row here is not coverage of that disk.
+        $('disks').innerHTML =
+          (d.disks || [])
+            .map((k) => {
+              const lvl = k.status === 'ok' ? 'ok' : k.status === 'warn' ? 'warn' : k.status === 'crit' ? 'bad' : 'warn'
+              const mm = k.metrics || {}
+              let sub, pill
+              if (k.error) {
+                sub = esc(k.error)
+                pill = ''
+              } else if (k.kind === 'nvme') {
+                sub = esc(
+                  `${k.model || 'nvme'} · ${mm.temperature_c}°C · ${mm.written_tb}TB written · ${mm.power_on_hours}h · ${mm.unsafe_shutdowns} unsafe stops`,
+                )
+                pill = `<span class="pill">${esc(mm.percentage_used)}% worn</span>`
+              } else {
+                sub = esc(`ext4 ${mm.state} · no SMART on this bridge · ${mm.lifetime_writes || '?'} lifetime writes`)
+                pill = `<span class="pill">${esc(mm.fs_error_count)} fs errors</span>`
+              }
+              const notes = (k.notes || []).length ? ' — ' + esc(k.notes.join('; ')) : ''
+              return `<div class="row">${dot(lvl)}<div class="name">${esc(k.device)}<div class="sub">${sub}${notes}</div></div>${pill}</div>`
+            })
+            .join('') || `<div class="sub">no disk data (is media_ops_status.py able to sudo?)</div>`
 
         // logs
         $('logs').innerHTML =

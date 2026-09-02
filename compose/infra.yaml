@@ -118,6 +118,87 @@ services:
       disable: true
     # Watchtower-opt-out: it must not restart its own dependency. ADR-0006.
 
+  # SMART monitoring with historical trending. Scrutiny is the ONLY container in
+  # this stack that holds CAP_SYS_ADMIN or any raw device, so it is a deliberate,
+  # scoped exception to the cap_drop: ALL baseline of ADR-0001. ADR-0023.
+  #
+  # Coverage is ONE device, and that is not a configuration mistake: the 9.1 TB
+  # USB disk holding ${SHARE_DIRECTORY} passes no SMART under any `smartctl -d`
+  # type, verified again 2026-09-02 across sat/sat,12/sat,16/usbjmicron/
+  # usbsunplus/usbcypress/scsi -- and it stays unreadable from inside this
+  # container even with SYS_RAWIO added and /dev/sda passed in. A GREEN SCRUTINY
+  # DASHBOARD IS NOT COVERAGE OF THE MEDIA DISK. That disk's channels are
+  # scripts/stack_watchdog.py's kernel-log sweep and ext4 superblock counter.
+  scrutiny:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned. The omnibus image bundles InfluxDB, and an unattended
+    # engine bump under a live TSDB is the failure playlist-generator-db is
+    # opted out of for the same reason. ADR-0023.
+    image: ghcr.io/analogj/scrutiny:v0.9.3-omnibus
+    container_name: scrutiny
+    cap_add:
+      # INVARIANT: SYS_ADMIN and nothing else. Measured 2026-09-02, not copied
+      # from the upstream example -- which asks for SYS_RAWIO plus SYS_ADMIN:
+      #   SYS_RAWIO alone  -> NVME_IOCTL_ADMIN_CMD: Permission denied
+      #   SYS_ADMIN alone  -> full attributes, PASSED
+      #   both together    -> no better than SYS_ADMIN alone
+      # so SYS_RAWIO is redundant here and is deliberately NOT granted. Same
+      # discipline as ADR-0004: do not widen a grant that measurement says is
+      # already sufficient.
+      - SYS_ADMIN
+    devices:
+      # INVARIANT: the NVMe CONTROLLER char device, not the namespace block
+      # device. `smartctl --scan` enumerates /dev/nvme[0-9]+ and returns EMPTY
+      # when only /dev/nvme0n1 is passed, so the collector would find no disks
+      # at all -- and it would look like a working install. Measured 2026-09-02.
+      # /dev/sda is deliberately NOT passed: it answers nothing (see above), so
+      # granting raw access to the data-bearing disk would buy zero telemetry.
+      #
+      # `:r` rather than the default `rwm`, because measurement says read is
+      # enough. It blocks write(2) to the node. It is NOT claimed to block NVMe
+      # admin-command ioctls -- CAP_SYS_ADMIN permits those by design, and that
+      # residual is the actual price of this exception. ADR-0023 states it.
+      - /dev/nvme0:/dev/nvme0:r
+    environment:
+      # Daily. Clear of the 05:05 Jellyfin library scans and the 05:30 slskd
+      # import pass; SMART collection is cheap but the wear curve only needs
+      # one point a day.
+      - COLLECTOR_CRON_SCHEDULE=45 5 * * *
+      # ADR-0012: everything lands on the one ntfy topic. Reuses the existing
+      # write-only container publisher rather than minting a fourth account --
+      # scrutiny is less externally exposed than the *arrs that share it, and a
+      # per-publisher account with no distinct trust boundary is churn.
+      - SCRUTINY_NOTIFY_URLS=ntfy://${NTFY_ARR_USER}:${NTFY_ARR_PASSWORD}@ntfy:8410/nas-alerts?scheme=http&priority=high&tags=floppy_disk
+    volumes:
+      - ${CONFIG_DIRECTORY}/scrutiny/config:/opt/scrutiny/config
+      - ${CONFIG_DIRECTORY}/scrutiny/influxdb:/opt/scrutiny/influxdb
+      # Device metadata (model/serial/WWN) so a disk keeps its identity in the
+      # history across a rescan.
+      - /run/udev:/run/udev:ro
+    ports:
+      # INVARIANT: host 8086, not 8080. Scrutiny serves on 8080 inside, and
+      # qbittorrent already owns 127.0.0.1:8080 on the host -- which scripts/
+      # depend on via qbit's localhost auth-bypass. ADR-0014.
+      - '127.0.0.1:8086:8080'
+    networks:
+      - nas-network
+    # No labels on purpose, and all three omissions are deliberate:
+    #   * no swag=enable / proxy-conf -- this adds no public surface. Reach it
+    #     over an SSH tunnel to 127.0.0.1:8086, like the *arr WebUIs.
+    #   * no autoheal=true -- a restart cannot fix a failing disk, and the probe
+    #     would be the only thing standing between a wedged TSDB and a restart
+    #     loop. ADR-0009's rule applies to new services too.
+    #   * no watchtower label -- it is on the documented WATCHTOWER_OPTOUT list
+    #     in scripts/check-invariants.sh instead. ADR-0023.
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8080/api/health']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
   # DETECTS newer images for containers labelled
   # com.centurylinklabs.watchtower.enable=true, on WATCHTOWER_SCHEDULE, and
   # reports them to ntfy. It does NOT apply them -- see WATCHTOWER_MONITOR_ONLY

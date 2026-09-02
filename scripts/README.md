@@ -697,6 +697,19 @@ Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited
 
 Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 300`.
 
+### `check-smart-freshness.py`
+
+Asserts that `scrutiny`'s SMART collector is still reporting, for `make verify-runtime` (daily cron, 06:15). Deliberately **not** in `check-invariants.sh`: a stale collector is a runtime fact, and the compose model can be perfectly correct while the collector has silently failed for a week — a monitoring tool that has stopped monitoring is worse than none, because the dashboard stays green.
+
+```bash
+scripts/check-smart-freshness.py                    # default: <24h, http://127.0.0.1:8086
+scripts/check-smart-freshness.py --max-age-hours 6
+```
+
+Exit codes: `0` every known device reported inside the window, `1` a device is stale **or scrutiny knows about no devices at all**, `2` the API is unreachable.
+
+**One device is the correct answer on this host.** The 9.1 TB USB media disk answers no SMART, so scrutiny covers the NVMe only — see ADR-0023 before "fixing" the device count. The zero-devices case is called out separately because it is what a wrong device passthrough looks like: hand scrutiny `/dev/nvme0n1` instead of `/dev/nvme0` and `smartctl --scan` returns empty, so it monitors nothing while the UI looks like a fresh install.
+
 ### `stack_watchdog.py`
 
 The thing that shouts. Nothing on this box reported failure before it existed: Jellyfin was OOM-killed five times in 48 hours and only surfaced because an episode stuttered, qBittorrent sat dead for fourteen hours twice and was found by accident, `autoheal` was absent from the stack for over a month, and the `media_ops_status.py` cron had been silently writing nothing since June (a missing `cd` in the crontab line). Four checks, one push notification.
@@ -705,7 +718,7 @@ The thing that shouts. Nothing on this box reported failure before it existed: J
 2. **Restart churn** — a climbing `RestartCount` between runs is flapping even if the container is "up" at the moment the check fires. First run never alerts (no baseline).
 3. **Jellyfin anon-RSS** from `logs/jellyfin-mem.log` (see `jellyfin_mem_sample.py`). `anon` is the OOM-relevant number; `memory.current`/`mem_peak` include page cache and read high for benign reasons. A stale (>15 min) or `SAMPLE_FAILED` sampler is itself an alert — a monitor that quietly stops is worse than none.
 4. **Kernel OOM kills** from `journalctl -k` (readable unprivileged here; `dmesg` is not, under `kernel.dmesg_restrict`). Catches kills of _any_ process, including ones that leave no trace in a container's log.
-5. **The media drive**, because nothing else can watch it. All ~4.7 TB lives on a single USB external disk with no redundancy, and its bridge refuses SMART under every `smartctl -d` type. So this watches the only signals that do exist: the mount vanishing, ext4 remounting **read-only** (its default on error — at which point every \*arr import fails while the stack still looks healthy), free space, and kernel I/O / USB-reset errors, which are the earliest warning available on a dying USB disk.
+5. **The media drive**, because nothing else can watch it — `scrutiny` included. All ~4.7 TB lives on a single USB external disk with no redundancy, and its bridge refuses SMART under every `smartctl -d` type (re-verified 2026-09-02 from inside the scrutiny container too, with the capability granted and the device passed in). So this watches the only signals that do exist: the mount vanishing, ext4 remounting **read-only** (its default on error — at which point every \*arr import fails while the stack still looks healthy), free space, kernel I/O / USB-reset errors, and **ext4's own superblock error counter** via `tune2fs -l`. That last one is the durable signal: the kernel-log sweep covers 6 h and this host's journal retains only ~3 days, so an older error is invisible to both — while ext4 still reports it, because it lives in the superblock. Two traps, both unit-tested: `Filesystem state` is compared for **equality** with `clean` (a substring test passes during `clean with errors`, i.e. during the failure it guards against), and a **missing** `FS Error count` is the healthy state, because `tune2fs` omits the field when it is zero. ADR-0023.
 6. **`autoheal` itself** — running, actually supervising something, and its restarts succeeding. A supervisor going quiet is invisible by construction: everything it watches stays healthy, so the only symptom is an absence.
 7. **That an off-box heartbeat is configured at all.** Nothing running on this host can report that this host is down.
 8. **The crontab, textually** — a line using a relative path without a `cd` into the repo cannot work from cron's `$HOME`, and a line naming a script that does not exist never will. Both are invisible in the job's output because there is none.

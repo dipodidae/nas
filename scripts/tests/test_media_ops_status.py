@@ -415,3 +415,146 @@ def test_report_dict_includes_listenbrainz():
     d = m._report_to_dict(report)
     assert d["listenbrainz"]["user"] == "tom"
     assert d["listenbrainz"]["last_listen_age_s"] == 42.0
+
+
+# ---------------------------------------------------------------------------
+# Disk health (ADR-0023)
+# ---------------------------------------------------------------------------
+
+# Trimmed from the real `smartctl -a -j /dev/nvme0` on this host, 2026-09-02.
+_NVME_JSON = json.dumps(
+    {
+        "model_name": "SSSTC CL1-4D256",
+        "smart_status": {"passed": True, "nvme": {"value": 0}},
+        "nvme_smart_health_information_log": {
+            "critical_warning": 0,
+            "temperature": 50,
+            "available_spare": 100,
+            "available_spare_threshold": 10,
+            "percentage_used": 42,
+            "data_units_read": 133413447,
+            "data_units_written": 61494562,
+            "media_errors": 0,
+            "num_err_log_entries": 0,
+            "power_on_hours": 9796,
+            "power_cycles": 6509,
+            "unsafe_shutdowns": 582,
+        },
+    }
+)
+
+
+def test_parse_nvme_smart_extracts_the_metrics_we_act_on():
+    got = m.parse_nvme_smart(_NVME_JSON)
+    assert got["model"] == "SSSTC CL1-4D256"
+    assert got["percentage_used"] == 42
+    assert got["available_spare"] == 100
+    assert got["unsafe_shutdowns"] == 582
+    assert got["smart_passed"] is True
+    # 1 NVMe data unit == 512000 bytes, per spec — not 512.
+    assert got["written_tb"] == 31.49
+
+
+def test_parse_nvme_smart_rejects_non_smart_payloads():
+    for payload in ("", "not json", json.dumps({"model_name": "x"})):
+        try:
+            m.parse_nvme_smart(payload)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {payload!r}")
+
+
+def test_classify_nvme_current_host_state_is_ok():
+    status, notes = m.classify_nvme(m.parse_nvme_smart(_NVME_JSON))
+    assert status == "ok"
+    assert notes == []
+
+
+def test_classify_nvme_wear_crosses_warn_then_crit():
+    base = m.parse_nvme_smart(_NVME_JSON)
+    warn, notes = m.classify_nvme({**base, "percentage_used": m.NVME_WEAR_WARN_PCT})
+    assert warn == "warn" and "endurance" in notes[0]
+    crit, _ = m.classify_nvme({**base, "percentage_used": m.NVME_WEAR_CRIT_PCT})
+    assert crit == "crit"
+
+
+def test_classify_nvme_media_errors_and_critical_warning_are_critical():
+    base = m.parse_nvme_smart(_NVME_JSON)
+    assert m.classify_nvme({**base, "media_errors": 1})[0] == "crit"
+    assert m.classify_nvme({**base, "critical_warning": 4})[0] == "crit"
+    assert m.classify_nvme({**base, "smart_passed": False})[0] == "crit"
+
+
+def test_classify_nvme_spare_at_device_threshold_is_critical():
+    base = m.parse_nvme_smart(_NVME_JSON)
+    status, notes = m.classify_nvme({**base, "available_spare": 10})
+    assert status == "crit"
+    assert "threshold" in notes[0]
+
+
+# Trimmed from the real `tune2fs -l /dev/sda1` on this host, 2026-09-02.
+_TUNE2FS_CLEAN = """tune2fs 1.47.0 (5-Feb-2023)
+Filesystem volume name:   <none>
+Filesystem state:         clean
+Mount count:              12
+Maximum mount count:      -1
+Last checked:             Fri May 22 17:49:45 2026
+Lifetime writes:          15 TB
+"""
+
+
+def test_parse_tune2fs_reads_field_pairs():
+    fields = m.parse_tune2fs(_TUNE2FS_CLEAN)
+    assert fields["Filesystem state"] == "clean"
+    assert fields["Lifetime writes"] == "15 TB"
+    assert "FS Error count" not in fields
+
+
+def test_classify_ext4_absent_error_count_is_healthy_not_unknown():
+    # tune2fs omits `FS Error count` entirely when it is zero, so a missing
+    # field is the GOOD case. Treating it as unknown would mute the check.
+    status, notes = m.classify_ext4(m.parse_tune2fs(_TUNE2FS_CLEAN))
+    assert status == "ok"
+    assert notes == []
+
+
+def test_classify_ext4_recorded_errors_are_critical():
+    text = _TUNE2FS_CLEAN + "FS Error count:           7\nFirst error time:         Mon Sep  1 03:00:00 2026\n"
+    status, notes = m.classify_ext4(m.parse_tune2fs(text))
+    assert status == "crit"
+    assert "7 ext4 error(s)" in notes[0]
+
+
+def test_classify_ext4_unclean_state_is_critical():
+    text = _TUNE2FS_CLEAN.replace("clean", "not clean with errors")
+    status, notes = m.classify_ext4(m.parse_tune2fs(text))
+    assert status == "crit"
+    assert "not clean" in notes[0]
+
+
+def _disk(status: str) -> object:
+    return m.DiskHealth(device="/dev/x", kind="nvme", status=status)
+
+
+def test_derive_overall_status_failing_disk_degrades_but_does_not_down():
+    containers = [_container("sonarr")]
+    arr = [_arr("sonarr"), _arr("radarr"), _arr("lidarr"), _arr("prowlarr")]
+    assert m.derive_overall_status(containers, arr, _slskd(), None, [], [_disk("crit")]) == "degraded"
+    assert m.derive_overall_status(containers, arr, _slskd(), None, [], [_disk("warn")]) == "degraded"
+
+
+def test_derive_overall_status_unknown_disk_is_not_a_fault():
+    # sudo may simply not be configured on another host; that must not paint
+    # the whole stack degraded.
+    containers = [_container("sonarr")]
+    arr = [_arr("sonarr"), _arr("radarr"), _arr("lidarr"), _arr("prowlarr")]
+    assert m.derive_overall_status(containers, arr, _slskd(), None, [], [_disk("unknown")]) == "ok"
+
+
+def test_classify_ext4_clean_with_errors_is_critical():
+    # The trap: "clean with errors" CONTAINS "clean". A substring test would be
+    # green during exactly the failure this check exists to catch.
+    text = _TUNE2FS_CLEAN.replace("state:         clean", "state:         clean with errors")
+    status, notes = m.classify_ext4(m.parse_tune2fs(text))
+    assert status == "crit"
+    assert "clean with errors" in notes[0]

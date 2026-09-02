@@ -364,7 +364,11 @@ def read_crontab() -> str:
   return out if code == 0 else ""
 
 
-def check_media_storage(mount: str = "/mnt/drive", min_free_gb: float = 100.0) -> list[Alert]:
+def check_media_storage(
+  mount: str = "/mnt/drive",
+  min_free_gb: float = 100.0,
+  fs_device: str = "/dev/sda1",
+) -> list[Alert]:
   """Watch the media drive, because nothing else can.
 
   All ~4.7 TB of media lives on a single USB external disk with no redundancy,
@@ -377,6 +381,12 @@ def check_media_storage(mount: str = "/mnt/drive", min_free_gb: float = 100.0) -
   up notices, and ext4's default on error is to remount read-only — at which
   point every *arr import fails silently and the stack looks healthy. Both are
   invisible without looking, which is the whole reason this file exists.
+
+  Plus one channel the kernel log cannot give you: ext4's superblock error
+  counter. The kernel-log sweep below covers 6h and this host's journal retains
+  about 3 days, so an error older than that is invisible to both — while
+  `tune2fs -l` still reports it, because ext4 writes it to the superblock.
+  ADR-0023.
   """
   alerts: list[Alert] = []
 
@@ -403,6 +413,57 @@ def check_media_storage(mount: str = "/mnt/drive", min_free_gb: float = 100.0) -
         )
     except (ValueError, IndexError):
       pass
+
+  # ext4's own superblock error counter. The kernel-log check below reaches
+  # back 6h and the journal on this host retains ~3 days, so a disk error that
+  # happened before either window is invisible to both -- but ext4 records it
+  # in the superblock, where it survives the reboot and the rotation. This is
+  # the ONLY durable health signal this drive has: its USB bridge answers no
+  # SMART under any `smartctl -d` type, so `scrutiny` cannot see it. ADR-0023.
+  #
+  # tune2fs omits "FS Error count" entirely when it is zero, so absence is the
+  # healthy state. "Filesystem state" must be compared for EQUALITY with
+  # "clean": "clean with errors" contains "clean" and would pass a substring
+  # test during the exact failure this guards against.
+  code, t2fs = _run(["sudo", "-n", "tune2fs", "-l", fs_device])
+  if code != 0:
+    alerts.append(
+      Alert(
+        "media:ext4-unreadable",
+        "warning",
+        f"cannot read the ext4 superblock of {fs_device} via `sudo -n tune2fs -l` — "
+        "the media drive's only durable error counter is unreadable, so a past "
+        "disk error would leave no trace anywhere",
+      )
+    )
+  else:
+    t2fs_fields = {
+      k.strip(): v.strip()
+      for k, _, v in (ln.partition(":") for ln in t2fs.splitlines())
+      if _ and not k.startswith(" ")
+    }
+    state = t2fs_fields.get("Filesystem state", "").strip()
+    if state and state != "clean":
+      alerts.append(
+        Alert(
+          "media:ext4-state",
+          "critical",
+          f"{fs_device} filesystem state is {state!r}, not 'clean' — ext4 sets this "
+          "on error and it persists across reboots",
+        )
+      )
+    errs = t2fs_fields.get("FS Error count")
+    if errs and errs.strip() not in ("", "0"):
+      alerts.append(
+        Alert(
+          "media:ext4-errors",
+          "critical",
+          f"{errs} ext4 error(s) recorded in {fs_device}'s superblock "
+          f"(first {t2fs_fields.get('First error time', '?')}, "
+          f"last {t2fs_fields.get('Last error time', '?')}) — this disk has no SMART, "
+          "so this counter is the only lasting evidence it is failing",
+        )
+      )
 
   code, kern = _run(["journalctl", "-k", "--since", "-6h", "--no-pager", "-o", "cat"])
   if code == 0:

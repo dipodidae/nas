@@ -33,3 +33,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0020](0020-watchtower-replaced-and-demoted.md) | Watchtower replaced with a maintained fork and demoted to monitor-only      |
 | [0021](0021-nginx-cap-kill.md)                  | An nginx whose master and workers differ in uid needs `CAP_KILL`            |
 | [0022](0022-proxy-confs-are-tracked.md)         | Proxy-confs are tracked in-repo; the conf routes, the label only documents  |
+| [0023](0023-smart-monitoring.md)                | SMART monitoring: a scoped `SYS_ADMIN` exception, covering ONE disk         |
