@@ -607,22 +607,22 @@ else:
     else:
         ok("qbit-oscache-disabled", "both modes DisableOSCache (live session)")
 
-    # Separate check, deliberately a warning: DiskIOType is the setting that
-    # decides whether libtorrent mmaps at all. DisableOSCache mitigates the
-    # symptom; DiskIOType=POSIX removes the mechanism. Flipping it has a
-    # throughput cost, so this reports rather than enforces until the
-    # measurement in ADR-0007 says otherwise.
+    # DiskIOType decides whether libtorrent mmaps at all. This was a standing
+    # warning until it was measured on 2026-09-02; the question is now closed
+    # and the default is the accepted position, so it reports rather than nags.
+    #
+    # The measurement: the cgroup hit its 4g limit 40,277 times and OOM-killed
+    # ZERO times, while file_mapped fell 3.06GB -> 2.24GB between two readings
+    # and anon stayed at ~40MB. The mmap'd pages are reclaimable page cache, not
+    # a leak. Switching to the POSIX backend would remove a mechanism that is
+    # not doing harm, at a real throughput cost. Full reasoning in ADR-0007.
+    #
+    # What would reopen it: oom_kill going non-zero, or memory.current staying
+    # pinned while ANON (not file) is what grows.
     _t = _prefs.get("disk_io_type")
-    if _t in (0, 1):
-        warn("qbit-diskio-type", "ADR-0007",
-             f"disk_io_type={_t} ({_QBT_IOTYPE.get(_t)}). libtorrent still mmaps "
-             "torrent data, so the kernel keeps those pages in the cgroup's page "
-             "cache even with DisableOSCache set -- that is the actual source of "
-             "the 21.1GB accounting. The POSIX-compliant backend removes the "
-             "mechanism rather than mitigating it. Measure before switching; "
-             "this is a warning, not a rule.")
-    else:
-        ok("qbit-diskio-type", _QBT_IOTYPE.get(_t, _t))
+    ok("qbit-diskio-type",
+       f"{_QBT_IOTYPE.get(_t, _t)} -- accepted position, mmap pages proven "
+       "reclaimable (ADR-0007)")
 
 # ==========================================================================
 # 15. Watchtower is monitor-only, and not the archived upstream
