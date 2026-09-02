@@ -1,0 +1,103 @@
+# jellyfin-playlist-generator -- unified container (Nuxt static frontend +
+# FastAPI + nginx basic-auth, all on :80) plus its pgvector database.
+#
+# WHY THIS FILE IS NOT NEXT TO THE DOCKERFILE: the app's source is a git
+# submodule at ../jellyfin-playlist-generator, which is its own GitHub repo.
+# Putting a compose.yaml inside it would commit stack-local config into a
+# foreign repo and `git submodule update --remote` could clobber it. So this
+# wrapper directory sits alongside the submodule and points `build.context` at
+# it -- the same shape webapps/ongehoord already uses for its nested submodule.
+# `include` resolves that relative context against THIS directory. ADR-0000.
+#
+# The app does its own basic auth (AUTH_USER/AUTH_PASS -> htpasswd), so /health
+# is the only unauthenticated path. The library starts EMPTY -- index it
+# in-container with `docker exec playlist-generator python -m app.cli_v3 <step>`.
+#
+# Refresh the source with `make submodules`, then rebuild.
+
+services:
+
+  # Internal only -- no host publish; the app reaches it over nas-network.
+  # Data is persisted under CONFIG_DIRECTORY like every other service.
+  playlist-generator-db:
+    extends:
+      file: ../../compose/_fragments.yaml
+      service: svc-base
+    image: pgvector/pgvector:pg16
+    container_name: playlist-generator-db
+    environment:
+      - POSTGRES_USER=playlist
+      - POSTGRES_PASSWORD=${PLAYLIST_GENERATOR_DB_PASSWORD}
+      - POSTGRES_DB=playlist_generator
+    volumes:
+      - ${CONFIG_DIRECTORY}/playlist-generator-db:/var/lib/postgresql/data
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U playlist -d playlist_generator]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # INVARIANT: no watchtower label. Never auto-update a database engine out
+    # from under its data -- a pg major bump needs a dump/restore, not a
+    # recreate. Deliberately unlabeled. ADR-0006.
+    # KNOWN GAP: no cap_drop: ALL. ADR-0018.
+
+  playlist-generator:
+    extends:
+      file: ../../compose/_fragments.yaml
+      service: svc-base
+    build:
+      context: ../jellyfin-playlist-generator
+    image: nas/playlist-generator:latest
+    pull_policy: build
+    container_name: playlist-generator
+    environment:
+      - TZ=${TZ:-UTC}
+      - DATABASE_URL=postgresql://playlist:${PLAYLIST_GENERATOR_DB_PASSWORD}@playlist-generator-db:5432/playlist_generator
+      - AUTH_USER=${PLAYLIST_GENERATOR_USERNAME:-admin}
+      - AUTH_PASS=${PLAYLIST_GENERATOR_PASSWORD}
+      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
+      - LASTFM_API_SECRET=${LASTFM_API_SECRET:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DISCOGS_TOKEN=${DISCOGS_TOKEN:-}
+      - DISCOGS_CONSUMER_KEY=${DISCOGS_CONSUMER_KEY:-}
+      - DISCOGS_CONSUMER_SECRET=${DISCOGS_CONSUMER_SECRET:-}
+      - MUSICBRAINZ_CONTACT=${MUSICBRAINZ_CONTACT:-}
+      - MUSIC_DIRECTORIES=/music
+      - M3U_OUTPUT_DIR=/playlists
+      - SCAN_THREADS=${PLAYLIST_GENERATOR_SCAN_THREADS:-8}
+      - EMBEDDING_MODEL_VERSION=1
+      - JELLYFIN_URL=http://jellyfin:8096
+      - JELLYFIN_API_KEY=${API_KEY_JELLYFIN:-}
+      - JELLYFIN_USER_ID=${JELLYFIN_USER_ID:-}
+      # Path rewrite for "Push to Jellyfin": this container sees music at
+      # /music, Jellyfin reports it at /data/movies/music because Jellyfin
+      # mounts ${SHARE_DIRECTORY} at /data/movies. If Jellyfin's mount ever
+      # changed, this pair would have to change with it -- which is one more
+      # reason it does not change. ADR-0016.
+      - LOCAL_PATH_PREFIX=/music
+      - JELLYFIN_PATH_PREFIX=/data/movies/music
+    volumes:
+      # RW (was :ro) so the in-app "Fix Jellyfin release dates" button can
+      # write durable album.nfo sidecars (year + <lockdata>) into album
+      # folders. Only the date-fixer writes here. NOTE: this is the
+      # playlist-generator's own music mount, NOT Jellyfin's
+      # ${SHARE_DIRECTORY}:/data/movies:ro -- that one stays read-only.
+      - ${SHARE_DIRECTORY}/music:/music
+      - ${SHARE_DIRECTORY}/playlists:/playlists
+    depends_on:
+      playlist-generator-db:
+        condition: service_healthy
+    networks:
+      - nas-network
+    labels:
+      # INVARIANT: no watchtower label -- locally-built image. ADR-0006.
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    # KNOWN GAP: no cap_drop: ALL. ADR-0018.

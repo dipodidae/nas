@@ -1,0 +1,209 @@
+# Download path: the two P2P clients, the indexer aggregator, and the
+# Cloudflare solver.
+#
+# Blast radius: qbittorrent and slskd are the slowest and most fragile stops in
+# the stack, and both carry incident history that constrains how they may be
+# updated or restarted. Read ADR-0004, ADR-0005 and ADR-0009 before touching
+# either. Neither runs behind a VPN -- both egress over the host's home IP
+# (ADR-0019).
+
+services:
+
+  prowlarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    volumes:
+      - ${CONFIG_DIRECTORY}/prowlarr:/config
+    ports:
+      - '127.0.0.1:9696:9696'
+    depends_on:
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    # Same cadence as svc-arr, but prowlarr takes no UMASK, so it is not an
+    # svc-arr and declares the timings itself.
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:9696/ping']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+  qbittorrent:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio
+    # INVARIANT: tag is PINNED and the floor is qBittorrent >= 5.2.2 (upstream
+    # #24357 / fix #24363). Updates are a deliberate tag bump, never a
+    # schedule. ADR-0005, ADR-0006. `make update-qbittorrent`.
+    image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls473
+    container_name: qbittorrent
+    # INVARIANT: stable hostname across recreates -- the lockfile records it
+    # and the stale-lock init script compares against it. ADR-0005.
+    hostname: qbittorrent
+    cap_add:
+      # INVARIANT: KILL is required. s6-overlay runs as root and must signal
+      # qbittorrent-nox, which runs as abc (uid 1000); without CAP_KILL every
+      # SIGTERM is refused with EPERM and Docker SIGKILLs at the end of
+      # stop_grace_period. Do not remove. FOWNER/FSETID are deliberately NOT
+      # granted -- KILL alone is sufficient. ADR-0004.
+      - KILL
+    networks:
+      - nas-network
+    ports:
+      # INVARIANT: the loopback publish must stay -- scripts/ authenticate
+      # against the WebUI at localhost:8080 via qbit's localhost auth-bypass.
+      # ADR-0014.
+      - '127.0.0.1:8080:8080' # qbittorrent WebUI (behind SWAG; scripts use loopback)
+      - '6881:6881/tcp' # BitTorrent inbound (default; forward on router)
+      - '6881:6881/udp'
+    environment:
+      - WEBUI_PORT=8080
+      # INVARIANT: QBITTORRENT_USER/QBITTORRENT_PASS must NOT be set here. The
+      # LSIO image never read them (linuxserver#228, closed as not planned) and
+      # passing them only leaked credentials into `docker inspect`. They stay
+      # in .env for scripts/. ADR-0011.
+      - TORRENTING_PORT=6881
+    volumes:
+      - ${CONFIG_DIRECTORY}/qbittorrent:/config
+      - ${SHARE_DIRECTORY}/downloads:/downloads
+      # Backstop for ADR-0004, not a substitute for it: clears a *stale*
+      # single-instance lock at init, proving staleness first. Never make this
+      # an unconditional rm -f. ADR-0005.
+      - ../qbittorrent/custom-cont-init.d:/custom-cont-init.d:ro
+    # Headroom for flushing torrents.db + resume data; with CAP_KILL a graceful
+    # stop measures ~6s. Re-measure with `make measure-qbittorrent-stop` as the
+    # torrent count grows. ADR-0004.
+    stop_grace_period: 120s
+    # INVARIANT: memswap_limit == mem_limit, so libtorrent's mmap'd pages
+    # cannot balloon into host swap. Scoped exception to the no-mem_limit
+    # policy of ADR-0001; the real fix is DisableOSCache in qBittorrent.conf.
+    # ADR-0007.
+    mem_limit: 4g
+    memswap_limit: 4g
+    labels:
+      # INVARIANT: no watchtower label. Tag is pinned, and watchtower's
+      # non-atomic stop->remove->create deleted this container for 13h.
+      # ADR-0006.
+      - autoheal=true
+    healthcheck:
+      # GET / returns 200 unauthenticated on 5.2.3; /api/v2/* returns 403
+      # without a session and would flap. --max-time bounds a wedged WebUI.
+      test: [CMD, curl, -f, --max-time, '10', 'http://localhost:8080/']
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
+
+  # qui: web UI *over* qBittorrent (autobrr/qui). It has no BitTorrent engine
+  # and talks to the qbittorrent daemon over its WebUI API, like the *arrs.
+  # Because it connects from nas-network rather than loopback it needs the real
+  # QBITTORRENT_USER/PASS, entered by hand in its UI once. ADR-0014.
+  qui:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: ghcr.io/autobrr/qui:latest
+    container_name: qui
+    # INVARIANT: no PUID/PGID support upstream and no root init to chown
+    # /config, so ${CONFIG_DIRECTORY}/qui must already be ${PUID}:${PGID} or
+    # qui crash-loops on `permission denied`. `make bootstrap`. ADR-0014.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    environment:
+      - QUI__HOST=0.0.0.0
+      - QUI__PORT=7476
+      - QUI__SESSION_SECRET=${QUI_SESSION_SECRET}
+    volumes:
+      - ${CONFIG_DIRECTORY}/qui:/config
+    ports:
+      - '127.0.0.1:7476:7476'
+    depends_on:
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - swag_port=7476
+      - swag_proto=http
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:7476/']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  # slskd: no linuxserver image exists; official slskd/slskd is the standard.
+  # Runs as the host PUID:PGID so it can write the shared volumes.
+  slskd:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: slskd/slskd:latest
+    container_name: slskd
+    user: '${PUID:-1000}:${PGID:-1000}'
+    networks:
+      - nas-network
+    ports:
+      - '127.0.0.1:5030:5030' # slskd WebUI (behind SWAG)
+      - '50300:50300/tcp' # Soulseek P2P inbound (forward on router)
+    environment:
+      - SLSKD_REMOTE_CONFIGURATION=true
+      - SLSKD_DOWNLOADS_DIR=/downloads/complete/slskd
+      - SLSKD_INCOMPLETE_DIR=/downloads/incomplete/slskd
+      - SLSKD_SHARED_DIR=/music
+      - SLSKD_SLSK_USERNAME=${SLSKD_SLSK_USERNAME}
+      - SLSKD_SLSK_PASSWORD=${SLSKD_SLSK_PASSWORD}
+      - SLSKD_USERNAME=${SLSKD_USERNAME}
+      - SLSKD_PASSWORD=${SLSKD_PASSWORD}
+      - SLSKD_API_KEY=${API_KEY_SLSKD}
+    volumes:
+      - ${CONFIG_DIRECTORY}/slskd:/app
+      - ${SHARE_DIRECTORY}/music:/music
+      - ${SHARE_DIRECTORY}/downloads:/downloads
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+      - autoheal=true
+    # INVARIANT: this healthcheck must stay Soulseek-INDEPENDENT (web-UI spider
+    # only). It must never probe isLoggedIn: a restart on a dropped login
+    # re-collides with slsknet's ghost session and perpetuates the 5000ms
+    # login-timeout spiral. Login state is watched alert-only by
+    # scripts/slskd_login_watch.py, which never restarts. ADR-0009.
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5030/']
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # FlareSolverr-compatible Cloudflare solver for Prowlarr's CF-protected
+  # indexers (tagged `cloudflare` in Prowlarr).
+  byparr:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: ghcr.io/thephaseless/byparr:latest
+    container_name: byparr
+    init: true
+    environment:
+      - LOG_LEVEL=INFO
+    ports:
+      - '127.0.0.1:8191:8191'
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8191/docs']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

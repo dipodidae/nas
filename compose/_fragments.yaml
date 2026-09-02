@@ -1,0 +1,94 @@
+# Shared service fragments.
+#
+# These are NOT services. This file is deliberately absent from the `include:`
+# list in ../compose.yaml, so nothing here is ever instantiated -- it exists
+# only as a target for `extends:`. That is also why the fragments carry no
+# `image:`/`build:`: an extends target is merged, never built.
+#
+# Why `extends` and not YAML anchors: anchors are file-scoped and cannot be
+# aliased across files, so a split layout would need the anchor header
+# copy-pasted into every module -- i.e. the duplication this refactor exists to
+# remove. `extends` is the only cross-file mechanism Compose offers. Verified
+# semantics (docker compose v5.5.0, see docs/decisions/0000-compose-layout.md):
+#   - list-valued keys (cap_add, ...) APPEND local values after inherited ones
+#   - map-valued keys (environment, labels, healthcheck, logging.options) MERGE
+#     with the local value winning per key
+#   - fragments may extend fragments, so composite layers work
+# Consequence for readers: a service can extend exactly ONE fragment, hence the
+# linear chain below rather than a mix-and-match set.
+#
+# Do NOT hoist a value in here that is a deliberate per-service exception.
+# Those stay local, next to the comment that explains them: qbittorrent's KILL,
+# nextcloud's NET_BIND_SERVICE and 25m/3 logging, jellyseerr's FOWNER,
+# swag's NET_BIND_SERVICE, every mem_limit, every stop_grace_period.
+
+services:
+
+  # Layer 1 -- every long-running service in the stack.
+  # No cap_drop here: playlist-generator and its db are the two services that
+  # do not (yet) drop capabilities. See docs/decisions/0018-capability-gaps.md.
+  svc-base:
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+
+  # Layer 2 -- the hardening baseline. ADR-0001.
+  svc-hardened:
+    extends:
+      file: _fragments.yaml
+      service: svc-base
+    cap_drop:
+      - ALL
+
+  # Layer 3 -- + container-local timezone.
+  svc-hardened-tz:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened
+    environment:
+      - TZ=${TZ:-UTC}
+
+  # Layer 4 -- + run-as identity for images that honour PUID/PGID.
+  # Split from svc-lsio so swag and lingarr can inherit the identity while
+  # declaring their own (differently-shaped) capability sets locally.
+  svc-lsio-env:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+
+  # Layer 5 -- + the standard linuxserver.io capability set. These four are what
+  # the LSIO root init needs to chown /config and drop to `abc`; the app itself
+  # runs unprivileged afterwards. ADR-0001.
+  svc-lsio:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio-env
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+
+  # Layer 6 -- the *arr shape: LSIO caps + UMASK + the shared /ping healthcheck
+  # cadence. Only the `test:` line differs per service (the port), so that stays
+  # local. Used by sonarr, radarr, lidarr, bazarr -- prowlarr shares the cadence
+  # but not UMASK, so it declares its own timings.
+  svc-arr:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio
+    environment:
+      - UMASK=022
+    healthcheck:
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

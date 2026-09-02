@@ -1,0 +1,47 @@
+# ongehoord -- self-hosted PREVIEW of dipodidae/ongehoord-ui-content (Nuxt 4 +
+# @nuxt/content), pinned via the nested git submodule at ./src (branch
+# `acceptance`). Upstream ships to Vercel with no Dockerfile, so ./Dockerfile
+# builds the nitro node-server output.
+#
+# Lives next to its Dockerfile so `build.context: .` resolves here.
+#
+# SWAG fronts it at ongehoord.${PUBLIC_DOMAIN} with HTTP basic auth at the
+# PROXY layer (creds in ./.env -> /config/nginx/.htpasswd-ongehoord); the app
+# itself has NO auth of its own. No host port: SWAG reaches it in-network at
+# ongehoord:3000.
+#
+# BUILD GOTCHA: this image is NOT buildable with a plain `docker compose
+# build` -- it needs buildx with `--network=host`. Combined with
+# `pull_policy: build`, that means a bare `docker compose up -d` or
+# `pnpm update` across the whole stack will trip over it. Use
+# ./redeploy.sh instead. `make submodules` refreshes ./src.
+
+services:
+
+  ongehoord:
+    extends:
+      file: ../../compose/_fragments.yaml
+      service: svc-hardened-tz
+    build:
+      context: .
+    image: nas/ongehoord:latest
+    pull_policy: build
+    container_name: ongehoord
+    environment:
+      - NITRO_HOST=0.0.0.0
+      - NITRO_PORT=3000
+    # App runtime secrets (NUXT_* tokens: Vimeo/Maps/OpenAI/etc.). Gitignored,
+    # user-managed. Path is relative to THIS file, so it reaches the repo root.
+    env_file:
+      - ../../.env.ongehoord
+    networks:
+      - nas-network
+    labels:
+      # INVARIANT: no watchtower label -- locally-built image. ADR-0006.
+      - swag=enable
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:3000/nl']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

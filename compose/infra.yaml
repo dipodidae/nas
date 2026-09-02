@@ -1,0 +1,208 @@
+# Control plane: TLS termination, the Docker-API proxy, the two supervisors
+# that use it, and push alerting.
+#
+# Blast radius: everything. dockerproxy is the only container in the stack with
+# any route to the Docker socket (ADR-0013), and both watchtower and autoheal
+# depend on it.
+
+services:
+
+  swag:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio-env
+    image: lscr.io/linuxserver/swag:latest
+    container_name: swag
+    # NET_BIND_SERVICE first, then the LSIO set -- declared locally rather than
+    # inherited from svc-lsio so the on-disk capability order is unchanged.
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    environment:
+      - VALIDATION=dns
+      - DNSPLUGIN=cloudflare
+      - CF_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - URL=${PUBLIC_DOMAIN}
+      - SUBDOMAINS=wildcard
+      - ONLY_SUBDOMAINS=false
+      - EMAIL=${ADMIN_EMAIL}
+    volumes:
+      - ${CONFIG_DIRECTORY}/swag:/config
+      # Paths are relative to THIS file (compose/), hence the ../ -- see
+      # docs/decisions/0000-compose-layout.md.
+      - ../webapps/4eva-rootpage/4eva-rootpage.root.conf:/config/nginx/site-confs/root.conf:ro
+      - ../nginx-cache:/var/cache/nginx:rw
+    ports:
+      - '443:443'
+      - '80:80'
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    depends_on:
+      4eva-rootpage:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, -f, 'https://localhost:443', -k]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # Read-only Docker API proxy. INVARIANT: the only container in this stack
+  # permitted to mount /var/run/docker.sock. Exposes just the endpoints
+  # watchtower and autoheal need; NETWORKS=1 is required so watchtower can
+  # disconnect/reconnect containers on nas-network during a recreate.
+  # ADR-0013.
+  dockerproxy:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: dockerproxy
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - NETWORKS=1
+      - PING=1
+      - VERSION=1
+      - INFO=1
+      - POST=1
+      - DELETE=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    networks:
+      - nas-network
+    healthcheck:
+      disable: true
+    # Watchtower-opt-out: it must not restart its own dependency. ADR-0006.
+
+  # Pulls newer images for containers labelled
+  # com.centurylinklabs.watchtower.enable=true, on WATCHTOWER_SCHEDULE.
+  # Reaches Docker only through dockerproxy. INVARIANT: watchtower's recreate
+  # is not atomic, so slow/important services are opted OUT and updated by
+  # hand -- ADR-0006 lists them and explains the 13h qbittorrent outage.
+  watchtower:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    environment:
+      - DOCKER_HOST=tcp://dockerproxy:2375
+      - DOCKER_API_VERSION=1.40
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_ROLLING_RESTART=false
+      - WATCHTOWER_REMOVE_VOLUMES=false
+      # INVARIANT: >= the longest stop_grace_period in the stack (qbittorrent,
+      # 120s). Watchtower's own SIGTERM->SIGKILL timeout defaults to 10s and
+      # ignores compose's stop_grace_period. ADR-0006.
+      - WATCHTOWER_TIMEOUT=150s
+      # One ntfy digest per run, so "what changed at 04:00" needs no log
+      # reading. ADR-0012.
+      - WATCHTOWER_NOTIFICATION_URL=ntfy://${NTFY_ARR_USER}:${NTFY_ARR_PASSWORD}@ntfy:8410/nas-alerts?scheme=http&priority=default&tags=package
+      - WATCHTOWER_NOTIFICATION_REPORT=true
+      - WATCHTOWER_NOTIFICATIONS_LEVEL=info
+    depends_on:
+      dockerproxy:
+        condition: service_started
+    networks:
+      - nas-network
+    healthcheck:
+      disable: true
+    # Watchtower-opt-out: never self-update. ADR-0006.
+
+  # Restarts containers labelled `autoheal=true` (qbittorrent, slskd) when
+  # Docker marks them unhealthy. Reaches Docker only through dockerproxy.
+  # NOTE: slskd's healthcheck is deliberately Soulseek-INDEPENDENT, so autoheal
+  # restarts slskd only if its web server itself dies -- never for a dropped
+  # Soulseek login, which a restart makes strictly worse. ADR-0009.
+  autoheal:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=60
+      # INVARIANT: stop timeout >= the longest stop_grace_period in the stack
+      # (120s), and CURL_TIMEOUT > that stop timeout. autoheal uses its own
+      # stop timeout (default 10s) and its restart call blocks for the whole
+      # of it. ADR-0010.
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=150
+      - DOCKER_SOCK=tcp://dockerproxy:2375
+      - CURL_TIMEOUT=180
+    depends_on:
+      dockerproxy:
+        condition: service_started
+    networks:
+      - nas-network
+    healthcheck:
+      disable: true
+    # Watchtower-opt-out: control plane. ADR-0006.
+
+  # Push alerting for scripts/stack_watchdog.py and watchtower. Self-hosted so
+  # alert contents never leave the box; deny-all because the topic sits on a
+  # public subdomain. Coverage limit: the watchdog and ntfy share this host, so
+  # neither can report the host itself being down. ADR-0012.
+  ntfy:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    command: ['serve']
+    # INVARIANT: no LSIO root init here, so ${CONFIG_DIRECTORY}/ntfy must
+    # already be ${PUID}:${PGID} or ntfy crash-loops on first start. Same
+    # gotcha as `qui`. `make bootstrap` does this. ADR-0014.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    environment:
+      # Non-root cannot bind :80, so ntfy listens high and SWAG proxies to it.
+      - NTFY_LISTEN_HTTP=:8410
+      - NTFY_BASE_URL=https://ntfy.${PUBLIC_DOMAIN}
+      - NTFY_BEHIND_PROXY=true
+      - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
+      - NTFY_AUTH_DEFAULT_ACCESS=deny-all
+      - NTFY_ENABLE_SIGNUP=false
+      - NTFY_CACHE_FILE=/var/lib/ntfy/cache.db
+      - NTFY_CACHE_DURATION=48h
+      - NTFY_ENABLE_LOGIN=true
+      # Regenerating this keypair invalidates every existing browser
+      # subscription. ADR-0012.
+      - NTFY_WEB_PUSH_PUBLIC_KEY=${NTFY_WEB_PUSH_PUBLIC_KEY}
+      - NTFY_WEB_PUSH_PRIVATE_KEY=${NTFY_WEB_PUSH_PRIVATE_KEY}
+      - NTFY_WEB_PUSH_FILE=/var/lib/ntfy/webpush.db
+      - NTFY_WEB_PUSH_EMAIL_ADDRESS=${ADMIN_EMAIL}
+      # Deliberately NOT set: NTFY_UPSTREAM_BASE_URL (would send a hash of
+      # every topic to ntfy.sh; only iOS needs that relay). ADR-0012.
+    volumes:
+      - ${CONFIG_DIRECTORY}/ntfy:/var/lib/ntfy
+    ports:
+      - '127.0.0.1:8410:8410' # publish/subscribe from host cron; public side is SWAG
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O - http://localhost:8410/v1/health | grep -q ''"healthy":true''']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

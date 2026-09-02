@@ -1,0 +1,103 @@
+# Playback: Jellyfin and its request front-end.
+#
+# Blast radius: this is the user-visible half of the stack. Jellyfin is also
+# the worst service here to lose to a failed automatic recreate, which is why
+# it is Watchtower-opt-out and updated by hand (`make pull-jellyfin`). ADR-0006.
+#
+# Jellyfin currently carries three unresolved-leak mitigations (mem_limit,
+# MALLOC_ARENA_MAX, DOTNET_EnableWriteXorExecute) -- all of them stopgaps
+# containing a blast radius, not fixes. ADR-0008.
+
+services:
+
+  jellyfin:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
+      # Caps glibc malloc arenas. glibc sizes them from the host's online CPU
+      # count (16 here), not the container's cgroup quota, so mem_limit alone
+      # cannot restrain the native RSS growth. Trades allocator concurrency for
+      # memory. Revert: delete this line. ADR-0008.
+      - MALLOC_ARENA_MAX=2
+      # Disables .NET's W^X double-mapping of JIT'd code. A real, if small,
+      # hardening tradeoff, accepted here: LAN-only media server behind SWAG
+      # that executes no untrusted code. Revert: delete this line. ADR-0008.
+      - DOTNET_EnableWriteXorExecute=0
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "991" # host 'render' GID, grants access to /dev/dri/renderD128 for QSV
+    # INVARIANT: Jellyfin's volume mappings are NOT to be changed, per the
+    # owner's standing instruction. ${SHARE_DIRECTORY}:/data/movies:ro is
+    # intentional even though it looks misnamed -- every Jellyfin library path,
+    # every *arr path mapping and the playlist-generator's path rewrite are all
+    # calibrated to it. ADR-0016.
+    volumes:
+      - ${CONFIG_DIRECTORY}/jellyfin:/config
+      - ${SHARE_DIRECTORY}:/data/movies:ro
+    ports:
+      - '8096:8096'
+      - '8920:8920'
+      - '7359:7359/udp'
+      - '1900:1900/udp'
+    networks:
+      - nas-network
+    # INVARIANT: memswap_limit == mem_limit, so it cannot balloon into host
+    # swap and thrash everything else before finally being killed. Scoped
+    # exception to the no-mem_limit policy of ADR-0001; a stopgap containing a
+    # leak that is not yet root-caused. ADR-0008.
+    mem_limit: 10g
+    memswap_limit: 10g
+    labels:
+      # INVARIANT: no watchtower label -- deliberately removed, not forgotten.
+      # Updates are `make pull-jellyfin`. ADR-0006.
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8096/System/Info/Public']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  jellyseerr:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio
+    image: ghcr.io/fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    init: true
+    # FOWNER on top of the LSIO set: jellyseerr's init needs to change
+    # ownership of files it does not own in /app/config. Deliberate exception,
+    # not a copy-paste -- do not propagate it to other services (qbittorrent in
+    # particular is verified NOT to need it, ADR-0004).
+    cap_add:
+      - FOWNER
+    environment:
+      - LOG_LEVEL=info
+      - PORT=5056
+    volumes:
+      - ${CONFIG_DIRECTORY}/jellyseerr:/app/config
+    ports:
+      - '127.0.0.1:5056:5056'
+    depends_on:
+      jellyfin:
+        condition: service_started
+      sonarr:
+        condition: service_started
+      radarr:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:5056/api/v1/status']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

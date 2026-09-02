@@ -1,0 +1,39 @@
+# 4eva-rootpage -- the Vite landing page served at the apex domain, plus the
+# /ops.html dashboard.
+#
+# Lives next to its Dockerfile so `build.context: .` resolves here. swag
+# depends_on this service (condition: service_healthy) and separately bind-
+# mounts 4eva-rootpage.root.conf from this directory as its site config; both
+# of those are why the whole stack stays one Compose project. ADR-0000.
+
+services:
+
+  4eva-rootpage:
+    extends:
+      file: ../../compose/_fragments.yaml
+      service: svc-hardened-tz
+    build:
+      context: .
+    image: nas/4eva-rootpage:latest
+    pull_policy: build
+    container_name: 4eva-rootpage
+    volumes:
+      # Live media-ops status JSON, refreshed by scripts/media_ops_status.py on
+      # cron and served at /ops-status.json for /ops.html. Read-only into the
+      # container: only the host cron writes it.
+      - ${CONFIG_DIRECTORY}/ops-status/ops-status.json:/usr/share/nginx/html/ops-status.json:ro
+    ports:
+      - '127.0.0.1:8088:8080'
+    networks:
+      - nas-network
+    labels:
+      # INVARIANT: no watchtower label. Locally-built image -- watchtower
+      # cannot pull it, so labelling it would only make it a recreate risk for
+      # no benefit. Deliberately unlabeled, not forgotten. ADR-0006.
+      - swag=enable
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://localhost:8080/healthz']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

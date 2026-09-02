@@ -1,0 +1,257 @@
+# Library management: the *arr suite, subtitle tooling, and the two janitors.
+#
+# Blast radius: low -- these are stateless HTTP apps over a SQLite config, safe
+# to restart freely. The one thing that is NOT low-risk here is cleanuparr,
+# which is an armed deletion engine (ADR-0017).
+#
+# All three of sonarr/radarr/lidarr mount ${SHARE_DIRECTORY}:/data for the same
+# reason (ADR-0002); lidarr's is staged but not yet in use (ADR-0003).
+
+services:
+
+  sonarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-arr
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    volumes:
+      - ${CONFIG_DIRECTORY}/sonarr:/config
+      - ${SHARE_DIRECTORY}/series:/tv
+      - ${SHARE_DIRECTORY}/downloads:/downloads
+      # INVARIANT: /data must stay mounted. Hardlinks cannot cross a mount
+      # point, so with /tv and /downloads as separate binds every import
+      # silently fell back to a full copy. The legacy mounts above are kept
+      # deliberately to keep this reversible. ADR-0002.
+      - ${SHARE_DIRECTORY}:/data
+    ports:
+      - '127.0.0.1:8989:8989'
+    depends_on:
+      prowlarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8989/ping']
+
+  radarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-arr
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    volumes:
+      - ${CONFIG_DIRECTORY}/radarr:/config
+      - ${SHARE_DIRECTORY}/movies:/movies
+      - ${SHARE_DIRECTORY}/downloads:/downloads
+      # INVARIANT: /data must stay mounted. Hardlinks cannot cross a mount
+      # point, so with /movies and /downloads as separate binds every import
+      # silently fell back to a full copy. The legacy mounts above are kept
+      # deliberately to keep this reversible. ADR-0002.
+      - ${SHARE_DIRECTORY}:/data
+    ports:
+      - '127.0.0.1:7878:7878'
+    depends_on:
+      prowlarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:7878/ping']
+
+  lidarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-arr
+    # Pinned to :nightly deliberately -- Lidarr's stable channel lags too far
+    # behind for the Tubifarry/slskd path.
+    image: lscr.io/linuxserver/lidarr:nightly
+    container_name: lidarr
+    volumes:
+      - ${CONFIG_DIRECTORY}/lidarr:/config
+      - ${SHARE_DIRECTORY}/music:/music
+      - ${SHARE_DIRECTORY}/downloads:/downloads
+      # WARNING: STAGED BUT NOT IN USE. Lidarr's root folder is still /music,
+      # so lidarr still copies rather than hardlinks. The repath was attempted
+      # and rolled back -- `PUT /api/v1/artist/editor` wiped TrackFiles. Do NOT
+      # retry via that endpoint. Keep this mount; it is ready for a safer
+      # retry. ADR-0003 (background: ADR-0002).
+      - ${SHARE_DIRECTORY}:/data
+    ports:
+      - '127.0.0.1:8686:8686'
+    depends_on:
+      prowlarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
+      slskd:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8686/ping']
+
+  bazarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-arr
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    volumes:
+      - ${CONFIG_DIRECTORY}/bazarr:/config
+      - ${SHARE_DIRECTORY}/movies:/movies
+      - ${SHARE_DIRECTORY}/series:/tv
+      # DELIBERATELY no ${SHARE_DIRECTORY}:/data mount, unlike the other *arrs.
+      # Bazarr only writes subtitle sidecars next to the media file it already
+      # sees; it never imports, moves or hardlinks, so it has no cross-mount
+      # link() to fail and ADR-0002 does not apply to it. ADR-0015.
+      - ${CONFIG_DIRECTORY}/subcleaner:/opt/subcleaner:ro
+    ports:
+      - '127.0.0.1:6767:6767'
+    depends_on:
+      prowlarr:
+        condition: service_started
+      whisper:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:6767/ping']
+
+  # CPU-based Whisper ASR for bazarr's subtitle generation. On the MS01's Intel
+  # CPU `small` transcribes ~5-10x real-time; `medium` is more accurate and
+  # proportionally slower. bazarr depends_on this, so it is not optional --
+  # see ADR-0000 on why it is not behind a compose profile.
+  whisper:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: whisper
+    environment:
+      - ASR_ENGINE=faster_whisper
+      - ASR_MODEL=small
+      - ASR_DEVICE=cpu
+      - ASR_MODEL_PATH=/models
+    volumes:
+      - ${CONFIG_DIRECTORY}/whisper:/models
+    ports:
+      - '127.0.0.1:9000:9000'
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:9000/docs']
+      interval: 120s
+      timeout: 15s
+      retries: 3
+      start_period: 180s
+
+  lingarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio-env
+    image: lingarr/lingarr:latest
+    container_name: lingarr
+    # No DAC_OVERRIDE: lingarr's init only needs to chown and drop privileges,
+    # not to bypass file permissions. Hence svc-lsio-env plus these three
+    # rather than the full svc-lsio set.
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - MAX_CONCURRENT_JOBS=2
+      - DB_CONNECTION=sqlite
+    volumes:
+      - ${CONFIG_DIRECTORY}/lingarr:/app/config
+      - ${SHARE_DIRECTORY}/movies:/app/movies
+      - ${SHARE_DIRECTORY}/series:/app/tv
+    ports:
+      - '127.0.0.1:9876:8080'
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      disable: true
+
+  # ARMED DELETION ENGINE. dryRun is false and it is wired to qBittorrent and
+  # to Sonarr/Radarr. Three of its modules must stay OFF (Unlinked Downloads,
+  # Orphaned Files, Dead Torrents, Seeker, Blacklist Sync) and Lidarr must
+  # never be enabled in any module. Read ADR-0017 before changing its config.
+  cleanuparr:
+    extends:
+      file: _fragments.yaml
+      service: svc-lsio
+    image: ghcr.io/cleanuparr/cleanuparr:latest
+    container_name: cleanuparr
+    environment:
+      - PORT=11011
+    volumes:
+      - ${CONFIG_DIRECTORY}/cleanuparr:/config
+    ports:
+      - '127.0.0.1:11011:11011'
+    depends_on:
+      sonarr:
+        condition: service_started
+      radarr:
+        condition: service_started
+      lidarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_healthy
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:11011/api/v1/health']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Syncs TRaSH-guide quality profiles into Sonarr/Radarr on its own cron.
+  # Excludes Lidarr by design (recyclarr has no Lidarr support).
+  recyclarr:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: recyclarr/recyclarr:8
+    container_name: recyclarr
+    environment:
+      - CRON_SCHEDULE=0 4 * * *
+      - DOCKER_UID=${PUID:-1000}
+      - DOCKER_GID=${PGID:-1000}
+    volumes:
+      - ${CONFIG_DIRECTORY}/recyclarr:/config
+    depends_on:
+      sonarr:
+        condition: service_started
+      radarr:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true

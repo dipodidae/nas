@@ -1,0 +1,60 @@
+# Minisforum MS01 homelab NAS -- ONE Compose project, split across many files.
+#
+# This file holds three things and nothing else: the project name, the network,
+# and the include list. Every service lives in a module under compose/ or next
+# to its own Dockerfile under webapps/.
+#
+# Why one project rather than several: cross-module `depends_on` only works
+# inside a single project (swag -> 4eva-rootpage, cleanuparr -> qbittorrent,
+# playlist-generator -> its db, lidarr -> slskd). `include:` merges the modules
+# into this project while resolving each module's relative paths against its
+# OWN directory -- which is what lets webapps/*/compose.yaml say
+# `build.context: .`. See docs/decisions/0000-compose-layout.md.
+#
+# Modules are grouped by blast radius / restart cadence, so that recreating one
+# group cannot ripple into another.
+#
+# Conventions and the invariants that must hold: AGENTS.md, docs/decisions/,
+# and scripts/check-invariants.sh (`make check`).
+
+name: nas
+
+# Declared EXACTLY ONCE, here. Modules only *reference* `nas-network`; none of
+# them redeclares it (verified -- `include` resolves the reference against this
+# top-level declaration, so `external: true` in the modules is not needed).
+networks:
+  nas-network:
+    name: nas-network
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: 'true'
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+
+include:
+  # Control plane. Restart cadence: rarely, and never casually -- dockerproxy
+  # is watchtower's and autoheal's only route to the Docker API.
+  - compose/infra.yaml
+
+  # Download path. Restart cadence: qbittorrent and slskd are the two slowest,
+  # most fragile stops in the stack (ADR-0004, ADR-0009).
+  - compose/media-download.yaml
+
+  # Library management. Restart cadence: freely; these are stateless HTTP apps
+  # over a SQLite config.
+  - compose/media-manage.yaml
+
+  # Playback. Restart cadence: deliberately, and not at 04:00 (ADR-0006).
+  - compose/media-serve.yaml
+
+  # Files.
+  - compose/storage.yaml
+
+  # Locally-built apps. Each lives next to its Dockerfile so `build.context: .`
+  # resolves locally; each is Watchtower-opt-out by construction (ADR-0006).
+  - webapps/4eva-rootpage/compose.yaml
+  - webapps/lidarr-bulk/compose.yaml
+  - webapps/ongehoord/compose.yaml
+  - webapps/playlist-generator/compose.yaml
