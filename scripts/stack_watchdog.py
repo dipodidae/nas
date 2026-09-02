@@ -364,6 +364,64 @@ def read_crontab() -> str:
   return out if code == 0 else ""
 
 
+def check_media_storage(mount: str = "/mnt/drive", min_free_gb: float = 100.0) -> list[Alert]:
+  """Watch the media drive, because nothing else can.
+
+  All ~4.7 TB of media lives on a single USB external disk with no redundancy,
+  and its bridge does not pass SMART through under any `smartctl -d` type
+  (sat/sat,12/sat,16/usbjmicron/usbsunplus/usbcypress/scsi all refuse). So the
+  usual "is the disk dying" signal simply does not exist here.
+
+  What does exist is the kernel's view, and it is the earliest warning available:
+  a failing USB disk logs I/O errors and link resets long before anything higher
+  up notices, and ext4's default on error is to remount read-only — at which
+  point every *arr import fails silently and the stack looks healthy. Both are
+  invisible without looking, which is the whole reason this file exists.
+  """
+  alerts: list[Alert] = []
+
+  code, opts = _run(["findmnt", "-no", "OPTIONS", mount])
+  if code != 0:
+    return [Alert("media:unmounted", "critical", f"{mount} is not mounted — the media drive is gone")]
+  if "rw" not in opts.split(","):
+    alerts.append(
+      Alert(
+        "media:readonly",
+        "critical",
+        f"{mount} is mounted READ-ONLY — ext4 remounts ro on error, so this is a "
+        "failing disk, and every *arr import will fail while looking healthy",
+      )
+    )
+
+  code, out = _run(["df", "-B1", "--output=avail", mount])
+  if code == 0:
+    try:
+      free_gb = int(out.splitlines()[-1].strip()) / 1e9
+      if free_gb < min_free_gb:
+        alerts.append(
+          Alert("media:low-space", "warning", f"{mount} has {free_gb:.0f} GB free (below {min_free_gb:.0f})")
+        )
+    except (ValueError, IndexError):
+      pass
+
+  code, kern = _run(["journalctl", "-k", "--since", "-6h", "--no-pager", "-o", "cat"])
+  if code == 0:
+    hits = [
+      ln for ln in kern.splitlines()
+      if re.search(r"I/O error|EXT4-fs error|remounting filesystem read-only|reset high-speed USB", ln)
+    ]
+    if hits:
+      alerts.append(
+        Alert(
+          "media:kernel-errors",
+          "critical",
+          f"{len(hits)} disk/USB error(s) in the kernel log in 6h — the only early "
+          f"warning available on this drive: {hits[-1][:160]}",
+        )
+      )
+  return alerts
+
+
 def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
   """Ask the shaper whether it is doing its job, not whether it exists.
 
@@ -706,6 +764,7 @@ def main(argv: list[str] | None = None) -> int:
   alerts += check_cron_jobs(args.cron_state_dir)
   alerts += check_heartbeat_configured()
   alerts += check_wan_shaper()
+  alerts += check_media_storage()
   alerts += lint_crontab(read_crontab(), REPO_ROOT)
   alerts += check_jellyfin_memory(args.mem_log, args.jellyfin_anon_mb, args.sampler_stale_min)
   oom_alerts, oom_cursor = check_kernel_oom(state.get("oom_cursor"))

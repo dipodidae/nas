@@ -330,3 +330,62 @@ def test_shaper_check_failure_is_critical(monkeypatch):
 def test_healthy_shaper_is_quiet(monkeypatch):
     monkeypatch.setattr(wd, "_run", lambda *a, **k: (0, "wan_shaper: OK shaping 28Mbit, 2 bulk marks"))
     assert wd.check_wan_shaper() == []
+
+
+# --- media drive (no SMART available through the USB bridge) ---
+
+
+def test_unmounted_media_drive_is_critical(monkeypatch):
+    monkeypatch.setattr(wd, "_run", lambda *a, **k: (1, ""))
+    assert [a.key for a in wd.check_media_storage()] == ["media:unmounted"]
+
+
+def test_readonly_remount_is_critical(monkeypatch):
+    """ext4's default on error is remount-ro; every *arr import then fails silently."""
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "findmnt":
+            return 0, "ro,relatime"
+        if cmd[0] == "df":
+            return 0, "Avail\n5000000000000"
+        return 0, ""
+
+    monkeypatch.setattr(wd, "_run", fake_run)
+    assert "media:readonly" in [a.key for a in wd.check_media_storage()]
+
+
+def test_kernel_io_errors_are_critical(monkeypatch):
+    """The earliest warning available on a disk with no SMART."""
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "findmnt":
+            return 0, "rw,relatime"
+        if cmd[0] == "df":
+            return 0, "Avail\n5000000000000"
+        return 0, "blk_update_request: I/O error, dev sda, sector 12345"
+
+    monkeypatch.setattr(wd, "_run", fake_run)
+    alerts = wd.check_media_storage()
+    assert "media:kernel-errors" in [a.key for a in alerts]
+
+
+def test_healthy_media_drive_is_quiet(monkeypatch):
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "findmnt":
+            return 0, "rw,relatime"
+        if cmd[0] == "df":
+            return 0, "Avail\n5000000000000"
+        return 0, "eth0: renamed from veth123"
+
+    monkeypatch.setattr(wd, "_run", fake_run)
+    assert wd.check_media_storage() == []
+
+
+def test_low_free_space_warns(monkeypatch):
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "findmnt":
+            return 0, "rw,relatime"
+        if cmd[0] == "df":
+            return 0, "Avail\n50000000000"
+        return 0, ""
+
+    monkeypatch.setattr(wd, "_run", fake_run)
+    assert [a.key for a in wd.check_media_storage()] == ["media:low-space"]
