@@ -9,7 +9,7 @@ Single-host homelab NAS stack: **one** Compose project split across many files (
 ## Authoritative docs — read these first
 
 - `AGENTS.md` — full conventions (Python style, shell style, Docker Compose rules, env var contract, exit codes). Treat as binding.
-- `docs/decisions/` — 20 ADRs holding the incident history that used to live as inline comments in `docker-compose.yml`. The compose files now carry only a one-line `INVARIANT:` plus an ADR pointer. **If a line says `INVARIANT:`, read the ADR before changing it.** Start at `docs/decisions/README.md`.
+- `docs/decisions/` — 23 ADRs holding the incident history that used to live as inline comments in `docker-compose.yml`. The compose files now carry only a one-line `INVARIANT:` plus an ADR pointer. **If a line says `INVARIANT:`, read the ADR before changing it.** Start at `docs/decisions/README.md`.
 - `.github/copilot-instructions.md` — short-form version of the same rules.
 - `README.md` — service table, ports, setup walkthrough.
 - `scripts/README.md` — per-script flags, exit codes, and the operational workflows (backup, audit, log prune, post-update verify, qBittorrent kickstart, Prowlarr priority management).
@@ -63,7 +63,7 @@ CI (`.github/workflows/ci.yml`) runs three gates: `docker compose config`, `pnpm
 
 ## Architecture essentials
 
-**One bridge network, one reverse proxy.** All services join `nas-network` (172.30.0.0/24). SWAG terminates TLS on `:80`/`:443` and auto-generates nginx proxy configs from container labels via the linuxserver SWAG auto-proxy mod — adding `labels: [swag=enable]` is what publishes a service on its subdomain. Internal WebUIs bind to `127.0.0.1:<port>` only; the public surface is SWAG plus the P2P ports for slskd (50300) and qBittorrent (6881) and Jellyfin's LAN ports (8096/8920/7359/1900).
+**One bridge network, one reverse proxy.** All services join `nas-network` (172.30.0.0/24). SWAG terminates TLS on `:80`/`:443`. **What publishes a service on its subdomain is the presence of `swag/proxy-confs/<service>.subdomain.conf`, bind-mounted read-only into SWAG — not the `swag=enable` label.** The linuxserver auto-proxy mod is _not_ installed here (no `DOCKER_MODS` is set), so the label is documentation and the conf is mechanism; `make check` asserts the two agree in both directions, because both had drifted (ADR-0022). Internal WebUIs bind to `127.0.0.1:<port>` only; the public surface is SWAG plus the P2P ports for slskd (50300) and qBittorrent (6881) and Jellyfin's LAN ports (8096/8920/7359/1900).
 
 **No VPN — P2P runs on the home IP.** `slskd` and `qbittorrent` are plain `nas-network` members that egress over the host's home IP directly; Lidarr/Sonarr/SWAG/qui resolve `qbittorrent:8080` / `slskd:5030` as normal service DNS. Each publishes its own ports: qBittorrent `6881/tcp+udp` (BitTorrent, default) and `127.0.0.1:8080` (WebUI); slskd `50300/tcp` (Soulseek, default) and `127.0.0.1:5030` (WebUI). Inbound P2P requires forwarding `6881` and `50300` on the router — there is no VPN remote-port-forward doing it. The gluetun WireGuard sidecar (AirVPN) that used to tunnel both services was **removed** on 2026-07-27 (`vpn-configs/` + `WIREGUARD_*`/`AIRVPN_*` in `.env` deleted with it). Historical caveat if Soulseek logins start timing out: slskd on the home IP is what got the IP soft-blocked by slsknet before — the tunnel was originally introduced for exactly that. **Prowlarr** was never tunneled and is unaffected; its CF-protected indexers still route through `byparr` (FlareSolverr-compatible) tagged `cloudflare`.
 

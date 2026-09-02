@@ -40,10 +40,33 @@ services:
       # Paths are relative to THIS file (compose/), hence the ../ -- see
       # docs/decisions/0000-compose-layout.md.
       - ../webapps/4eva-rootpage/4eva-rootpage.root.conf:/config/nginx/site-confs/root.conf:ro
-      # Tracked proxy-conf: SWAG ships no lingarr sample, and a conf that lives
-      # only in gitignored .docker-config/ is enforced by nothing but the
-      # nightly backup. Same pattern as root.conf above. ADR-0021 companion.
+      # INVARIANT: every enabled proxy-conf is TRACKED HERE and mounted read-only,
+      # not left to live in gitignored ${CONFIG_DIRECTORY}/swag where the nightly
+      # backup is the only thing keeping it. Six of these have no upstream sample
+      # at all (cleanuparr, lidarr-bulk, lingarr, ongehoord, playlist-generator,
+      # slskd) and three carry heavy local edits (ntfy 56 lines, jellyfin 22,
+      # jellyseerr 2) -- losing the config dir would mean reconstructing them from
+      # memory. `make check` asserts the set. ADR-0022.
+      #
+      # Mounted file-by-file rather than as a directory ON PURPOSE: SWAG writes
+      # 372 *.conf.sample files into /config/nginx/proxy-confs at every start, so
+      # a read-only mount over the whole directory breaks its startup.
+      - ../swag/proxy-confs/bazarr.subdomain.conf:/config/nginx/proxy-confs/bazarr.subdomain.conf:ro
+      - ../swag/proxy-confs/cleanuparr.subdomain.conf:/config/nginx/proxy-confs/cleanuparr.subdomain.conf:ro
+      - ../swag/proxy-confs/jellyfin.subdomain.conf:/config/nginx/proxy-confs/jellyfin.subdomain.conf:ro
+      - ../swag/proxy-confs/jellyseerr.subdomain.conf:/config/nginx/proxy-confs/jellyseerr.subdomain.conf:ro
+      - ../swag/proxy-confs/lidarr-bulk.subdomain.conf:/config/nginx/proxy-confs/lidarr-bulk.subdomain.conf:ro
+      - ../swag/proxy-confs/lidarr.subdomain.conf:/config/nginx/proxy-confs/lidarr.subdomain.conf:ro
       - ../swag/proxy-confs/lingarr.subdomain.conf:/config/nginx/proxy-confs/lingarr.subdomain.conf:ro
+      - ../swag/proxy-confs/nextcloud.subdomain.conf:/config/nginx/proxy-confs/nextcloud.subdomain.conf:ro
+      - ../swag/proxy-confs/ntfy.subdomain.conf:/config/nginx/proxy-confs/ntfy.subdomain.conf:ro
+      - ../swag/proxy-confs/ongehoord.subdomain.conf:/config/nginx/proxy-confs/ongehoord.subdomain.conf:ro
+      - ../swag/proxy-confs/playlist-generator.subdomain.conf:/config/nginx/proxy-confs/playlist-generator.subdomain.conf:ro
+      - ../swag/proxy-confs/prowlarr.subdomain.conf:/config/nginx/proxy-confs/prowlarr.subdomain.conf:ro
+      - ../swag/proxy-confs/qui.subdomain.conf:/config/nginx/proxy-confs/qui.subdomain.conf:ro
+      - ../swag/proxy-confs/radarr.subdomain.conf:/config/nginx/proxy-confs/radarr.subdomain.conf:ro
+      - ../swag/proxy-confs/slskd.subdomain.conf:/config/nginx/proxy-confs/slskd.subdomain.conf:ro
+      - ../swag/proxy-confs/sonarr.subdomain.conf:/config/nginx/proxy-confs/sonarr.subdomain.conf:ro
       - ../nginx-cache:/var/cache/nginx:rw
     ports:
       - '443:443'

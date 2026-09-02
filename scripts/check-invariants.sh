@@ -713,12 +713,17 @@ for _svc in NGINX_SERVICES:
 # ==========================================================================
 # 18. Every swag=enable service has a proxy-conf
 # ==========================================================================
-# `swag=enable` is what publishes a service on its subdomain -- but only if a
-# matching *.subdomain.conf exists. lingarr carried the label with no conf from
-# the day it was added, so lingarr.${PUBLIC_DOMAIN} resolved to nothing and
-# nothing said so. Confs are looked for in the tracked swag/proxy-confs/ first,
-# then in the SWAG config dir; a conf in only the latter is a warning, because
-# it is gitignored and survives only via the nightly backup.
+# What actually routes a subdomain on this host is the PRESENCE OF THE CONF,
+# not the label: no DOCKER_MODS is set, so the linuxserver auto-proxy mod is not
+# installed and `swag=enable` is documentation rather than mechanism (verified
+# 2026-09-02). Both directions therefore drift silently, and both have:
+#   * lingarr carried the label with no conf, so lingarr.${PUBLIC_DOMAIN}
+#     answered SWAG's default page -- with a 200, which is why nobody noticed;
+#   * slskd had a conf and no label, i.e. a public surface the compose file did
+#     not declare.
+# Confs are looked for in the tracked swag/proxy-confs/ first, then in the SWAG
+# config dir; a conf in only the latter is a warning, because it is gitignored
+# and survives only via the nightly backup. ADR-0022.
 #
 # A service can also be routed by a tracked conf bind-mounted into swag under
 # a different name -- 4eva-rootpage is the apex site and arrives as
@@ -768,6 +773,28 @@ elif _untracked:
          "Move it to swag/proxy-confs/ and bind-mount it, as lingarr does.")
 else:
     ok("swag-labels-are-routed", "every swag=enable service has a tracked conf")
+
+# ... and the inverse: a route nobody declared. A conf is what actually serves
+# the subdomain, so one without a matching swag=enable label is a public surface
+# the compose file does not mention. ADR-0022.
+_labelled = {
+    n for n, v in services.items()
+    if (dict(x.split("=", 1) for x in v["labels"] if "=" in x)
+        if isinstance(v.get("labels"), list) else (v.get("labels") or {})
+        ).get("swag") == "enable"
+}
+_undeclared = sorted(
+    f[: -len(".subdomain.conf")]
+    for f in (os.listdir("swag/proxy-confs") if os.path.isdir("swag/proxy-confs") else [])
+    if f.endswith(".subdomain.conf") and f[: -len(".subdomain.conf")] not in _labelled
+)
+if _undeclared:
+    warn("swag-routes-are-declared", "ADR-0022",
+         f"{_undeclared} have a proxy-conf but no swag=enable label. The conf is "
+         "what actually serves the subdomain, so this is a public surface the "
+         "compose file does not declare. Add the label, or delete the conf.")
+else:
+    ok("swag-routes-are-declared", "no undeclared public routes")
 
 # ==========================================================================
 # Report

@@ -30,3 +30,6 @@ the ADR here. If you are about to change something and the YAML says
 | [0017](0017-cleanuparr-armed.md)                | Cleanuparr is an armed deletion engine; three modules stay off              |
 | [0018](0018-capability-gaps.md)                 | Known gap: playlist-generator and its db do not drop capabilities           |
 | [0019](0019-no-vpn-home-ip.md)                  | No VPN — P2P egresses over the home IP                                      |
+| [0020](0020-watchtower-replaced-and-demoted.md) | Watchtower replaced with a maintained fork and demoted to monitor-only      |
+| [0021](0021-nginx-cap-kill.md)                  | An nginx whose master and workers differ in uid needs `CAP_KILL`            |
+| [0022](0022-proxy-confs-are-tracked.md)         | Proxy-confs are tracked in-repo; the conf routes, the label only documents  |
