@@ -710,6 +710,20 @@ Exit codes: `0` every known device reported inside the window, `1` a device is s
 
 **One device is the correct answer on this host.** The 9.1 TB USB media disk answers no SMART, so scrutiny covers the NVMe only — see ADR-0023 before "fixing" the device count. The zero-devices case is called out separately because it is what a wrong device passthrough looks like: hand scrutiny `/dev/nvme0n1` instead of `/dev/nvme0` and `smartctl --scan` returns empty, so it monitors nothing while the UI looks like a fresh install.
 
+### `jellyfin_mem_sample.py`
+
+Per-minute memory sampler for the ADR-0008 investigation. Cron `* * * * *`, self-rotating log at `logs/jellyfin-mem.log`, read by `stack_watchdog.py`'s anon-RSS threshold check.
+
+**v4 (2026-09-02)** added what tells two different diseases apart. Upstream reports (jellyfin/jellyfin#16048, #16549) pin 10.11.x memory blowups on **ffprobe fan-out during library scans** rather than on a slow leak in the server process — two diseases, two cures, and v3 could not distinguish them, because a leak and a fan-out both look like "anon went up". So each sample now also records:
+
+| field                  | why                                                                                                                                                                                                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ffprobe=` / `ffmpeg=` | live child processes. Scan-time extraction and transcodes both live here                                                                                                                                                                                                                  |
+| `children_rss=`        | their summed RSS. These are charged to the **same cgroup** as the server, so they inflate `mem_current` while leaving the server's own `anon` flat — which is precisely how a fan-out is distinguishable from a leak, and precisely why it is invisible if you don't count them           |
+| `scanning=yes\|no\|NA` | whether a library-scan task is actually running, from the Jellyfin API's `ScheduledTasks`. The cron line says when a scan is _triggered_, not whether it is still going, and an overrunning scan is exactly the case worth catching. `NA` rather than a guess when the API is unreachable |
+
+Reads `API_KEY_JELLYFIN_ARR` (falls back to `API_KEY_JELLYFIN`); with neither, `scanning=NA` and everything else still samples.
+
 ### `stack_watchdog.py`
 
 The thing that shouts. Nothing on this box reported failure before it existed: Jellyfin was OOM-killed five times in 48 hours and only surfaced because an episode stuttered, qBittorrent sat dead for fourteen hours twice and was found by accident, `autoheal` was absent from the stack for over a month, and the `media_ops_status.py` cron had been silently writing nothing since June (a missing `cd` in the crontab line). Four checks, one push notification.

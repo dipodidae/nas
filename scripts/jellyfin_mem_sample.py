@@ -8,6 +8,24 @@ what killed the process. The kernel's OOM-killer acts on anonymous memory
 directly comparable to the "Killed process ... anon-rss:NNkB" kernel log
 lines already analysed in docs/jellyfin-playback-audit.md.
 
+v4 (2026-09-02, ffprobe fan-out test): added a census of live ffmpeg/ffprobe
+CHILD processes plus a marker for whether Jellyfin is running a library scan.
+The reason: multiple upstream reports (jellyfin/jellyfin#16048, #16549) pin
+10.11.x memory blowups on ffprobe fan-out during library scans rather than on a
+slow leak in the server process, and the reporters' own mitigation was capping
+the parallel scan/extraction thread counts. Those are two different diseases
+with two different cures, and NOTHING in v3 could tell them apart: a leak and a
+fan-out both look like "anon went up". So each sample now records
+  ffprobe=<count>   live ffprobe children
+  ffmpeg=<count>    live ffmpeg children (transcodes AND scan-time extraction)
+  children_rss=<bytes>  summed RSS of those children -- charged to the SAME
+                        cgroup as the server, so it is part of mem_current but
+                        NOT part of the server's own anon
+  scanning=<yes|no|NA>  whether a library-scan task is running, from the
+                        Jellyfin API's ScheduledTasks state
+Without `scanning`, correlating peaks against the Fri/Sat/Sun 05:05 cron is
+guesswork about a task whose real start and end times are not in the cron line.
+
 v3 (2026-09-01, H3/glibc-arena test): added two counters from the host-side
 /proc/<pid>/maps (readable directly, no docker exec/sudo needed — same uid
 as the container's `abc` user), testing dotnet/runtime#122027-style glibc
@@ -56,10 +74,20 @@ Cron (every minute):
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
+
+try:                                    # optional: lets it run outside cron's env
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 CONTAINER = "jellyfin"
 LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "jellyfin-mem.log"
@@ -176,6 +204,80 @@ def _maps_counts(host_pid: str) -> tuple[int | None, int | None]:
     return arena_regions, doublemapper
 
 
+def _child_processes() -> tuple[int, int, int | None]:
+    """Census of live ffprobe/ffmpeg children: (ffprobe, ffmpeg, summed RSS).
+
+    Read host-side via `docker top` so it needs no exec into the container and
+    cannot fail the whole sample. RSS is summed from the host /proc, and is
+    None if any of it is unreadable -- a partial sum would understate the very
+    thing this is measuring.
+
+    Why this matters for the diagnosis: these children are charged to the same
+    cgroup as the server, so they inflate `mem_current` while leaving the
+    server's own `anon` flat. A fan-out therefore looks completely different
+    from a leak once you count them -- and identical if you do not.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "top", CONTAINER, "-o", "pid,rss,cmd"],
+            capture_output=True, text=True, timeout=10, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return 0, 0, None
+
+    ffprobe = ffmpeg = 0
+    rss_kb = 0
+    unreadable = False
+    for line in result.stdout.splitlines()[1:]:
+        parts = line.split(maxsplit=2)
+        if len(parts) < 3:
+            continue
+        _pid, rss, cmd = parts
+        # Match the binary, not the string anywhere in the command line: a
+        # transcode's argv mentions paths that can contain either word.
+        exe = cmd.split()[0].rsplit("/", 1)[-1] if cmd.split() else ""
+        if exe.startswith("ffprobe"):
+            ffprobe += 1
+        elif exe.startswith("ffmpeg"):
+            ffmpeg += 1
+        else:
+            continue
+        if rss.isdigit():
+            rss_kb += int(rss)
+        else:
+            unreadable = True
+    return ffprobe, ffmpeg, None if unreadable else rss_kb * 1024
+
+
+def _scan_running() -> str:
+    """'yes' / 'no' / 'NA' -- is a Jellyfin library-scan task running?
+
+    Asks the API rather than inferring from the cron schedule: the cron line
+    says when a scan is TRIGGERED, not when it is still going, and a scan that
+    overruns is exactly the case worth catching. NA rather than a guess when
+    the key is missing or Jellyfin is unreachable, so a broken probe is
+    distinguishable from a quiet server.
+    """
+    key = os.environ.get("API_KEY_JELLYFIN_ARR") or os.environ.get("API_KEY_JELLYFIN")
+    if not key:
+        return "NA"
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:8096/ScheduledTasks",
+            headers={"Authorization": f'MediaBrowser Token="{key}"'},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
+            tasks = json.load(resp)
+    except (OSError, ValueError):
+        return "NA"
+    for task in tasks if isinstance(tasks, list) else []:
+        name = str(task.get("Key", "")) + " " + str(task.get("Name", ""))
+        is_scan = "RefreshLibrary" in name or "Scan Media Library" in name
+        if is_scan and str(task.get("State", "")).lower() == "running":
+            return "yes"
+    return "no"
+
+
 def main() -> int:
     timestamp = datetime.now(UTC).isoformat(timespec="seconds")
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +318,9 @@ def main() -> int:
     def count_str(n: int | None) -> str:
         return str(n) if n is not None else "NA"
 
+    ffprobe, ffmpeg, children_rss = _child_processes()
+    scanning = _scan_running()
+
     line = (
         f"{timestamp}\t"
         f"anon={mb(stats.get('anon'))}\t"
@@ -226,7 +331,11 @@ def main() -> int:
         f"mem_peak={mb(mem_peak)}\t"
         f"vmrss={mb(vmrss)}\t"
         f"arena_regions={count_str(arena_regions)}\t"
-        f"doublemapper={count_str(doublemapper)}\n"
+        f"doublemapper={count_str(doublemapper)}\t"
+        f"ffprobe={ffprobe}\t"
+        f"ffmpeg={ffmpeg}\t"
+        f"children_rss={mb(children_rss)}\t"
+        f"scanning={scanning}\n"
     )
     with LOG_PATH.open("a") as f:
         f.write(line)
