@@ -102,6 +102,18 @@ POLICIES: dict[str, Policy] = {
         include=[r"^v\d+\.\d+\.\d+-omnibus$"],
         note="omnibus variant only -- the split images are a different topology",
     ),
+    "ghcr.io/fredrikburmester/streamystats-nextjs": Policy(
+        include=[r"^v\d+\.\d+\.\d+$"],
+        note="keep in lockstep with the job server",
+    ),
+    "ghcr.io/fredrikburmester/streamystats-job-server": Policy(
+        include=[r"^v\d+\.\d+\.\d+$"],
+        note="keep in lockstep with the UI",
+    ),
+    "tensorchord/vchord-postgres": Policy(
+        include=[r"^pg\d+-v\d+\.\d+\.\d+$"],
+        note="database engine under live data -- read the release notes first",
+    ),
     "henrygd/beszel": Policy(
         include=[r"^\d+\.\d+\.\d+$"],
         note="plain semver tags",

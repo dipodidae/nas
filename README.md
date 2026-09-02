@@ -14,7 +14,7 @@ project, one reverse proxy, one 10 TB disk.
 | Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0                |
 | Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                           |
 | Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe (42 % worn, SMART-watched) |
-| Services        | 29 (4 built locally; ALL watched by diun, 7 manual-update)      |
+| Services        | 32 (4 built locally; ALL watched by diun, 10 manual-update)     |
 | Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01       |
 
 ---
@@ -150,7 +150,7 @@ boundaries and `depends_on` only resolves within a project.
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
 │   └── storage.yaml              # nextcloud
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
-├── docs/decisions/               # 30 ADRs — the incident history
+├── docs/decisions/               # 31 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
 └── qbittorrent/custom-cont-init.d/   # LSIO init hook, bind-mounted read-only
 ```
@@ -321,7 +321,7 @@ ssh -L 8989:127.0.0.1:8989 <host>    # then http://localhost:8989
 ## Rules that will bite you
 
 These are asserted mechanically by `scripts/check-invariants.sh` — **43
-assertions** over 29 services, run by `make check`, by the pre-commit hook, and
+assertions** over 32 services, run by `make check`, by the pre-commit hook, and
 by CI so a violation cannot merge. Each failure prints the ADR that explains why
 the rule exists — **read it before changing the rule.** Compose lines carrying
 `INVARIANT:` are the same contract.

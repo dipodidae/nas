@@ -40,3 +40,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0027](0027-qui-cross-seed-prerequisites.md)       | qui cross-seed: the filesystem grant is the risk; ext4 has no reflink       |
 | [0028](0028-beszel-trend-lines.md)                 | Beszel trend lines; its agent must NOT use host networking here             |
 | [0029](0029-huntarr-rejected.md)                   | Huntarr rejected: archived upstream, unauthenticated \*arr API-key leak     |
+| [0030](0030-streamystats.md)                       | Streamystats: 3 containers, own VectorChord DB (not pgvector), API-only     |

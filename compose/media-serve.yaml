@@ -105,3 +105,113 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  # ------------------------------------------------------------------------
+  # Streamystats: Jellyfin watch statistics. Three containers, because that is
+  # what it is -- a Next.js UI, a job server, and its OWN database.
+  #
+  # It reads the Jellyfin API; no playback-reporting plugin is needed. The value
+  # is the signal: real play counts and watch history are exactly what
+  # playlist-generator currently guesses at. Wiring the two together is a
+  # follow-up, not this record. ADR-0030.
+  #
+  # CORRECTION to the premise this was chosen on: it does NOT share
+  # playlist-generator's pgvector. It requires VectorChord
+  # (tensorchord/vchord-postgres), a different extension, so a separate database
+  # was never optional -- it is forced. That happens to be the right answer
+  # anyway: "never bump a database engine under its data" is why
+  # playlist-generator-db is manual-update-only, and two apps running their own
+  # migrations against one schema is how you get an outage nobody can revert.
+  # ------------------------------------------------------------------------
+
+  streamystats-db:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned, and updated only by hand. This is a database engine
+    # with live data under it -- the same rule as playlist-generator-db.
+    image: tensorchord/vchord-postgres:pg17-v0.4.1
+    container_name: streamystats-db
+    cap_add:
+      # Postgres' entrypoint runs as root to initdb and chown PGDATA, then drops
+      # to the postgres user. Same shape as the LSIO init set (ADR-0001), minus
+      # what it does not use.
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    environment:
+      - POSTGRES_USER=streamystats
+      - POSTGRES_PASSWORD=${STREAMYSTATS_DB_PASSWORD}
+      - POSTGRES_DB=streamystats
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - ${CONFIG_DIRECTORY}/streamystats-db:/var/lib/postgresql/data
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U streamystats -d streamystats]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  streamystats-jobs:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: ghcr.io/fredrikburmester/streamystats-job-server:v2.18.1
+    container_name: streamystats-jobs
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://streamystats:${STREAMYSTATS_DB_PASSWORD}@streamystats-db:5432/streamystats
+      - PORT=3005
+    depends_on:
+      streamystats-db:
+        condition: service_healthy
+    networks:
+      - nas-network
+    healthcheck:
+      # This image is a COMPILED binary with a shell but no node, wget, curl or
+      # nc -- measured, after a fetch()-based probe left it permanently
+      # `starting` while the server logged `status=running port=3005`. So the
+      # probe reads the kernel's own socket table: 0BBD is 3005 in hex, and
+      # state 0A is LISTEN. It proves the port is bound, which is the strongest
+      # claim available here -- and it is honest about being that and no more.
+      test: [CMD-SHELL, 'grep -q ":0BBD" /proc/net/tcp /proc/net/tcp6']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  streamystats:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: ghcr.io/fredrikburmester/streamystats-nextjs:v2.18.1
+    container_name: streamystats
+    environment:
+      - NODE_ENV=production
+      - HOSTNAME=0.0.0.0
+      - DATABASE_URL=postgresql://streamystats:${STREAMYSTATS_DB_PASSWORD}@streamystats-db:5432/streamystats
+      - JOB_SERVER_URL=http://streamystats-jobs:3005
+      - SESSION_SECRET=${STREAMYSTATS_SESSION_SECRET}
+      - NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=${STREAMYSTATS_ENCRYPTION_KEY}
+    ports:
+      - '127.0.0.1:3400:3000' # loopback only; no new public surface
+    depends_on:
+      streamystats-db:
+        condition: service_healthy
+      streamystats-jobs:
+        condition: service_started
+    networks:
+      - nas-network
+    # No swag=enable, no proxy-conf, no autoheal label -- a statistics dashboard
+    # is not worth either a public route or an auto-restart path (ADR-0009).
+    healthcheck:
+      test: [CMD-SHELL, 'node -e "fetch(''http://localhost:3000'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s

@@ -258,6 +258,78 @@
     service: sonarr
   watch_repo: false
 
+# streamystats
+#   keep in lockstep with the job server
+- name: ghcr.io/fredrikburmester/streamystats-nextjs:v2.18.1
+  metadata:
+    service: streamystats
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - '^v\d+\.\d+\.\d+$'
+  exclude_tags:
+    - '^latest$'
+    - '^nightly$'
+    - '^develop(ment)?$'
+    - '^edge$'
+    - '^main$'
+    - '^master$'
+    - '^unstable$'
+    - '^beta$'
+    - '^rc'
+    - '-rc'
+    - '^dev$'
+    - '-dev$'
+
+# streamystats-db
+#   database engine under live data -- read the release notes first
+- name: tensorchord/vchord-postgres:pg17-v0.4.1
+  metadata:
+    service: streamystats-db
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - '^pg\d+-v\d+\.\d+\.\d+$'
+  exclude_tags:
+    - '^latest$'
+    - '^nightly$'
+    - '^develop(ment)?$'
+    - '^edge$'
+    - '^main$'
+    - '^master$'
+    - '^unstable$'
+    - '^beta$'
+    - '^rc'
+    - '-rc'
+    - '^dev$'
+    - '-dev$'
+
+# streamystats-jobs
+#   keep in lockstep with the UI
+- name: ghcr.io/fredrikburmester/streamystats-job-server:v2.18.1
+  metadata:
+    service: streamystats-jobs
+  watch_repo: true
+  sort_tags: semver
+  max_tags: 5
+  include_tags:
+    - '^v\d+\.\d+\.\d+$'
+  exclude_tags:
+    - '^latest$'
+    - '^nightly$'
+    - '^develop(ment)?$'
+    - '^edge$'
+    - '^main$'
+    - '^master$'
+    - '^unstable$'
+    - '^beta$'
+    - '^rc'
+    - '-rc'
+    - '^dev$'
+    - '-dev$'
+
 # swag
 - name: lscr.io/linuxserver/swag:latest
   metadata:

@@ -114,6 +114,9 @@ MANUAL_UPDATE_ONLY = {
     "diun":                  "the thing that reports updates should not take one by surprise",
     "beszel":                "PocketBase DB under the metric history; bump it deliberately",
     "beszel-agent":          "must stay in lockstep with the hub it reports to",
+    "streamystats-db":       "VectorChord/Postgres engine under live data",
+    "streamystats":          "must stay in lockstep with its job server and schema",
+    "streamystats-jobs":     "must stay in lockstep with the UI and schema",
 }
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
@@ -142,6 +145,15 @@ SECRET_OK = {
     # not basic auth, so it cannot use the ?auth= or userinfo tricks the other
     # publishers use. ADR-0024.
     "diun",
+    # streamystats: SESSION_SECRET and NEXT_SERVER_ACTIONS_ENCRYPTION_KEY are
+    # read by Next.js itself; POSTGRES_PASSWORD by the postgres entrypoint;
+    # DATABASE_URL by both app halves. All genuinely consumed. ADR-0030.
+    #
+    # NOTE on the limits of this check: it matches on NAMES, so
+    # `DATABASE_URL` -- which embeds the same password in a connection string --
+    # slips past it entirely. The check is a tripwire for forgotten credentials,
+    # not a proof that none are present.
+    "streamystats", "streamystats-db", "streamystats-jobs",
 }
 
 # Env vars that must NOT appear on a given service, whatever else changes.
