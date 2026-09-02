@@ -26,3 +26,37 @@ roughly 3x headroom.
 `memswap_limit == mem_limit`, so it cannot balloon into host swap and thrash
 everything else first. Checked by `scripts/check-invariants.sh` for every
 service that sets `mem_limit`.
+
+## `DiskIOType` — measured 2026-09-02, not yet flipped
+
+`DisableOSCache` is the **mitigation**, not the removal. libtorrent 2.x still
+mmaps torrent data on the default `Session\DiskIOType`, and the kernel still
+accounts those pages to the cgroup. `Session\DiskIOType` does not appear in
+`qBittorrent.conf` at all, i.e. it is at its default; the live API agrees
+(`disk_io_type = 0`).
+
+First reading of the cgroup's own accounting, taken with the settings as they
+stand (16 active torrents):
+
+```
+# /sys/fs/cgroup/system.slice/docker-<qbittorrent>.scope/memory.stat
+anon           33.9 MB     the process itself
+file            4.22 GB    page cache charged to this cgroup
+file_mapped     3.06 GB    of which mmap'd -- 73% of the page cache
+memory.current  4.29 GB    pinned at the 4g limit
+```
+
+So the hypothesis holds on its first half: **the mmap'd pages are the bulk of
+the footprint, and the resident process is not** — 33.9 MB of anon against
+3.06 GB of mapped file. The cgroup sits at its limit and reclaims continuously
+rather than growing, which is `mem_limit` doing exactly the backstop job it was
+added for.
+
+The second half is untested: switching `DiskIOType` to the POSIX-compliant
+backend removes the mmap mechanism but has a throughput cost, and that cost has
+not been measured here. **The setting is therefore left at its default.** The
+decision rule if it is revisited: flip only if a before/after over a full day
+shows `file_mapped` falling by most of that 3.06 GB *and* no drop in observed
+download/seed throughput. `scripts/check-invariants.sh` reports `disk_io_type`
+as a **warning**, not a rule, so the open question stays visible without
+blocking `make check`.

@@ -550,6 +550,82 @@ else:
     ok("jellyfin-mounts-frozen", "/config rw + ${SHARE_DIRECTORY}:/data/movies ro")
 
 # ==========================================================================
+# 14. qBittorrent's disk-IO settings are what ADR-0007 actually depends on
+# ==========================================================================
+# mem_limit: 4g is only the backstop. libtorrent 2.x mmaps torrent data and the
+# kernel accounts those pages to the cgroup; with OS cache enabled this cgroup
+# peaked at 21.1GB (journalctl, 2026-09-01) and contributed to host-wide OOM
+# kills. These settings live in qBittorrent's own config, which a person can
+# revert through the WebUI with no trace in this repo. ADR-0007.
+#
+# Read from the RUNNING session, not qBittorrent.conf: the file is written at
+# shutdown and read at startup, so it can disagree with reality in both
+# directions. The API is what is in effect.
+_QBT_MODES = {0: "DisableOSCache", 1: "EnableOSCache"}
+_QBT_IOTYPE = {0: "Default (mmap on 64-bit)", 1: "MemoryMappedFiles", 2: "POSIX-compliant"}
+
+def _qbt_preferences():
+    """Live preferences dict, or None if unreachable/unauthorised."""
+    host = (os.environ.get("QBITTORRENT_HOST")
+            or _env_file_value("QBITTORRENT_HOST") or "http://localhost:8080").rstrip("/")
+    user = os.environ.get("QBITTORRENT_USER") or _env_file_value("QBITTORRENT_USER")
+    pw = os.environ.get("QBITTORRENT_PASS") or _env_file_value("QBITTORRENT_PASS")
+    if not user or not pw:
+        return None
+    import http.cookiejar, urllib.parse, urllib.request
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        opener.open(urllib.request.Request(
+            f"{host}/api/v2/auth/login",
+            data=urllib.parse.urlencode({"username": user, "password": pw}).encode(),
+            headers={"Referer": host}), timeout=10).read()
+        body = opener.open(urllib.request.Request(
+            f"{host}/api/v2/app/preferences", headers={"Referer": host}),
+            timeout=10).read()
+        return json.loads(body)
+    except (OSError, ValueError):
+        return None
+
+_prefs = _qbt_preferences()
+if _prefs is None:
+    warn("qbit-oscache-disabled", "ADR-0007",
+         "qBittorrent's API is unreachable from here (expected in CI); could "
+         "not verify disk_io_read_mode/disk_io_write_mode = DisableOSCache. "
+         "`make verify-runtime` checks this on the host.")
+else:
+    _bad = {k: _QBT_MODES.get(_prefs.get(k), _prefs.get(k))
+            for k in ("disk_io_read_mode", "disk_io_write_mode")
+            if _prefs.get(k) != 0}
+    if _bad:
+        fail("qbit-oscache-disabled", "ADR-0007",
+             f"live qBittorrent session has {_bad}, not DisableOSCache. This is "
+             "the mitigation for the 21.1GB cgroup peak; mem_limit 4g is only "
+             "the backstop and will now be doing all the work. Fix in the WebUI "
+             "(Tools > Options > Advanced > 'Disk IO read/write mode' = "
+             "'Disable OS cache') -- qbittorrent persists it itself; editing "
+             "qBittorrent.conf under a running qbittorrent gets overwritten.")
+    else:
+        ok("qbit-oscache-disabled", "both modes DisableOSCache (live session)")
+
+    # Separate check, deliberately a warning: DiskIOType is the setting that
+    # decides whether libtorrent mmaps at all. DisableOSCache mitigates the
+    # symptom; DiskIOType=POSIX removes the mechanism. Flipping it has a
+    # throughput cost, so this reports rather than enforces until the
+    # measurement in ADR-0007 says otherwise.
+    _t = _prefs.get("disk_io_type")
+    if _t in (0, 1):
+        warn("qbit-diskio-type", "ADR-0007",
+             f"disk_io_type={_t} ({_QBT_IOTYPE.get(_t)}). libtorrent still mmaps "
+             "torrent data, so the kernel keeps those pages in the cgroup's page "
+             "cache even with DisableOSCache set -- that is the actual source of "
+             "the 21.1GB accounting. The POSIX-compliant backend removes the "
+             "mechanism rather than mitigating it. Measure before switching; "
+             "this is a warning, not a rule.")
+    else:
+        ok("qbit-diskio-type", _QBT_IOTYPE.get(_t, _t))
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
