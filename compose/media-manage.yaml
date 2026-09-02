@@ -114,17 +114,16 @@ services:
       - ${CONFIG_DIRECTORY}/bazarr:/config
       - ${SHARE_DIRECTORY}/movies:/movies
       - ${SHARE_DIRECTORY}/series:/tv
-      # NO ${SHARE_DIRECTORY}:/data mount, unlike the other *arrs -- and this
-      # is a LIVE DEFECT, not a deliberate omission. ADR-0002 genuinely does
-      # not apply here (bazarr only writes subtitle sidecars next to media it
-      # already sees; it never imports, moves or hardlinks), but bazarr
+      # INVARIANT: /data must stay mounted -- but for a DIFFERENT reason than
+      # sonarr/radarr. ADR-0002's hardlink rationale does not apply to bazarr
+      # (it only writes subtitle sidecars next to media it already sees; it
+      # never imports, moves or hardlinks). Bazarr needs /data because it
       # consumes Sonarr/Radarr's reported paths VERBATIM, and since the
-      # ADR-0002 repath those are /data/series/... and /data/movies/... --
-      # which do not exist in this container. Measured 2026-09-02: 1087/1087
-      # episodes and 24/24 movies unresolvable, path_mappings empty.
-      # Left unchanged here on purpose: fixing it is a media-affecting change
-      # that deserves its own commit, not a rider on a no-op refactor.
-      # Remediation (pick one) and full evidence: ADR-0015.
+      # ADR-0002 repath those are /data/series/... and /data/movies/... .
+      # Without this mount every one of them is unresolvable in-container:
+      # measured 1087/1087 episodes and 24/24 movies before the fix, with
+      # path_mappings empty. Added 2026-09-02. ADR-0015.
+      - ${SHARE_DIRECTORY}:/data
       - ${CONFIG_DIRECTORY}/subcleaner:/opt/subcleaner:ro
     ports:
       - '127.0.0.1:6767:6767'

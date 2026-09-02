@@ -1,7 +1,7 @@
 # ADR-0015 — Bazarr has no `/data` mount, and that is currently a defect
 
 **Date:** 2026-09-02
-**Status:** **open defect — documented, deliberately not fixed in the refactor**
+**Status:** **fixed 2026-09-02** (Option A applied and verified)
 **Related:** ADR-0002 (the repath that caused it)
 
 ## The question that was asked
@@ -53,39 +53,43 @@ This is a **side effect of ADR-0002 that was not noticed at the time**: the
 repath fixed hardlinking for Sonarr and Radarr and silently broke Bazarr's view
 of the same files.
 
-## Why it was not fixed in the compose refactor
+## The fix applied (Option A)
 
-The refactor's contract was a provable no-op — `docker compose config` output
-byte-identical before and after. Adding a mount is a semantic change that
-recreates the container and changes what Bazarr can see on disk. That deserves
-its own commit, its own verification, and a deliberate decision by the owner,
-not a rider on a layout change.
-
-The compose file therefore carries a comment stating the defect and pointing
-here, rather than a comment claiming the omission is intentional.
-
-## Remediation — pick one
-
-**Option A (recommended, mirrors the other \*arrs).** Add to bazarr's
-`volumes:` in `compose/media-manage.yaml`:
+Added to bazarr's `volumes:` in `compose/media-manage.yaml`:
 
 ```yaml
       - ${SHARE_DIRECTORY}:/data
 ```
 
-then `docker compose up -d bazarr`. Keeps `/movies` and `/tv` for
-reversibility, exactly as ADR-0002 did for sonarr/radarr. No Bazarr config
-change needed, because the paths it already stores start resolving.
+`/movies` and `/tv` are kept for reversibility, exactly as ADR-0002 did for
+sonarr/radarr. No Bazarr config change was needed — the paths it already stores
+simply start resolving.
 
-**Option B.** Leave the mounts alone and configure Bazarr path mappings in its
-UI (Settings → Sonarr/Radarr → Path Mappings): `/data/series` → `/tv` and
-`/data/movies` → `/movies`. Avoids a new mount, but adds config that lives only
-in Bazarr's SQLite and has to be remembered if the layout ever changes again.
+This mirrors the three services that already do it, is one line in version
+control, and needed no Bazarr-side state.
 
-Option A is preferred: one line, in version control, consistent with the three
-services that already did this.
+## Option B, considered and not taken
 
-## Verification after fixing
+Leave the mounts alone and configure Bazarr path mappings in its UI
+(Settings → Sonarr/Radarr → Path Mappings): `/data/series` → `/tv`,
+`/data/movies` → `/movies`. Rejected: it adds config that lives only in
+Bazarr's SQLite, is invisible to version control, and has to be remembered if
+the layout ever changes again.
+
+## Verification (run 2026-09-02, after `docker compose up -d bazarr`)
+
+```
+episodes: 1087 stored, 0 unresolvable
+movies:     24 stored, 0 unresolvable
+
+$ docker exec bazarr ls -d "/data/series/The Wire"
+/data/series/The Wire
+```
+
+Container reached `healthy` 25 s after recreate. Before the fix the same two
+counts were 1087/1087 and 24/24 unresolvable.
+
+Re-check any time with:
 
 ```sh
 docker exec bazarr python3 -c "
@@ -95,5 +99,6 @@ rows=[r[0] for r in c.execute('select path from table_episodes')]
 print(sum(1 for p in rows if p and not os.path.exists(p)), 'of', len(rows), 'unresolvable')"
 ```
 
-Expect `0 of 1087`. Then trigger a subtitle search on one episode and confirm
-the `.srt` lands next to the video.
+Remaining follow-up, not part of this fix: Bazarr holds **24** movies against
+Radarr's **37**. That is a separate sync question, not a path question — all 24
+it knows about now resolve.
