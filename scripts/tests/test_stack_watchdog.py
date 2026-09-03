@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import importlib.util
 import json
 import os
@@ -408,6 +409,9 @@ def _quiet_main(monkeypatch, wd_mod):
     monkeypatch.setattr(wd_mod, "autoheal_logs", lambda *a, **k: "")
     monkeypatch.setattr(wd_mod, "check_autoheal", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_cron_jobs", lambda *a, **k: [])
+    # Must be neutralised or the unit suite reaches the live Prowlarr.
+    monkeypatch.setattr(wd_mod, "fetch_indexer_failures", lambda *a, **k: None)
+    monkeypatch.setattr(wd_mod, "check_indexer_failures", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_heartbeat_configured", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_wan_shaper", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_media_storage", lambda *a, **k: [])
@@ -544,3 +548,79 @@ def test_in_flight_since_alone_cannot_silence_the_check(tmp_path):
     d = _cron_state(tmp_path, "playlist-sync", max_age_min=1440,
                     registered=now - 43 * 3600, in_flight_since=now - 21 * 3600)
     assert [a.key for a in wd.check_cron_jobs(d)] == ["cron:playlist-sync:stale"]
+
+
+# --- Prowlarr indexer flap damping ---
+
+
+def _idx(name, down_hours=None, till="2026-09-04T07:44:26Z"):
+    initial = None
+    if down_hours is not None:
+        stamp = _dt.datetime.fromtimestamp(time.time() - down_hours * 3600, tz=_dt.UTC)
+        initial = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"name": name, "initial_failure": initial, "disabled_till": till}
+
+
+def test_a_flapping_indexer_is_silent():
+    """Knaben/Uindex/TorrentDownload: ~6 fail/restore cycles in a day, all normal."""
+    rows = [_idx("Knaben", 0.2), _idx("Uindex", 1.0), _idx("TorrentDownload", 5.9)]
+    assert wd.check_indexer_failures(rows) == []
+
+
+def test_an_indexer_down_past_the_threshold_alerts_once():
+    """1337x: failing since 2026-08-27, i.e. genuinely down rather than flapping."""
+    alerts = wd.check_indexer_failures([_idx("1337x", 24 * 7)])
+    assert [a.key for a in alerts] == ["prowlarr:indexer:1337x:down"]
+    assert "168.0h" in alerts[0].message
+
+
+def test_the_alert_key_is_stable_so_a_flap_cannot_re_page():
+    """An unstable key defeats dedupe and every cycle becomes a new alert."""
+    first = [a.key for a in wd.check_indexer_failures([_idx("1337x", 10)])]
+    second = [a.key for a in wd.check_indexer_failures([_idx("1337x", 11)])]
+    assert first == second == ["prowlarr:indexer:1337x:down"]
+
+
+def test_a_long_outage_backs_off_rather_than_nagging_hourly():
+    (alert,) = wd.check_indexer_failures([_idx("Torrent[CORE]", 24 * 38)])
+    assert alert.repeat_min == wd.BACKOFF_CAP_MIN
+
+
+def test_disabled_till_alone_does_not_trigger():
+    """Prowlarr sets disabledTill on the FIRST failure, so it is true of a flap."""
+    rows = [{"name": "Knaben", "initial_failure": None, "disabled_till": "2026-09-04T07:44:26Z"}]
+    assert wd.check_indexer_failures(rows) == []
+
+
+def test_no_failing_indexers_is_quiet():
+    """An empty /indexerstatus genuinely means every indexer is fine."""
+    assert wd.check_indexer_failures([]) == []
+
+
+def test_unreachable_prowlarr_is_not_an_indexer_alert():
+    """Prowlarr being down is check_containers' job, not this one's."""
+    assert wd.check_indexer_failures(None) == []
+
+
+def test_threshold_is_configurable_and_respected():
+    rows = [_idx("Knaben", 2)]
+    assert wd.check_indexer_failures(rows, min_down_min=360) == []
+    assert wd.check_indexer_failures(rows, min_down_min=60)
+
+
+def test_alerts_are_ordered_deterministically():
+    """Unstable ordering makes the ntfy feed hard to diff between runs."""
+    rows = [_idx("Uindex", 10), _idx("1337x", 20), _idx("Knaben", 30)]
+    assert [a.key for a in wd.check_indexer_failures(rows)] == [
+        "prowlarr:indexer:1337x:down",
+        "prowlarr:indexer:Knaben:down",
+        "prowlarr:indexer:Uindex:down",
+    ]
+
+
+def test_malformed_timestamps_do_not_crash_the_run():
+    """A watchdog that dies on bad input stops watching everything else."""
+    rows = [{"name": "x", "initial_failure": "not-a-date", "disabled_till": None},
+            {"name": "y", "initial_failure": "", "disabled_till": None},
+            {"name": "z", "initial_failure": 12345, "disabled_till": None}]
+    assert wd.check_indexer_failures(rows) == []

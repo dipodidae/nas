@@ -45,6 +45,11 @@ What it checks
    own cron line declares. A job that runs and fails pushes its own alert
    immediately; this catches the other half — a job whose cron line is broken
    and which therefore produces nothing at all to notice.
+9. Prowlarr indexers that have stayed failed past a threshold — *not* ones that
+   flapped. Public trackers flap all day and that is their normal condition;
+   treating each cycle as an incident produced 103 ntfy messages in 48 hours
+   describing two actually-dead indexers. This owns indexer status so the
+   *arr apps' own unfiltered `onHealthIssue` connections do not have to.
 
 Delivery
 --------
@@ -147,6 +152,11 @@ NEVER_SUCCEEDED_REPEAT_MIN = CONFIG_GAP_REPEAT_MIN
 # to clear its own state, and a permanently "in flight" marker would silence
 # the staleness check forever.
 IN_FLIGHT_STALE_MIN = 15.0
+# How long an indexer must stay failed before it counts as down rather than
+# flapping. 6h deliberately matches Prowlarr's own IndexerLongTermStatusCheck,
+# which was the single accurate line in the 2026-09-03 feed.
+PROWLARR_INDEXER_DOWN_MIN = 360.0
+DEFAULT_PROWLARR_URL = "http://localhost:9696"
 
 
 @dataclass(frozen=True)
@@ -595,6 +605,112 @@ def check_stuck_starting(containers: dict[str, dict], max_min: float = 150.0) ->
   return alerts
 
 
+def _arr_get(base: str, api_key: str, path: str, timeout: int = 15) -> object | None:
+  """GET one *arr API path as JSON. None on any failure — never raises."""
+  req = urllib.request.Request(f"{base}{path}", headers={"X-Api-Key": api_key})
+  try:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost
+      return json.loads(resp.read())
+  except (OSError, ValueError):
+    return None
+
+
+def fetch_indexer_failures(base: str = "http://localhost:9696", api_key: str = "") -> list[dict] | None:
+  """Prowlarr's own view of which indexers are failing, with names attached.
+
+  Returns [{name, initial_failure, disabled_till}, ...], or None if Prowlarr
+  could not be reached (which is not itself an indexer problem).
+
+  `/indexerstatus` returns a row ONLY for an indexer Prowlarr currently
+  considers failing, so an empty list genuinely means "all fine" — that is the
+  authority this check is built on, rather than on notification traffic.
+  """
+  status = _arr_get(base, api_key, "/api/v1/indexerstatus")
+  if not isinstance(status, list):
+    return None
+  names: dict[int, str] = {}
+  indexers = _arr_get(base, api_key, "/api/v1/indexer")
+  if isinstance(indexers, list):
+    names = {int(i["id"]): str(i.get("name", i["id"])) for i in indexers if "id" in i}
+  rows = []
+  for row in status:
+    if not isinstance(row, dict) or "indexerId" not in row:
+      continue
+    idx = int(row["indexerId"])
+    rows.append({
+      "name": names.get(idx, f"id {idx}"),
+      "initial_failure": row.get("initialFailure"),
+      "disabled_till": row.get("disabledTill"),
+    })
+  return rows
+
+
+def _parse_arr_time(value: object) -> float | None:
+  """Parse an *arr UTC timestamp ('2026-08-27T07:11:44Z') to an epoch."""
+  if not isinstance(value, str) or not value:
+    return None
+  text = value.replace("Z", "+00:00")
+  try:
+    return _dt.datetime.fromisoformat(text).timestamp()
+  except ValueError:
+    return None
+
+
+def check_indexer_failures(
+  rows: list[dict] | None,
+  min_down_min: float = PROWLARR_INDEXER_DOWN_MIN,
+) -> list[Alert]:
+  """Alert only on indexers that have stayed failed, not on ones that flapped.
+
+  Public trackers flap all day; that is their normal condition, not an incident.
+  Prowlarr/Sonarr/Radarr each hold an Ntfy connection on `onHealthIssue` +
+  `onHealthRestored` with no filter, and Prowlarr's SHORT-term IndexerStatusCheck
+  appears and clears on every flap, so one indexer bouncing fans out across
+  three apps. Measured from ntfy's own cache over 48h: 22+22 Sonarr, 19+17
+  Prowlarr, 12+11 Radarr = 103 messages, describing what the long-term check
+  summarises as two indexers.
+
+  So this damps on OUR side of the webhook, which is also the only side that
+  works: Prowlarr's tag-based notification filtering is unreliable
+  (Prowlarr#1977).
+
+  The damping is `initialFailure` age, which is the same signal as Prowlarr's
+  own `IndexerLongTermStatusCheck` ("unavailable due to failures for more than 6
+  hours") and was the one accurate line in the 2026-09-03 feed: it named 1337x
+  and Torrent[CORE], the two that really were down, while Knaben, Uindex and
+  TorrentDownload -- reported as "currently failing, no restore" -- had no
+  `/indexerstatus` row at all.
+
+  A flap therefore produces nothing, and a genuine outage produces one alert
+  and one recovery. `disabledTill` is deliberately NOT the trigger: Prowlarr
+  sets it on the first failure, so it is true of a flap too.
+  """
+  if rows is None:
+    return []
+  now = time.time()
+  alerts = []
+  for row in sorted(rows, key=lambda r: str(r.get("name"))):
+    started = _parse_arr_time(row.get("initial_failure"))
+    if started is None:
+      continue
+    down_min = (now - started) / 60.0
+    if down_min < min_down_min:
+      continue
+    name = str(row.get("name"))
+    till = row.get("disabled_till") or "unknown"
+    alerts.append(
+      Alert(
+        f"prowlarr:indexer:{name}:down",
+        "warning",
+        f"indexer {name} has been failing for {down_min / 60:.1f}h "
+        f"(disabled till {till}) — past the {min_down_min / 60:.0f}h mark, so "
+        f"this is not flapping. Dead site, rate limit or Cloudflare?",
+        repeat_min=backoff_repeat_min(down_min - min_down_min),
+      )
+    )
+  return alerts
+
+
 def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
   """Ask the shaper whether it is doing its job, not whether it exists.
 
@@ -909,6 +1025,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       "failures, so this is the only thing watching that window (ADR-0026)."
     ),
   )
+  parser.add_argument(
+    "--prowlarr-url",
+    default=DEFAULT_PROWLARR_URL,
+    help=f"Prowlarr base URL for the indexer check (default {DEFAULT_PROWLARR_URL}).",
+  )
+  parser.add_argument(
+    "--indexer-down-min",
+    type=float,
+    default=PROWLARR_INDEXER_DOWN_MIN,
+    metavar="MIN",
+    help=(
+      "How long an indexer must stay failed before alerting "
+      f"(default {PROWLARR_INDEXER_DOWN_MIN:.0f}). Below this it is treated as "
+      "flapping, which is the normal condition of a public tracker."
+    ),
+  )
   parser.add_argument("--dry-run", action="store_true", help="Print alerts, send nothing.")
   parser.add_argument(
     "--self-test",
@@ -947,6 +1079,13 @@ def main(argv: list[str] | None = None) -> int:
   if "autoheal" not in set(args.ignore):
     alerts += check_autoheal(containers, autoheal_logs())
   alerts += check_cron_jobs(args.cron_state_dir)
+  # Damped on our side of the webhook: only indexers that stayed failed past
+  # --indexer-down-min, so a public-tracker flap is silent. See the check's
+  # docstring for why Prowlarr's own filtering is not used.
+  alerts += check_indexer_failures(
+    fetch_indexer_failures(args.prowlarr_url, os.getenv("API_KEY_PROWLARR", "")),
+    args.indexer_down_min,
+  )
   alerts += check_heartbeat_configured()
   alerts += check_wan_shaper()
   alerts += check_media_storage()
