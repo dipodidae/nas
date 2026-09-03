@@ -119,3 +119,74 @@ def test_folders_come_back_oldest_first():
     ]
     folders, _ = bridge.changed_folders(records, "2026-09-01T00:00:00Z")
     assert folders == ["/music/A/x", "/music/B/x"]
+
+
+# --- translate across the /music -> /data/music repath (ADR-0003) ---
+
+
+def test_translate_accepts_several_media_roots():
+    """Lidarr's root moved /music -> /data/music; history holds both spellings."""
+    got = bridge.translate(
+        ["/data/music/Kraftwerk/1974 - Autobahn", "/music/Bathory/1988 - Blood Fire Death"],
+        ["/data/music", "/music"],
+        "/data/movies/music",
+    )
+    assert got == [
+        "/data/movies/music/Kraftwerk/1974 - Autobahn",
+        "/data/movies/music/Bathory/1988 - Blood Fire Death",
+    ]
+
+
+def test_translate_matches_the_longest_root_first():
+    """/data would otherwise swallow /data/music and emit .../music/music/..."""
+    got = bridge.translate(["/data/music/A/B"], ["/data", "/data/music"], "/data/movies/music")
+    assert got == ["/data/movies/music/A/B"]
+
+
+def test_default_roots_cover_both_sides_of_the_repath():
+    assert set(bridge.DEFAULT_MAP_FROM) == {"/data/music", "/music"}
+
+
+def test_translate_still_accepts_a_single_root_as_a_string():
+    got = bridge.translate(["/music/A/B"], "/music", "/data/movies/music")
+    assert got == ["/data/movies/music/A/B"]
+
+
+# --- an unknown media root must be loud, not a silent exit 0 ---
+
+
+def _stub_run(monkeypatch, tmp_path, folders, reported):
+    monkeypatch.setenv("API_KEY_LIDARR", "k")
+    monkeypatch.setenv("API_KEY_JELLYFIN", "k")
+    monkeypatch.setattr(bridge, "fetch_history", lambda *a, **k: [])
+    monkeypatch.setattr(
+        bridge, "changed_folders", lambda *a, **k: (folders, "2026-09-03T12:18:03Z")
+    )
+    monkeypatch.setattr(
+        bridge, "report_to_jellyfin", lambda *a, **k: reported.append(a[-1]) or True
+    )
+    return ["--state", str(tmp_path / "s.json")]
+
+
+def test_unknown_media_root_exits_fatal_so_cron_alerts(monkeypatch, tmp_path):
+    """cron_job.py treats 0 and 1 as fine, so a dropped album must exit 2."""
+    reported: list = []
+    argv = _stub_run(monkeypatch, tmp_path, ["/somewhere/else/A/B"], reported)
+    assert bridge.main(argv) == 2
+    assert reported == []
+
+
+def test_unknown_media_root_does_not_advance_the_cursor(monkeypatch, tmp_path):
+    """Advancing past a dropped album loses it forever; the next run must retry."""
+    reported: list = []
+    state = tmp_path / "s.json"
+    argv = _stub_run(monkeypatch, tmp_path, ["/somewhere/else/A/B"], reported)
+    bridge.main(argv)
+    assert not state.exists()
+
+
+def test_a_fully_translatable_batch_still_exits_clean(monkeypatch, tmp_path):
+    reported: list = []
+    argv = _stub_run(monkeypatch, tmp_path, ["/data/music/A/B"], reported)
+    assert bridge.main(argv) == 0
+    assert reported == [["/data/movies/music/A/B"]]

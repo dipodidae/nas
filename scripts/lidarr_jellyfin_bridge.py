@@ -33,11 +33,30 @@ refreshes that folder rather than re-walking the whole Music library. A full
 Music scan is the box's largest memory event (~1.56GB anon-RSS) and is not
 something to run every five minutes — see docs/jellyfin-playback-audit.md.
 
+Media roots
+-----------
+Lidarr's root folder moved `/music` -> `/data/music` on 2026-09-02 (the ADR-0003
+retry, done offline by `lidarr_repath_db.py`). This script kept translating
+`/music` alone, so for a day every import was dropped by `translate()` and seven
+Kraftwerk albums never reached Jellyfin. Hence `DEFAULT_MAP_FROM` is a *list*:
+history written on either side of a repath still maps. Longest root wins, so
+adding a broad `/data` cannot swallow `/data/music`.
+
+That miss was silent for a second reason worth keeping fixed: a dropped folder
+printed a WARNING and still returned 0, and `cron_job.py` treats 0 and 1 alike
+(`--ok-codes` defaults to `0,1`). A folder under no known root is therefore now
+**fatal**, and the cursor is left where it is so the album is retried rather
+than skipped past forever.
+
 Exit codes
 ----------
   0  nothing to do, or every path reported successfully
-  1  partial — some paths reported, at least one call failed
-  2  fatal (missing API key, Lidarr or Jellyfin unreachable)
+  2  fatal: missing API key, Lidarr or Jellyfin unreachable, Jellyfin rejected
+     the batch, or a folder sat under no known media root. The cursor is not
+     advanced in any of these cases, so the next run retries.
+
+There is deliberately no exit 1: the report is a single all-or-nothing batch,
+so "partial" cannot arise.
 
 Environment
 -----------
@@ -60,6 +79,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -75,7 +95,8 @@ if "API_KEY_LIDARR" not in os.environ:
 DEFAULT_LIDARR_HOST = "http://localhost:8686"
 DEFAULT_JELLYFIN_HOST = "http://localhost:8096"
 DEFAULT_STATE = Path(__file__).resolve().parent.parent / "logs" / "lidarr_jellyfin_bridge.json"
-DEFAULT_MAP_FROM = "/music"
+# Both sides of the ADR-0003 repath. Order does not matter; longest wins.
+DEFAULT_MAP_FROM = ("/data/music", "/music")
 DEFAULT_MAP_TO = "/data/movies/music"
 # Lidarr history events that mean "a file under /music changed on disk".
 # trackFileDeleted is included so a removed album stops haunting Jellyfin.
@@ -164,20 +185,41 @@ def changed_folders(records: list[dict], since_iso: str) -> tuple[list[str], str
   return folders, cursor
 
 
-def translate(folders: list[str], map_from: str, map_to: str) -> list[str]:
-  """Rewrite Lidarr's media root to Jellyfin's. Paths outside it are dropped.
+def _roots(map_from: str | Sequence[str]) -> list[str]:
+  """Media roots, longest first, so `/data/music` beats a broader `/data`."""
+  values = [map_from] if isinstance(map_from, str) else list(map_from)
+  return sorted((r.rstrip("/") for r in values), key=len, reverse=True)
+
+
+def _matching_root(folder: str, roots: Sequence[str]) -> str | None:
+  for root in roots:
+    if folder == root or folder.startswith(root + "/"):
+      return root
+  return None
+
+
+def translate(folders: list[str], map_from: str | Sequence[str], map_to: str) -> list[str]:
+  """Rewrite Lidarr's media root to Jellyfin's. Paths outside every root drop.
 
   Dropping rather than passing through is deliberate: an untranslated path is
   exactly the silent no-op this script exists to fix, so it should be visible
-  as a missing entry rather than a 204 that means nothing.
+  as a missing entry rather than a 204 that means nothing. `untranslated()` is
+  what makes it visible.
   """
-  prefix = map_from.rstrip("/")
+  roots = _roots(map_from)
   target = map_to.rstrip("/")
-  return [
-    target + folder[len(prefix) :]
-    for folder in folders
-    if folder == prefix or folder.startswith(prefix + "/")
-  ]
+  out: list[str] = []
+  for folder in folders:
+    root = _matching_root(folder, roots)
+    if root is not None:
+      out.append(target + folder[len(root) :])
+  return out
+
+
+def untranslated(folders: list[str], map_from: str | Sequence[str]) -> list[str]:
+  """The folders `translate()` had to drop — i.e. the ones Jellyfin never hears."""
+  roots = _roots(map_from)
+  return [f for f in folders if _matching_root(f, roots) is None]
 
 
 def report_to_jellyfin(host: str, api_key: str, paths: list[str]) -> bool:
@@ -227,7 +269,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     description="Report Lidarr's file changes to Jellyfin with the paths translated.",
   )
   parser.add_argument("--state", type=Path, default=DEFAULT_STATE, help="Cursor state file.")
-  parser.add_argument("--map-from", default=DEFAULT_MAP_FROM, help="Lidarr's media root.")
+  parser.add_argument(
+    "--map-from",
+    action="append",
+    help=(
+      "Lidarr's media root; repeatable. "
+      f"Default: {' '.join(DEFAULT_MAP_FROM)} (both sides of the ADR-0003 repath)."
+    ),
+  )
   parser.add_argument("--map-to", default=DEFAULT_MAP_TO, help="Jellyfin's path for the same files.")
   parser.add_argument(
     "--since-min",
@@ -254,12 +303,23 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
   folders, new_cursor = changed_folders(records, cursor)
-  paths = translate(folders, args.map_from, args.map_to)
-  skipped = len(folders) - len(paths)
-  if skipped:
-    print(f"WARNING: {skipped} folder(s) outside {args.map_from!r}, not reported", file=sys.stderr)
+  roots = args.map_from or list(DEFAULT_MAP_FROM)
+  paths = translate(folders, roots, args.map_to)
+  unmapped = untranslated(folders, roots)
+
+  if unmapped:
+    # Fatal, not a warning: this is how the Kraftwerk imports were lost.
+    print(
+      f"ERROR: {len(unmapped)} folder(s) under none of {roots} — Lidarr's root "
+      "folder has probably moved (ADR-0003). Cursor held so they are retried:",
+      file=sys.stderr,
+    )
+    for folder in unmapped[:10]:
+      print(f"  unmapped: {folder}", file=sys.stderr)
 
   if not paths:
+    if unmapped:
+      return 2
     print(f"nothing to report (cursor {cursor} -> {new_cursor})")
     if not args.dry_run:
       save_cursor(args.state, new_cursor)
@@ -269,15 +329,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"changed: {path}")
   if args.dry_run:
     print(f"DRY-RUN would report {len(paths)} folder(s) to Jellyfin")
-    return 0
+    return 2 if unmapped else 0
 
   if not report_to_jellyfin(os.getenv("JELLYFIN_HOST", DEFAULT_JELLYFIN_HOST), jellyfin_key, paths):
     print("ERROR: Jellyfin rejected the update; cursor not advanced", file=sys.stderr)
     return 2
 
+  if unmapped:
+    print(f"reported {len(paths)} folder(s) to Jellyfin; cursor held for the unmapped one(s)")
+    return 2
+
   save_cursor(args.state, new_cursor)
   print(f"reported {len(paths)} folder(s) to Jellyfin (cursor -> {new_cursor})")
-  return 1 if skipped else 0
+  return 0
 
 
 if __name__ == "__main__":
