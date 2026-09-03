@@ -77,6 +77,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -104,6 +105,10 @@ DEFAULT_ALERT_REPEAT_MIN = 60.0
 STDERR_TAIL_LINES = 12
 STDERR_ALERT_CHARS = 600
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+# How often to re-stamp `in_flight_heartbeat` while a job is still running.
+# stack_watchdog stops believing the marker after IN_FLIGHT_STALE_MIN (15min),
+# so this must be comfortably below that; 60s is 15 beats of headroom.
+IN_FLIGHT_HEARTBEAT_SEC = 60.0
 
 
 def state_path(name: str) -> Path:
@@ -135,14 +140,51 @@ def tail(text: str, lines: int = STDERR_TAIL_LINES) -> str:
   return "\n".join(kept)
 
 
-def run_job(command: list[str]) -> tuple[int, str]:
-  """Run the job, passing output through. Returns (exit code, stderr text)."""
+def _heartbeat_loop(name: str, state: dict, stop: threading.Event) -> None:
+  """Re-stamp the in-flight marker until `stop` is set."""
+  while not stop.wait(IN_FLIGHT_HEARTBEAT_SEC):
+    state["in_flight_heartbeat"] = time.time()
+    save_state(name, state)
+
+
+def run_job(command: list[str], name: str | None = None, state: dict | None = None) -> tuple[int, str]:
+  """Run the job, passing output through. Returns (exit code, stderr text).
+
+  While the job runs, `in_flight_heartbeat` is re-stamped every
+  IN_FLIGHT_HEARTBEAT_SEC so `stack_watchdog.check_cron_jobs` can tell a job
+  that is *slow* from one that has gone *quiet*. Without it, a job whose single
+  pass outlives its own `--max-age-min` is indistinguishable from a job whose
+  cron line is broken: `last_success` is only written when the child exits, so
+  the freshness clock cannot advance while the work is happening.
+  `playlist-sync` sat 21h into a genuinely progressing run and was paged as
+  stale for every one of them.
+
+  The heartbeat is deliberately a repeated stamp rather than a single "running"
+  flag: a job killed with -9 never gets to clear its own marker, and a flag that
+  can only be set would silence the staleness check permanently.
+  """
+  stop = threading.Event()
+  beater: threading.Thread | None = None
+  if name and state is not None:
+    now = time.time()
+    state["in_flight_since"] = now
+    state["in_flight_heartbeat"] = now
+    save_state(name, state)
+    beater = threading.Thread(target=_heartbeat_loop, args=(name, state, stop), daemon=True)
+    beater.start()
   try:
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
   except OSError as exc:
     # The command itself could not be executed at all — the `media_ops_status`
     # failure mode. There is no stderr from the job because there was no job.
     return 127, f"could not execute {command[0]!r}: {exc}"
+  finally:
+    stop.set()
+    if beater is not None:
+      beater.join(timeout=5)
+    if state is not None:
+      state.pop("in_flight_since", None)
+      state.pop("in_flight_heartbeat", None)
   if proc.stdout:
     sys.stdout.write(proc.stdout)
   if proc.stderr:
@@ -208,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
   ok_codes = parse_ok_codes(args.ok_codes)
   started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
   print(f"--- {args.name} start {started}")
-  code, stderr_text = run_job(command)
+  code, stderr_text = run_job(command, args.name, state)
   elapsed = time.time() - now
   print(f"--- {args.name} exit={code} in {elapsed:.1f}s")
 

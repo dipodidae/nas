@@ -129,6 +129,24 @@ SEVERITY_PRIORITY = {"critical": "urgent", "warning": "high", "notice": "low", "
 # and re-reading it every hour teaches you to ignore the topic. Once a day is
 # enough to keep it from being forgotten, which is the only job it has.
 CONFIG_GAP_REPEAT_MIN = 1440.0
+# Ceiling for the exponential backoff below. Six hours still surfaces a genuine
+# outage four times a day; beyond that the alert reads as forgotten rather than
+# quiet.
+BACKOFF_CAP_MIN = 360.0
+# A job that has NEVER succeeded since it was registered is a configuration bug,
+# not an outage: it will not fix itself, and nothing about it changes hour to
+# hour. It gets one loud page and then a daily reminder. A job that used to work
+# and has now gone stale is the opposite -- something changed, it may well come
+# back, and it earns the escalating cadence.
+NEVER_SUCCEEDED_REPEAT_MIN = CONFIG_GAP_REPEAT_MIN
+# How long an in-flight job's heartbeat may go unrefreshed before we stop
+# believing it. cron_job.py rewrites it every IN_FLIGHT_HEARTBEAT_SEC (60s), so
+# 15min is 15 missed beats -- long enough to survive a loaded box, short enough
+# that a wedged or SIGKILLed job stops looking alive. The point of checking the
+# heartbeat rather than in_flight_since alone: a job killed with -9 never gets
+# to clear its own state, and a permanently "in flight" marker would silence
+# the staleness check forever.
+IN_FLIGHT_STALE_MIN = 15.0
 
 
 @dataclass(frozen=True)
@@ -149,6 +167,34 @@ class Alert:
   severity: str
   message: str
   repeat_min: float | None = None
+
+
+def backoff_repeat_min(
+  active_min: float,
+  base: float = DEFAULT_REPEAT_MINUTES,
+  cap: float = BACKOFF_CAP_MIN,
+) -> float:
+  """Re-notify interval for a problem that has been true for `active_min`.
+
+  Doubles once per elapsed interval and then holds at `cap`: with the 60min
+  default a still-broken thing pushes at roughly 0h, 1h, 3h, 7h, 13h, 19h...
+  rather than every single hour forever.
+
+  This exists because `playlist-sync` sent 20 byte-identical p5 messages in 43
+  hours. Nothing in those 20 was new after the first, and an alert that repeats
+  unchanged trains you to swipe the topic away -- which is the exact failure
+  this whole file was written to prevent. Backing off keeps the signal without
+  spending the attention.
+
+  `cap` is a floor on how often you still hear about it, not a silence: a real
+  outage still surfaces four times a day.
+  """
+  interval = base
+  elapsed = 0.0
+  while interval < cap and elapsed + interval <= active_min:
+    elapsed += interval
+    interval = min(interval * 2, cap)
+  return interval
 
 
 def _run(cmd: list[str], timeout: int = 60) -> tuple[int, str]:
@@ -291,18 +337,37 @@ def check_cron_jobs(state_dir: Path) -> list[Alert]:
     if not reference:
       continue
     age_min = (now - float(reference)) / 60.0
+    # A job that is CURRENTLY RUNNING has not gone quiet -- it is just slow.
+    # cron_job.py only writes last_success after the child exits, so a job whose
+    # single pass outlives its own window can never refresh the clock while it
+    # is working. `playlist-sync` was 21h into a genuinely progressing run,
+    # holding its flock (so every 6h tick correctly no-op'd), and was reported
+    # stale the whole time. An in-flight heartbeat is proof of life; trust it
+    # over the success clock, but only while it is being refreshed.
+    in_flight = state.get("in_flight_since")
+    heartbeat = state.get("in_flight_heartbeat")
+    if in_flight and heartbeat and (now - float(heartbeat)) / 60.0 <= IN_FLIGHT_STALE_MIN:
+      continue
     if age_min <= max_age:
       continue
-    if state.get("last_success"):
-      what = f"last succeeded {age_min / 60:.1f}h ago"
-    else:
+    never = not state.get("last_success")
+    if never:
       what = f"has never succeeded (registered {age_min / 60:.1f}h ago)"
+    else:
+      what = f"last succeeded {age_min / 60:.1f}h ago"
     detail = f"; last exit {state['last_exit']}" if "last_exit" in state else "; it has not run at all"
+    if in_flight and heartbeat:
+      detail += f"; a run has been in flight {(now - float(in_flight)) / 3600:.1f}h but stopped reporting"
     alerts.append(
       Alert(
         f"cron:{path.stem}:stale",
         "critical",
         f"cron job {path.stem} {what}, allowed {max_age / 60:.1f}h{detail}",
+        # Never-succeeded is a config bug: one loud page, then daily. Went-stale
+        # escalates, because it may still recover and the age is the news.
+        repeat_min=(
+          NEVER_SUCCEEDED_REPEAT_MIN if never else backoff_repeat_min(age_min - max_age)
+        ),
       )
     )
   return alerts

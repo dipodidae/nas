@@ -464,3 +464,83 @@ def test_a_real_run_does_persist_and_resolve(tmp_path, monkeypatch):
     assert wd.main(["--state", str(state)]) == 0
     assert sent == [("autoheal:down", True)], "the recovery must be pushed"
     assert json.loads(state.read_text())["active"] == {}
+
+
+# --- alert cadence: backoff, and never-succeeded vs went-stale ---
+
+
+def test_backoff_doubles_then_holds_at_the_cap():
+    """20 identical hourly pages is the bug; this is the cadence that replaces it."""
+    assert wd.backoff_repeat_min(0) == 60.0
+    assert wd.backoff_repeat_min(59) == 60.0
+    assert wd.backoff_repeat_min(60) == 120.0
+    assert wd.backoff_repeat_min(180) == 240.0
+    # and it never grows past the cap, however long the outage runs
+    assert wd.backoff_repeat_min(60 * 24 * 30) == wd.BACKOFF_CAP_MIN
+
+
+def test_backoff_never_returns_zero_or_negative():
+    """A zero interval would push on every */5 tick — worse than no backoff."""
+    for age in (-10, 0, 1, 7, 12345):
+        assert wd.backoff_repeat_min(age) >= 60.0
+
+
+def test_never_succeeded_job_pages_once_then_daily(tmp_path):
+    """A config bug will not fix itself; hourly repetition adds nothing."""
+    d = _cron_state(tmp_path, "playlist-sync", max_age_min=1440,
+                    registered=time.time() - 43 * 3600, last_exit=1)
+    (alert,) = wd.check_cron_jobs(d)
+    assert alert.key == "cron:playlist-sync:stale"
+    assert "has never succeeded" in alert.message
+    assert alert.repeat_min == wd.NEVER_SUCCEEDED_REPEAT_MIN
+
+
+def test_job_that_went_stale_escalates_instead(tmp_path):
+    """Something changed and it may come back, so the age is the news."""
+    d = _cron_state(tmp_path, "media-ops", max_age_min=30,
+                    last_success=time.time() - 10 * 3600, last_exit=0)
+    (alert,) = wd.check_cron_jobs(d)
+    assert "last succeeded" in alert.message
+    assert alert.repeat_min == wd.BACKOFF_CAP_MIN
+
+
+def test_the_two_cases_do_not_share_a_cadence(tmp_path):
+    """The whole point of the split: one loud-then-quiet, one escalating."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    never = _cron_state(tmp_path / "a", "job", max_age_min=60,
+                        registered=time.time() - 30 * 3600)
+    went = _cron_state(tmp_path / "b", "job", max_age_min=60,
+                       last_success=time.time() - 30 * 3600)
+    assert wd.check_cron_jobs(never)[0].repeat_min != wd.check_cron_jobs(went)[0].repeat_min
+
+
+# --- in-flight jobs are slow, not silent ---
+
+
+def test_a_job_still_running_is_not_stale(tmp_path):
+    """playlist-sync: 21h into a progressing run, paged as stale for all of them."""
+    now = time.time()
+    d = _cron_state(tmp_path, "playlist-sync", max_age_min=1440,
+                    registered=now - 43 * 3600, last_exit=1,
+                    in_flight_since=now - 21 * 3600, in_flight_heartbeat=now - 30)
+    assert wd.check_cron_jobs(d) == []
+
+
+def test_an_in_flight_marker_with_a_dead_heartbeat_still_alerts(tmp_path):
+    """A -9'd job cannot clear its own marker, so the stamp must expire."""
+    now = time.time()
+    d = _cron_state(tmp_path, "playlist-sync", max_age_min=1440,
+                    registered=now - 43 * 3600, last_exit=1,
+                    in_flight_since=now - 21 * 3600,
+                    in_flight_heartbeat=now - (wd.IN_FLIGHT_STALE_MIN + 5) * 60)
+    (alert,) = wd.check_cron_jobs(d)
+    assert "stopped reporting" in alert.message
+
+
+def test_in_flight_since_alone_cannot_silence_the_check(tmp_path):
+    """Without a heartbeat the marker is unfalsifiable; it must be ignored."""
+    now = time.time()
+    d = _cron_state(tmp_path, "playlist-sync", max_age_min=1440,
+                    registered=now - 43 * 3600, in_flight_since=now - 21 * 3600)
+    assert [a.key for a in wd.check_cron_jobs(d)] == ["cron:playlist-sync:stale"]
