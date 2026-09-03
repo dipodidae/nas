@@ -172,11 +172,15 @@ services:
       # import pass; SMART collection is cheap but the wear curve only needs
       # one point a day.
       - COLLECTOR_CRON_SCHEDULE=45 5 * * *
-      # ADR-0012: everything lands on the one ntfy topic. Reuses the existing
-      # write-only container publisher rather than minting a fourth account --
-      # scrutiny is less externally exposed than the *arrs that share it, and a
-      # per-publisher account with no distinct trust boundary is churn.
-      - SCRUTINY_NOTIFY_URLS=ntfy://${NTFY_ARR_USER}:${NTFY_ARR_PASSWORD}@ntfy:8410/nas-alerts?scheme=http&priority=high&tags=floppy_disk
+      # INVARIANT: a failing disk is nas-critical, so scrutiny authenticates as
+      # `nas-scripts` and NOT as `nas-arr`. nas-arr is scoped to
+      # media/attention/requests precisely because its token sits inside *arr
+      # SQLite, so publishing to nas-critical with it returns 403 -- the alert
+      # would be silently rejected. shoutrrr has no token field, so this is the
+      # URL-userinfo answer to AGENTS.md's "some services cannot set an auth
+      # header". Priority 5 (`urgent`): the disk has no redundancy and no SMART
+      # on the media half (ADR-0023). ADR-0033, ADR-0012.
+      - SCRUTINY_NOTIFY_URLS=ntfy://${NTFY_SCRIPTS_USER}:${NTFY_SCRIPTS_PASSWORD}@ntfy:8410/${NTFY_TOPIC_CRITICAL}?scheme=http&priority=urgent&tags=rotating_light,floppy_disk
     volumes:
       - ${CONFIG_DIRECTORY}/scrutiny/config:/opt/scrutiny/config
       - ${CONFIG_DIRECTORY}/scrutiny/influxdb:/opt/scrutiny/influxdb
@@ -250,17 +254,25 @@ services:
       - DIUN_WATCH_COMPAREDIGEST=true
       # Generated from the compose model; `make check` asserts it is current.
       - DIUN_PROVIDERS_FILE_FILENAME=/manifest.yml
-      # ADR-0012: one topic. Diun's native ntfy notifier accepts a TOKEN only,
-      # not basic auth -- so this is a third answer to the "some services cannot
-      # set an auth header" problem in AGENTS.md, alongside ?auth= and URL
-      # userinfo. The token belongs to the existing write-only `arr` publisher,
-      # so it can be revoked without touching that account's password:
-      #   docker exec ntfy ntfy token remove arr <token>
+      # INVARIANT: diun owns nas-updates and nothing else owns it. An available
+      # image update is the lowest-value message this stack produces -- nothing
+      # is broken, nothing is waiting, and a human applies it deliberately
+      # (ADR-0025) -- so it gets its own topic at priority 1, which the phone is
+      # set to "minimum importance, no sound". On the shared topic it was
+      # priority 3, indistinguishable from an actual import.
+      #
+      # Diun's native ntfy notifier accepts a TOKEN only, not basic auth -- the
+      # third answer to AGENTS.md's "some services cannot set an auth header",
+      # alongside ?auth= and URL userinfo. The token is minted on `nas-scripts`
+      # rather than `nas-arr` because nas-arr cannot reach nas-updates by
+      # construction, and it is its own token so it stays revocable alone:
+      #   docker exec ntfy ntfy token remove nas-scripts <token>
+      # ADR-0033, ADR-0024.
       - DIUN_NOTIF_NTFY_ENDPOINT=http://ntfy:8410
-      - DIUN_NOTIF_NTFY_TOPIC=nas-alerts
+      - DIUN_NOTIF_NTFY_TOPIC=${NTFY_TOPIC_UPDATES}
       - DIUN_NOTIF_NTFY_TOKEN=${NTFY_DIUN_TOKEN}
-      - DIUN_NOTIF_NTFY_PRIORITY=3
-      - DIUN_NOTIF_NTFY_TAGS=package
+      - DIUN_NOTIF_NTFY_PRIORITY=1
+      - DIUN_NOTIF_NTFY_TAGS=arrow_up
       - DIUN_LOG_LEVEL=info
     volumes:
       - ${CONFIG_DIRECTORY}/diun:/data

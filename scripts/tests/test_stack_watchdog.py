@@ -442,7 +442,7 @@ def test_dry_run_does_not_consume_a_pending_resolve(tmp_path, monkeypatch):
     state.write_text(before)
 
     _quiet_main(monkeypatch, wd)
-    monkeypatch.setenv("NAS_ALERT_WEBHOOK", "http://ntfy.invalid/nas-alerts")
+    monkeypatch.setenv("NTFY_TOKEN_SCRIPTS", "tk_test")
     monkeypatch.setattr(
         wd, "notify",
         lambda *a, **k: pytest.fail("--dry-run must not notify"),  # noqa: ARG005
@@ -460,11 +460,12 @@ def test_a_real_run_does_persist_and_resolve(tmp_path, monkeypatch):
          "restart_counts": {}, "oom_cursor": 0}))
 
     _quiet_main(monkeypatch, wd)
-    monkeypatch.setenv("NAS_ALERT_WEBHOOK", "http://ntfy.invalid/nas-alerts")
+    monkeypatch.setenv("NTFY_TOKEN_SCRIPTS", "tk_test")
     sent: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         wd, "notify",
-        lambda _hook, alert, resolved=False: (sent.append((alert.key, resolved)), True)[1],
+        lambda alert, resolved=False, active_min=0.0: (  # noqa: ARG005
+            sent.append((alert.key, resolved)), True)[1],
     )
 
     assert wd.main(["--state", str(state)]) == 0
@@ -690,3 +691,152 @@ def test_clean_apps_are_quiet():
 
 def test_malformed_health_payload_does_not_crash():
     assert wd.check_arr_health([{"app": "sonarr"}, "not a dict", {}]) == []
+
+
+# --- lane routing and escalation (ADR-0033) ---
+
+
+def _alert(key, severity="warning"):
+    return wd.Alert(key, severity, "msg")
+
+
+def test_no_container_at_all_is_critical_from_the_first_tick():
+    """ADR-0006's failure mode. It cost qBittorrent 13h; it does not wait."""
+    assert wd.lane_for(_alert("container:qbittorrent:missing"), active_min=0.0) == "critical"
+    assert wd.lane_for(_alert("container:recyclarr:missing"), active_min=0.0) == "critical"
+
+
+def test_an_unhealthy_container_starts_quiet_and_escalates_with_age():
+    key = "container:recyclarr:unhealthy"
+    assert wd.lane_for(_alert(key), active_min=0.0) == "infra"
+    assert wd.lane_for(_alert(key), active_min=14.9) == "infra"
+    assert wd.lane_for(_alert(key), active_min=15.0) == "attention"
+    # A service nobody is looking at never reaches critical on age alone.
+    assert wd.lane_for(_alert(key), active_min=600.0) == "attention"
+
+
+def test_a_user_visible_service_reaches_critical_in_five_minutes():
+    for svc in ("jellyfin", "nextcloud", "swag", "qbittorrent"):
+        key = f"container:{svc}:unhealthy"
+        assert wd.lane_for(_alert(key), active_min=1.0) == "infra", svc
+        assert wd.lane_for(_alert(key), active_min=5.0) == "critical", svc
+
+
+def test_the_user_visible_set_is_exactly_the_four_documented_services():
+    assert set(wd.USER_VISIBLE_SERVICES) == {"jellyfin", "nextcloud", "swag", "qbittorrent"}
+
+
+def test_the_box_itself_is_always_critical():
+    for key in ("kernel:oom:2026-09-03T04:00", "media:unmounted", "media:readonly",
+                "media:ext4-errors", "media:ext4-state", "media:kernel-errors"):
+        assert wd.lane_for(_alert(key, "critical")) == "critical", key
+
+
+def test_a_blind_detector_is_attention_not_critical():
+    """The OOM check being unreadable is not the box failing — but it is today's job."""
+    assert wd.lane_for(_alert("kernel:oom:unreadable")) == "attention"
+    assert wd.lane_for(_alert("jellyfin:sampler:stale")) == "attention"
+
+
+def test_the_routine_and_standing_gaps_land_in_infra():
+    for key in ("heartbeat:unconfigured", "autoheal:supervising-nothing",
+                "media:ext4-unreadable", "jellyfin:sampler:unparsed",
+                "watchdog:self-test", "container:slskd:stuck-starting"):
+        assert wd.lane_for(_alert(key)) == "infra", key
+
+
+def test_longest_prefix_wins_so_a_specific_key_can_differ_from_its_namespace():
+    """`media:low-space` must not inherit `media:`'s critical routing."""
+    assert wd.lane_for(_alert("media:low-space")) == "attention"
+    assert wd.lane_for(_alert("media:unmounted")) == "critical"
+    assert wd.lane_for(_alert("autoheal:down")) == "attention"
+    assert wd.lane_for(_alert("autoheal:supervising-nothing")) == "infra"
+
+
+def test_an_unrouted_key_defaults_to_attention_not_silence():
+    """A new check with no table entry must be visible, not swallowed."""
+    assert wd.lane_for(_alert("something:brand:new")) == "attention"
+
+
+def test_an_explicit_lane_on_the_alert_wins():
+    assert wd.lane_for(wd.Alert("media:low-space", "warning", "m", lane="critical")) == "critical"
+
+
+def test_every_lane_the_table_names_exists_in_the_router():
+    lanes = {lane for _prefix, lane in wd.LANE_BY_KEY_PREFIX}
+    assert lanes <= {lane.value for lane in wd.notifier.Lane}
+
+
+def test_an_escalation_is_pushed_immediately_rather_than_waiting_for_repeat_min(tmp_path, monkeypatch):
+    """The bug this guards: the escalation is recorded and never actually sent.
+
+    `due` is False for another 45 minutes after the first push, so without the
+    `escalated` clause a jellyfin outage would spend its whole life in nas-infra
+    while the state file happily said `lane: critical`.
+    """
+    state = tmp_path / "watchdog.json"
+    now = time.time()
+    state.write_text(json.dumps({
+        "active": {"container:jellyfin:unhealthy": {
+            "first_seen": now - 600, "last_notified": now - 60, "lane": "infra"}},
+        "restart_counts": {}, "oom_cursor": 0,
+    }))
+
+    _quiet_main(monkeypatch, wd)
+    monkeypatch.setenv("NTFY_TOKEN_SCRIPTS", "tk_test")
+    monkeypatch.setattr(wd, "check_containers", lambda *a, **k: (  # noqa: ARG005
+        [wd.Alert("container:jellyfin:unhealthy", "warning", "healthcheck failing")], {}))
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        wd, "notify",
+        lambda alert, resolved=False, active_min=0.0: (  # noqa: ARG005
+            sent.append((alert.key, wd.lane_for(alert, active_min))), True)[1],
+    )
+
+    wd.main(["--state", str(state), "--repeat-min", "60"])
+    assert sent == [("container:jellyfin:unhealthy", "critical")], (
+        "a 10-minute jellyfin outage must escalate now, not in 45 minutes"
+    )
+    assert json.loads(state.read_text())["active"][
+        "container:jellyfin:unhealthy"]["lane"] == "critical"
+
+
+def test_a_stable_lane_still_honours_repeat_min(tmp_path, monkeypatch):
+    """The escape hatch must not become "push on every tick"."""
+    state = tmp_path / "watchdog.json"
+    now = time.time()
+    state.write_text(json.dumps({
+        "active": {"container:recyclarr:unhealthy": {
+            "first_seen": now - 60, "last_notified": now - 60, "lane": "infra"}},
+        "restart_counts": {}, "oom_cursor": 0,
+    }))
+    _quiet_main(monkeypatch, wd)
+    monkeypatch.setenv("NTFY_TOKEN_SCRIPTS", "tk_test")
+    monkeypatch.setattr(wd, "check_containers", lambda *a, **k: (  # noqa: ARG005
+        [wd.Alert("container:recyclarr:unhealthy", "warning", "healthcheck failing")], {}))
+    sent: list[str] = []
+    monkeypatch.setattr(
+        wd, "notify",
+        lambda alert, resolved=False, active_min=0.0: (  # noqa: ARG005
+            sent.append(alert.key), True)[1],
+    )
+    wd.main(["--state", str(state), "--repeat-min", "60"])
+    assert sent == [], "still infra, still inside repeat-min: nothing to send"
+
+
+def test_severity_only_raises_a_lanes_priority_never_lowers_it(monkeypatch):
+    """A `notice` routed into nas-critical must still arrive at priority 5."""
+    seen: list[int | None] = []
+
+    class _R:
+        sent = True
+
+    monkeypatch.setattr(
+        wd.notifier, "notify",
+        lambda _lane, _t, _m, priority=None: (seen.append(priority), _R())[1],
+    )
+    wd.notify(wd.Alert("media:unmounted", "notice", "m"))
+    assert seen == [None], "no override: the lane's own priority 5 stands"
+    seen.clear()
+    wd.notify(wd.Alert("heartbeat:unconfigured", "critical", "m"))
+    assert seen == [5], "a critical severity in nas-infra is worth raising"

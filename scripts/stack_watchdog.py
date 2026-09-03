@@ -57,12 +57,21 @@ What it checks
 
 Delivery
 --------
-ntfy, over a plain `POST <topic-url>` with a text body. Chosen over Gotify
-because it needs no server-side setup before the first alert can land, the
-same one-call contract works against ntfy.sh or a self-hosted instance with
-only a URL change, and this repo already speaks it (`SLSKD_ALERT_WEBHOOK` in
-scripts/slskd_login_watch.py). Gotify would require standing up a server and
-minting per-application tokens first.
+Through `scripts/notify.py`, the lane router — this file holds no topic name,
+no credential and no priority mapping. ntfy was chosen over Gotify because a
+plain `POST <topic-url>` with a text body is the whole publish contract and
+needs no server-side application setup before the first alert can land.
+
+Which lane each alert goes to is one table, `LANE_BY_KEY_PREFIX`, plus one
+escalation rule. The escalation is the part worth knowing: an unhealthy
+container starts in `nas-infra` because most of them are blips, moves to
+`nas-attention` after 15 minutes, and moves to `nas-critical` after 5 minutes
+if it is one of the four services whose failure a human notices unaided
+(jellyfin, nextcloud, swag, qbittorrent). "No container at all" — ADR-0006's
+failure mode, which cost qBittorrent 13 hours — skips the ladder and is
+critical from the first tick. An escalation is sent immediately rather than
+waiting for `--repeat-min`, or the alert would spend the outage in the quietest
+lane. ADR-0033.
 
 State lives in a small JSON file so a continuing problem notifies once and then
 at a slow repeat interval rather than every five minutes, and so recoveries are
@@ -77,12 +86,12 @@ Exit codes
 
 Environment
 -----------
-  NAS_ALERT_WEBHOOK      ntfy topic URL to POST alerts to. Falls back to
-                         SLSKD_ALERT_WEBHOOK so one topic can serve both.
-                         Unset = print only (still useful in cron mail).
-  NAS_ALERT_USER         basic-auth user for the ntfy topic. The self-hosted
-  NAS_ALERT_PASSWORD     instance runs auth-default-access=deny-all, so these
-                         are required against it (optional for an open topic).
+  NTFY_TOKEN_SCRIPTS     access token for the write-only `nas-scripts` ntfy
+                         account. Unset = print only (still useful in cron
+                         mail); the router says so rather than failing.
+  NTFY_URL               where to publish (default http://127.0.0.1:8410,
+                         loopback so alert contents never leave the box).
+  NTFY_TOPIC_<LANE>      optional per-lane topic override.
 
 Usage
 -----
@@ -95,7 +104,6 @@ Usage
 from __future__ import annotations
 
 import argparse
-import base64
 import datetime as _dt
 import json
 import os
@@ -108,13 +116,20 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-if "NAS_ALERT_WEBHOOK" not in os.environ:
+if "NTFY_TOKEN_SCRIPTS" not in os.environ:
   try:
     from dotenv import load_dotenv  # type: ignore
 
     load_dotenv()
   except ImportError:
     pass
+
+# Delivery goes through the lane router, which is the only thing that knows a
+# topic name. Imported as `notifier` because this module already exports a
+# function called `notify()` -- cron_job.py imports that name, and renaming it
+# would be a change to a contract for no gain. ADR-0033.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import notify as notifier  # noqa: E402, I001
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -133,7 +148,19 @@ DEFAULT_REPEAT_MINUTES = 60.0
 # Kernel OOM lines look like:
 #   Out of memory: Killed process 12345 (jellyfin) total-vm:...,anon-rss:...
 OOM_PATTERN = re.compile(r"Out of memory: Killed process|oom-kill:|oom_reaper:")
-SEVERITY_PRIORITY = {"critical": "urgent", "warning": "high", "notice": "low", "info": "default"}
+# Severity is now carried by the ntfy priority the ROUTER derives from the lane,
+# not by a per-severity string this file picks. What is left here is the mapping
+# used only to *override* a lane's default when a message is unusually severe
+# for its lane -- info->3, warning->4, critical->5, notice->2 (ADR-0033).
+SEVERITY_PRIORITY = {"critical": 5, "warning": 4, "notice": 2, "info": 3}
+
+# The four services whose failure a human notices without being told. Anything
+# here that stays down past USER_VISIBLE_CRITICAL_MIN escalates to nas-critical
+# even though a merely-unhealthy container starts life in nas-infra.
+USER_VISIBLE_SERVICES = frozenset({"jellyfin", "nextcloud", "swag", "qbittorrent"})
+# An unhealthy container is usually a blip. Fifteen minutes of it is not.
+ESCALATE_ATTENTION_MIN = 15.0
+USER_VISIBLE_CRITICAL_MIN = 5.0
 # A standing configuration gap is not an incident: it cannot resolve on its own
 # and re-reading it every hour teaches you to ignore the topic. Once a day is
 # enough to keep it from being forgotten, which is the only job it has.
@@ -196,12 +223,17 @@ class Alert:
   a container that died is an incident and should keep nagging hourly, while a
   missing config value is a standing gap that nags once a day. Without the
   override the noisiest setting wins for everything.
+
+  `lane` pins the audience when the key-prefix routing in `lane_for()` would
+  get it wrong. Leave it None for anything the table already covers -- a lane
+  chosen at a construction site is a lane that drifts from the table.
   """
 
   key: str
   severity: str
   message: str
   repeat_min: float | None = None
+  lane: str | None = None
 
 
 def backoff_repeat_min(
@@ -1027,41 +1059,117 @@ def check_kernel_oom(since_epoch: float | None) -> tuple[list[Alert], float]:
   )
 
 
-def _auth_header() -> dict[str, str]:
-  """Basic-auth header for ntfy, when credentials are configured.
+# Key prefix -> lane. One table, so the routing is auditable in one read and a
+# new check cannot quietly invent a seventh destination. Longest match wins, so
+# `media:low-space` can differ from `media:` without reordering anything.
+#
+# The rule behind the assignments: nas-critical is "the box or something a human
+# is looking at right now is broken"; nas-attention is "needs a human today";
+# nas-infra is "routine, self-healing, or a recovery". ADR-0033.
+LANE_BY_KEY_PREFIX: tuple[tuple[str, str], ...] = (
+  # --- the box itself ---
+  ("kernel:oom:unreadable", "attention"),  # the OOM detector is blind, not the box
+  ("kernel:oom:", "critical"),
+  ("media:unmounted", "critical"),
+  ("media:readonly", "critical"),  # ext4 remounted ro: every *arr import now fails
+  ("media:ext4-errors", "critical"),
+  ("media:ext4-state", "critical"),
+  ("media:ext4-unreadable", "infra"),
+  ("media:kernel-errors", "critical"),
+  ("media:low-space", "attention"),
+  # --- containers. `missing` is ADR-0006's failure mode: not unhealthy, ABSENT.
+  # The others start in nas-infra and escalate by age; see escalate_lane().
+  ("container:", "infra"),
+  # --- supervision ---
+  ("autoheal:supervising-nothing", "infra"),
+  ("autoheal:", "attention"),  # nothing is restarting anything, and that is quiet
+  # --- scheduling. A job that failed once is cron_job.py's business (nas-infra);
+  # a job that stopped running AT ALL is this file's, and is a today problem.
+  ("cron:", "attention"),
+  ("crontab:", "attention"),
+  # --- the *arr suite ---
+  ("arr:", "attention"),
+  ("prowlarr:indexer:", "attention"),
+  # --- jellyfin ---
+  ("jellyfin:memory:high", "attention"),
+  ("jellyfin:sampler:unparsed", "infra"),
+  ("jellyfin:sampler:", "attention"),  # a dead sampler blinds the OOM check
+  # --- standing configuration gaps: they cannot resolve on their own, so they
+  # nag once a day in the lane you read rather than the one that wakes you.
+  ("heartbeat:unconfigured", "infra"),
+  ("wan:shaper:degraded", "attention"),  # degraded uplink = 5% loss (AGENTS.md)
+  ("watchdog:self-test", "infra"),
+)
 
-  The ntfy instance runs `auth-default-access=deny-all`, so an unauthenticated
-  publish is rejected with 403 — the credentials are not optional in practice,
-  but the script still works against an open topic without them.
+
+def _service_of(key: str) -> str:
+  """`container:jellyfin:unhealthy` -> `jellyfin`. Empty for anything else."""
+  parts = key.split(":")
+  return parts[1] if len(parts) >= 3 and parts[0] == "container" else ""
+
+
+def escalate_lane(key: str, base_lane: str, active_min: float) -> str:
+  """Raise a container alert's lane as the outage ages. Pure.
+
+  A container that has been unhealthy for ninety seconds is a blip and belongs
+  in nas-infra; the same container ninety minutes later is not. Two thresholds,
+  both from the routing table:
+
+  * any container still unhealthy after ESCALATE_ATTENTION_MIN -> nas-attention
+  * a USER_VISIBLE_SERVICES container down past USER_VISIBLE_CRITICAL_MIN ->
+    nas-critical, because by then someone has already noticed and is asking
+
+  `missing` skips the ladder entirely: no container at all is the ADR-0006
+  failure mode that cost qBittorrent thirteen hours, and it is critical from the
+  first tick.
   """
-  user = os.getenv("NAS_ALERT_USER", "")
-  password = os.getenv("NAS_ALERT_PASSWORD", "")
-  if not user or not password:
-    return {}
-  token = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
-  return {"Authorization": f"Basic {token}"}
+  if not key.startswith("container:"):
+    return base_lane
+  if key.endswith(":missing"):
+    return "critical"
+  service = _service_of(key)
+  if service in USER_VISIBLE_SERVICES and active_min >= USER_VISIBLE_CRITICAL_MIN:
+    return "critical"
+  if active_min >= ESCALATE_ATTENTION_MIN:
+    return "attention"
+  return base_lane
 
 
-def notify(webhook: str, alert: Alert, resolved: bool = False) -> bool:
-  """POST one alert to ntfy. Returns False on failure; never raises."""
-  title = ("RESOLVED: " if resolved else "") + alert.key
-  priority = "default" if resolved else SEVERITY_PRIORITY.get(alert.severity, "default")
+def lane_for(alert: Alert, active_min: float = 0.0) -> str:
+  """The lane this alert belongs in, given how long it has been active. Pure."""
+  if alert.lane:
+    return alert.lane
+  base = "attention"
+  best = -1
+  for prefix, lane in LANE_BY_KEY_PREFIX:
+    if alert.key.startswith(prefix) and len(prefix) > best:
+      base, best = lane, len(prefix)
+  return escalate_lane(alert.key, base, active_min)
+
+
+def notify(alert: Alert, resolved: bool = False, active_min: float = 0.0) -> bool:
+  """Publish one alert through the lane router. Never raises.
+
+  Was a direct `POST <topic-url>` against `NAS_ALERT_WEBHOOK`. It now goes
+  through `scripts/notify.py` so this file holds no topic name, no credential
+  and no priority mapping -- and so a recovery lands in nas-infra at priority 2
+  instead of shouting as loudly as the failure did (ADR-0033).
+
+  Cooldown is deliberately NOT used here: this file already has its own dedupe
+  (`active` in the state file, plus `--repeat-min` and per-alert `repeat_min`),
+  and stacking a second suppression window on top of it would make "why did I
+  not get told" un-debuggable.
+  """
   if resolved:
-    tags = "white_check_mark"
-  else:
-    tags = {"critical": "rotating_light,skull", "warning": "warning"}.get(alert.severity, "information_source")
-  req = urllib.request.Request(
-    webhook,
-    data=alert.message.encode("utf-8"),
-    method="POST",
-    headers={"Title": title, "Priority": priority, "Tags": tags, **_auth_header()},
-  )
-  try:
-    urllib.request.urlopen(req, timeout=15).close()  # noqa: S310 - operator-supplied URL
-  except (OSError, ValueError) as exc:
-    print(f"WARNING: alert POST failed: {exc}", file=sys.stderr)
-    return False
-  return True
+    return bool(notifier.resolved(alert.key, alert.message).sent)
+  lane = lane_for(alert, active_min)
+  priority = SEVERITY_PRIORITY.get(alert.severity)
+  # Only override the lane's own priority when the severity is *worse* than the
+  # lane's default. A `notice` in nas-critical must still be priority 5.
+  lane_default = notifier.LANES[notifier.Lane(lane)].priority
+  if priority is None or priority < lane_default:
+    priority = None
+  return bool(notifier.notify(lane, alert.key, alert.message, priority=priority).sent)
 
 
 def load_state(path: Path | None) -> dict:
@@ -1161,14 +1269,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
-  webhook = os.getenv("NAS_ALERT_WEBHOOK") or os.getenv("SLSKD_ALERT_WEBHOOK") or ""
 
   if args.self_test:
     probe = Alert("watchdog:self-test", "info", "stack_watchdog self-test — delivery is working.")
-    if not webhook:
-      print("ERROR: no NAS_ALERT_WEBHOOK / SLSKD_ALERT_WEBHOOK set", file=sys.stderr)
+    if not os.getenv("NTFY_TOKEN_SCRIPTS"):
+      print("ERROR: no NTFY_TOKEN_SCRIPTS set", file=sys.stderr)
       return 2
-    ok = notify(webhook, probe)
+    ok = notify(probe)
     print("self-test notification sent" if ok else "self-test notification FAILED")
     return 0 if ok else 2
 
@@ -1214,22 +1321,33 @@ def main(argv: list[str] | None = None) -> int:
   still: dict[str, dict] = {}
 
   for alert in alerts:
-    print(f"[{alert.severity.upper()}] {alert.key}: {alert.message}")
     prior = active.get(alert.key)
     last = prior.get("last_notified", 0) if prior else 0
+    first_seen = (prior or {}).get("first_seen", now)
+    active_min = (now - first_seen) / 60.0
+    lane = lane_for(alert, active_min)
+    print(f"[{alert.severity.upper()}] {alert.key} -> nas-{lane}: {alert.message}")
     repeat_min = alert.repeat_min if alert.repeat_min is not None else args.repeat_min
     due = (now - last) / 60.0 >= repeat_min
-    if webhook and not args.dry_run and (prior is None or due):
-      last = now if notify(webhook, alert) else last
-    still[alert.key] = {"first_seen": (prior or {}).get("first_seen", now), "last_notified": last}
+    # INVARIANT: an ESCALATION must not wait for --repeat-min. A container that
+    # starts unhealthy lands in nas-infra; fifteen minutes later it belongs in
+    # nas-attention and, if it is user-visible, five minutes in it belongs in
+    # nas-critical. Without this clause the escalation would be recorded in the
+    # state file and never actually sent, because `due` is False for another
+    # 45 minutes -- the alert would sit in the quietest lane for the whole
+    # outage. ADR-0033.
+    escalated = prior is not None and prior.get("lane") not in (None, lane)
+    if not args.dry_run and (prior is None or due or escalated):
+      last = now if notify(alert, active_min=active_min) else last
+    still[alert.key] = {"first_seen": first_seen, "last_notified": last, "lane": lane}
 
   for key, meta in active.items():
     if key in still or key.startswith("kernel:oom:"):
       continue
     down_min = (now - meta.get("first_seen", now)) / 60.0
     print(f"[RESOLVED] {key} (was active {down_min:.0f} min)")
-    if webhook and not args.dry_run:
-      notify(webhook, Alert(key, "info", f"cleared after {down_min:.0f} min"), resolved=True)
+    if not args.dry_run:
+      notify(Alert(key, "info", f"cleared after {down_min:.0f} min"), resolved=True)
 
   # INVARIANT: --dry-run must not touch the state file. It used to, and that is
   # how a recovery gets lost: an ad-hoc run loads `active`, sees the problem is

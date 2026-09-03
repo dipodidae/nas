@@ -15,10 +15,16 @@ its own stale session, then cold-start.
 
 So the container healthcheck is deliberately liveness-only (web UI spider) and
 autoheal never restarts slskd for a login drop. This script is the separate,
-*alert-only* path: it polls slskd's login state and reports (and optionally
-pushes a webhook) when slskd has been logged out longer than a grace period —
-so a dropped login announces itself instead of being discovered after a batch
-of dead searches. It NEVER restarts or stops slskd.
+*alert-only* path: it polls slskd's login state and reports — and pushes to
+`nas-attention` — when slskd has been logged out longer than a grace period, so
+a dropped login announces itself instead of being discovered after a batch of
+dead searches. It NEVER restarts or stops slskd.
+
+`nas-attention`, not `nas-critical`, and the distinction is the whole point of
+ADR-0009: the cure is to leave slskd DOWN for 15-30 minutes, which is a thing a
+human does when they get to it. Waking someone at 03:00 for it would buy
+nothing except the temptation to "just restart it", which is the one action
+that guarantees it never recovers. ADR-0033.
 
 State is tracked across runs in a small JSON file so the script can tell
 "logged out for 2 minutes (probably a normal reconnect)" from "logged out for
@@ -36,8 +42,8 @@ Environment
 -----------
   API_KEY_SLSKD          (required) slskd administrator API key
   SLSKD_HOST             (default: http://localhost:5030)
-  SLSKD_ALERT_WEBHOOK    (optional) URL to POST a plain-text alert to
-                         (e.g. an ntfy topic: https://ntfy.sh/my-slskd)
+  NTFY_TOKEN_SCRIPTS     (optional) ntfy token for the alert push. Unset =
+                         print only; the router says so rather than failing.
 
 Usage
 -----
@@ -57,6 +63,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import notify as notifier
 import slskd_state
 
 if "API_KEY_SLSKD" not in os.environ:
@@ -118,15 +125,6 @@ def save_since(state_path: Path | None, since: float | None) -> None:
     print(f"WARNING: could not write state file {state_path}: {exc}", file=sys.stderr)
 
 
-def post_webhook(url: str, message: str) -> None:
-  """Best-effort plain-text webhook POST (e.g. ntfy). Never raises."""
-  try:
-    req = urllib.request.Request(url, data=message.encode("utf-8"), method="POST")
-    urllib.request.urlopen(req, timeout=10).close()  # noqa: S310 - user-provided
-  except (OSError, ValueError) as exc:
-    print(f"WARNING: webhook POST to {url} failed: {exc}", file=sys.stderr)
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
     description="Alert (never restart) when slskd is logged out of Soulseek."
@@ -179,6 +177,17 @@ def main(argv: list[str] | None = None) -> int:
   if state.logged_in:
     save_since(args.state, None)
     print(f"OK: slskd logged in (state={state.raw_state})")
+    # Closes the alert, once, if one was open. A `transition` that can only be
+    # opened is worse than none: the phone shows an outage that ended hours ago
+    # and you learn to distrust the whole feed.
+    notifier.transition(
+      "slskd:logged-out",
+      active=False,
+      lane=notifier.Lane.ATTENTION,
+      title="slskd:logged-out",
+      message="",
+      resolved_message="slskd is logged back in to Soulseek",
+    )
     return 0
 
   # Logged out — figure out for how long.
@@ -203,9 +212,22 @@ def main(argv: list[str] | None = None) -> int:
     f"restart (it re-collides with the ghost session)."
   )
   print(f"ALERT: {message}", file=sys.stderr)
-  webhook = os.environ.get("SLSKD_ALERT_WEBHOOK")
-  if webhook:
-    post_webhook(webhook, message)
+  # transition(), not notify(): this runs every 15 minutes and the condition
+  # persists for the 15-30 minutes the cure itself takes. Pushing on every tick
+  # would page four to eight times for one incident, and the recovery -- which
+  # is the part you actually want to see, because it means the ghost session was
+  # reaped -- would be indistinguishable from the noise. The fingerprint is
+  # deliberately coarse (whole hours out), so "still out" is silent but "out
+  # much longer than you thought" is not.
+  notifier.transition(
+    "slskd:logged-out",
+    active=True,
+    lane=notifier.Lane.ATTENTION,
+    title="slskd:logged-out",
+    message=message,
+    fingerprint=f"{out_minutes // 60:.0f}h",
+    resolved_message="slskd is logged back in to Soulseek",
+  )
   return 1
 
 

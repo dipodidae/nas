@@ -190,46 +190,71 @@ install-hooks: ## Install the pre-commit hook that runs `make check`
 	chmod +x "$$hook"; \
 	echo "installed $$hook"
 
+# `VERIFY_NOTIFY=1` makes this target PUSH its findings, and the 06:15 cron line
+# sets it. An interactive run stays silent on purpose: this target is also how
+# you check your own work, and a hand-run must not page anyone.
+#
+# Two lanes, because the findings are two different kinds of thing. A runtime
+# invariant that has been LOST -- a service with no container, qbittorrent
+# without CAP_KILL, a second container holding the Docker socket, /downloads on
+# two devices -- is nas-critical: each of those is an ADR whose incident already
+# happened once. Everything else here is drift and goes to nas-infra, where the
+# daily digest reads it. ADR-0033.
+VERIFY_NOTIFY ?= 0
+
 verify-runtime: ## Assert the RUNNING containers match the invariants (not just the config)
-	@rc=0; \
+	@rc=0; crit=0; msg=""; \
+	note() { msg="$$msg$$1"$$'\n'; }; \
 	echo "==> every compose service has a container (ADR-0006)"; \
 	for s in $$(docker compose config --services); do \
-	  docker inspect "$$s" >/dev/null 2>&1 || { echo "    !!! $$s: NO CONTAINER"; rc=1; }; \
+	  docker inspect "$$s" >/dev/null 2>&1 || { echo "    !!! $$s: NO CONTAINER"; rc=1; crit=1; \
+	    note "$$s has NO CONTAINER (ADR-0006)"; }; \
 	done; [ $$rc -eq 0 ] && echo "    all present"; \
 	echo "==> no stray compose.override.yaml"; \
 	if [ -e compose.override.yaml ] || [ -e compose.override.yml ]; then \
 	  echo "    !!! compose.override.yaml present. It is gitignored AND auto-loaded,"; \
 	  echo "        so git status will not show it and every compose command is affected."; \
-	  rc=1; \
+	  rc=1; note "stray compose.override.yaml present"; \
 	else echo "    none"; fi; \
 	echo "==> qbittorrent holds CAP_KILL at runtime (ADR-0004)"; \
 	docker exec qbittorrent sh -c 'grep -E "^Cap(Prm|Eff|Bnd)" /proc/1/status' \
 	  | gawk '{ v=strtonum("0x" $$2); if (!and(v, 32)) { printf "    !!! %s lacks KILL\n", $$1; bad=1 } } \
 	          END { if (bad) { print "        every stop becomes a 120s SIGKILL"; exit 1 } \
-	                print "    ok: KILL in Prm/Eff/Bnd" }' || rc=1; \
+	                print "    ok: KILL in Prm/Eff/Bnd" }' \
+	  || { rc=1; crit=1; note "qbittorrent lost CAP_KILL (ADR-0004)"; }; \
 	echo "==> swag nginx can signal its own workers (ADR-0021)"; \
 	docker exec swag sh -c 'for p in /proc/[0-9]*; do \
 	    case "$$(tr -d "\0" < $$p/cmdline 2>/dev/null)" in "nginx: worker process") \
 	      kill -0 $$(basename $$p) 2>/dev/null && echo "    ok: worker signalable" \
 	        || { echo "    !!! EPERM signalling nginx worker -- reload and graceful stop are broken"; exit 1; }; \
-	      break;; esac; done' || rc=1; \
+	      break;; esac; done' \
+	  || { rc=1; crit=1; note "swag nginx cannot signal its workers (ADR-0021)"; }; \
 	echo "==> nothing but dockerproxy has the Docker socket (ADR-0013)"; \
 	bad=$$(docker ps -q | xargs -r docker inspect \
 	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
 	  | grep docker.sock | grep -v '^/dockerproxy ' || true); \
-	  if [ -z "$$bad" ]; then echo "    ok: dockerproxy only"; else echo "    !!! $$bad"; rc=1; fi; \
+	  if [ -z "$$bad" ]; then echo "    ok: dockerproxy only"; else echo "    !!! $$bad"; rc=1; crit=1; \
+	    note "Docker socket mounted outside dockerproxy: $$bad (ADR-0013)"; fi; \
 	echo "==> qui and qbittorrent see /downloads on the SAME filesystem (ADR-0027)"; \
 	a=$$(docker exec qui stat -c '%d' /downloads 2>/dev/null); \
 	b=$$(docker exec qbittorrent stat -c '%d' /downloads 2>/dev/null); \
 	if [ -n "$$a" ] && [ "$$a" = "$$b" ]; then echo "    ok: device $$a on both"; \
 	else echo "    !!! qui=$$a qbittorrent=$$b -- hardlinks cannot cross a mount point,"; \
-	     echo "        so cross-seed would silently COPY instead (0.96 TiB, ADR-0002)"; rc=1; fi; \
+	     echo "        so cross-seed would silently COPY instead (0.96 TiB, ADR-0002)"; rc=1; crit=1; \
+	     note "qui and qbittorrent see /downloads on different devices (ADR-0027)"; fi; \
 	echo "==> scrutiny's collector has reported within 24h (ADR-0023)"; \
-	scripts/check-smart-freshness.py || rc=1; \
+	scripts/check-smart-freshness.py || { rc=1; note "scrutiny has not reported SMART in 24h (ADR-0023)"; }; \
 	echo "==> unhealthy or exited containers"; \
 	u=$$(docker compose ps -a --format '{{.Name}}\t{{.Status}}' \
 	     | grep -iE 'unhealthy|exited|restarting' || true); \
-	  if [ -z "$$u" ]; then echo "    none"; else echo "$$u" | sed 's/^/    !!! /'; rc=1; fi; \
+	  if [ -z "$$u" ]; then echo "    none"; else echo "$$u" | sed 's/^/    !!! /'; rc=1; \
+	    note "unhealthy/exited: $$(echo "$$u" | tr '\n' ';')"; fi; \
+	if [ "$(VERIFY_NOTIFY)" = "1" ] && [ $$rc -ne 0 ]; then \
+	  if [ $$crit -ne 0 ]; then lane=critical; title="verify-runtime: a runtime invariant is LOST"; \
+	  else lane=infra; title="verify-runtime: drift"; fi; \
+	  .venv/bin/python -m scripts.notify --lane "$$lane" --title "$$title" \
+	    --message "$$msg" --dedup-key "verify-runtime:$$lane" || true; \
+	fi; \
 	exit $$rc
 
 backup-offsite: ## Push the newest local config backup off this box (restic)

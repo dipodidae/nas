@@ -114,3 +114,106 @@ def test_a_long_running_job_is_not_reported_stale_end_to_end(monkeypatch, tmp_pa
 
     assert seen, "the heartbeat never wrote"
     assert all(keys == [] for keys in seen), f"paged while running: {seen}"
+
+
+# --- which lane a failure goes to (ADR-0033) ---
+
+
+def test_a_single_failure_is_quiet_and_a_repeat_is_not():
+    """Most single failures self-heal on the next tick; two in a row do not."""
+    assert cj.failure_lane(None, 1) == "infra"
+    assert cj.failure_lane(None, 2) == "attention"
+    assert cj.failure_lane(None, 17) == "attention"
+
+
+def test_fail_lane_pins_the_lane_and_skips_the_ladder():
+    """config-backup's FIRST failure is the incident: a backup failure is only
+    ever discovered when you need the backup."""
+    for n in (1, 2, 99):
+        assert cj.failure_lane("critical", n) == "critical"
+
+
+def test_the_ladder_never_produces_a_lane_the_router_does_not_have():
+    lanes = {lane.value for lane in cj.notifier.Lane}
+    assert {cj.FIRST_FAILURE_LANE, cj.REPEAT_FAILURE_LANE} <= lanes
+
+
+def _run_failing(monkeypatch, name, extra=()):
+    """Run the wrapper over a command that exits 2, capturing the publishes.
+
+    The caller redirects STATE_DIR: two runs of the same job must share one
+    state file, which is the whole point of the ladder.
+    """
+    sent: list[tuple[str, str]] = []
+
+    class _R:
+        sent = True
+
+    monkeypatch.setattr(
+        cj.notifier, "notify",
+        lambda lane, title, message, **kw: (  # noqa: ARG005
+            sent.append((lane, title)), _R())[1],
+    )
+    monkeypatch.setattr(cj.notifier, "resolved", lambda *a, **k: _R())  # noqa: ARG005
+    argv = ["--name", name, "--max-age-min", "30", "--alert-repeat-min", "0",
+            *extra, "--", "python3", "-c", "import sys; sys.exit(2)"]
+    code = cj.main(argv)
+    return code, sent
+
+
+def test_the_first_failure_lands_in_infra_and_the_second_in_attention(monkeypatch, tmp_path):
+    _redirect_state(monkeypatch, tmp_path)
+    code, sent = _run_failing(monkeypatch, "laddertest")
+    assert code == 2
+    assert [lane for lane, _t in sent] == ["infra"]
+    _code2, sent2 = _run_failing(monkeypatch, "laddertest")
+    assert [lane for lane, _t in sent2] == ["attention"]
+
+
+def test_fail_lane_critical_reaches_critical_on_the_very_first_run(monkeypatch, tmp_path):
+    _redirect_state(monkeypatch, tmp_path)
+    _code, sent = _run_failing(monkeypatch, "backuptest", extra=("--fail-lane", "critical"))
+    assert [lane for lane, _t in sent] == ["critical"]
+
+
+def test_an_escalation_is_not_held_back_by_the_repeat_window(monkeypatch, tmp_path):
+    """A first failure in nas-infra must be able to become nas-attention even
+    inside --alert-repeat-min, or the escalation is recorded and never sent."""
+    _redirect_state(monkeypatch, tmp_path)
+    sent: list[str] = []
+
+    class _R:
+        sent = True
+
+    monkeypatch.setattr(
+        cj.notifier, "notify",
+        lambda lane, title, message, **kw: (sent.append(lane), _R())[1],  # noqa: ARG005
+    )
+    argv = ["--name", "esc", "--max-age-min", "30", "--alert-repeat-min", "600",
+            "--", "python3", "-c", "import sys; sys.exit(2)"]
+    cj.main(argv)
+    cj.main(argv)
+    assert sent == ["infra", "attention"], (
+        "the second failure must escalate now, not in 10 hours"
+    )
+    cj.main(argv)
+    assert sent == ["infra", "attention"], "and then it must go quiet again"
+
+
+def test_a_success_clears_the_consecutive_failure_count(monkeypatch, tmp_path):
+    _redirect_state(monkeypatch, tmp_path)
+
+    class _R:
+        sent = True
+
+    monkeypatch.setattr(cj.notifier, "notify", lambda *a, **k: _R())  # noqa: ARG005
+    monkeypatch.setattr(cj.notifier, "resolved", lambda *a, **k: _R())  # noqa: ARG005
+    fail = ["--name", "clr", "--max-age-min", "30", "--alert-repeat-min", "0",
+            "--", "python3", "-c", "import sys; sys.exit(2)"]
+    cj.main(fail)
+    cj.main(fail)
+    assert cj.load_state("clr")["consecutive_failures"] == 2
+    cj.main(["--name", "clr", "--max-age-min", "30", "--", "python3", "-c", ""])
+    state = cj.load_state("clr")
+    assert "consecutive_failures" not in state
+    assert "last_failure_lane" not in state
