@@ -45,6 +45,46 @@ export async function systemStatus(): Promise<{ version: string, appName: string
   return call('/api/v1/system/status')
 }
 
+export async function rootFolders(): Promise<LidarrProfilesResponse['rootFolders']> {
+  return call('/api/v1/rootfolder')
+}
+
+/**
+ * Reconcile a configured root folder against the ones Lidarr actually has.
+ *
+ * Lidarr's root moved `/music` -> `/data/music` on 2026-09-02 (ADR-0003) and
+ * every add from this app then failed with a 400,
+ * `Root folder '/music' does not exist` — the stored settings.json still held
+ * the old path. A hardcoded default only moves that problem to the next
+ * repath, so the configured value is checked against Lidarr's live roots and
+ * the real one is used when it does not match.
+ *
+ * Deliberately falls back to `configured` on any failure: an unreachable
+ * Lidarr must not silently redirect an add to a different root, and leaving
+ * the value alone reproduces the previous behaviour exactly.
+ */
+export async function resolveRootFolderPath(configured: string): Promise<string> {
+  let roots: LidarrProfilesResponse['rootFolders']
+  try {
+    roots = await rootFolders()
+  }
+  catch {
+    return configured
+  }
+  if (!Array.isArray(roots) || roots.length === 0)
+    return configured
+  if (roots.some(r => r.path === configured))
+    return configured
+
+  const fallback = roots[0].path
+  console.warn(
+    `[lidarr-bulk] configured root folder ${configured} is not one of Lidarr's `
+    + `(${roots.map(r => r.path).join(', ')}); using ${fallback}. `
+    + `Update it in Settings to silence this.`,
+  )
+  return fallback
+}
+
 export async function getProfiles(): Promise<LidarrProfilesResponse> {
   const [rootFolders, qualityProfiles, metadataProfiles] = await Promise.all([
     call<LidarrProfilesResponse['rootFolders']>('/api/v1/rootfolder'),

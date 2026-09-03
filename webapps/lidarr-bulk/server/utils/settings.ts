@@ -3,8 +3,13 @@ import { dirname, join } from 'node:path'
 import type { AppSettings } from '~~/shared/types'
 import { loadEnv } from './env'
 
+// Lidarr's root folder is `/data/music`, not `/music`, since the 2026-09-02
+// repath (ADR-0003). A stale value here is not a cosmetic default: Lidarr
+// rejects the add outright with `Root folder '/music' does not exist`.
+// resolveRootFolderPath() in server/utils/lidarr.ts reconciles this against
+// Lidarr's live roots so the app self-heals if the root moves again.
 const DEFAULTS: AppSettings = {
-  rootFolderPath: '/music',
+  rootFolderPath: '/data/music',
   qualityProfileId: 1,
   metadataProfileId: 1,
   monitorMode: 'all',

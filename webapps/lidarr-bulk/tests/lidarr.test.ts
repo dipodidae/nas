@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Candidate, LidarrAlbumCandidate } from '~~/shared/types'
-import { addAlbum, addArtist, monitorAlbums, nudgeExisting, waitForArtistRefresh } from '../server/utils/lidarr'
+import { addAlbum, addArtist, monitorAlbums, nudgeExisting, resolveRootFolderPath, waitForArtistRefresh } from '../server/utils/lidarr'
 
 const opts = {
-  rootFolderPath: '/music',
+  rootFolderPath: '/data/music',
   qualityProfileId: 1,
   metadataProfileId: 1,
   monitorMode: 'all' as const,
@@ -410,5 +410,45 @@ describe('addArtist enforceMonitor', () => {
     vi.stubGlobal('fetch', fetchMock)
     await addArtist({ foreignArtistId: 'fid-2', artistName: 'F' } as never, { ...opts, monitorMode: 'future' as const })
     expect(calls).not.toContain('PUT /api/v1/album/monitor')
+  })
+})
+
+describe('resolveRootFolderPath', () => {
+  beforeEach(() => {
+    process.env.LIDARR_URL = 'http://lidarr.test'
+    process.env.LIDARR_API_KEY = 'test-key'
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function stubRoots(paths: string[]) {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify(paths.map((path, i) => ({ id: i + 1, path, accessible: true }))),
+      { status: 200 },
+    )))
+  }
+
+  it('keeps a configured root that Lidarr actually has', async () => {
+    stubRoots(['/data/music'])
+    expect(await resolveRootFolderPath('/data/music')).toBe('/data/music')
+  })
+
+  it("substitutes Lidarr's real root when the configured one is stale", async () => {
+    // The ADR-0003 repath: settings.json still says /music, Lidarr says
+    // /data/music, and an add with the stale value is a hard 400.
+    stubRoots(['/data/music'])
+    expect(await resolveRootFolderPath('/music')).toBe('/data/music')
+  })
+
+  it('leaves the configured root alone when Lidarr is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
+    expect(await resolveRootFolderPath('/music')).toBe('/music')
+  })
+
+  it('leaves the configured root alone when Lidarr reports none', async () => {
+    stubRoots([])
+    expect(await resolveRootFolderPath('/music')).toBe('/music')
   })
 })

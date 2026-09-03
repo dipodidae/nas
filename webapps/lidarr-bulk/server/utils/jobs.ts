@@ -23,6 +23,7 @@ import {
   lookupArtist,
   monitorAlbums,
   nudgeExisting,
+  resolveRootFolderPath,
   waitForArtistRefresh,
 } from './lidarr'
 import { albumQueryVariations, hasPlausibleArtist, isVariousArtists, normKeyLoose, pickAutoMatch, rankCandidates } from './matching'
@@ -740,7 +741,9 @@ async function addToLidarr(
   monitorMode: 'all' | 'future',
 ): Promise<{ albumId?: number, artistId?: number }> {
   const opts = {
-    rootFolderPath: settings.rootFolderPath,
+    // Reconciled against Lidarr's live roots, not trusted from settings.json:
+    // a stale value there is a hard 400 from Lidarr. See ADR-0003.
+    rootFolderPath: await resolveRootFolderPath(settings.rootFolderPath),
     qualityProfileId: settings.qualityProfileId,
     metadataProfileId: settings.metadataProfileId,
     monitorMode,

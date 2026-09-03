@@ -37,6 +37,9 @@ vi.mock('../server/utils/lidarr', () => ({
   commandSearchArtist: vi.fn(async () => undefined),
   monitorAlbums: vi.fn(async () => undefined),
   nudgeExisting: vi.fn(async () => 'nudged'),
+  // Identity here: these tests are about add scheduling, not root-folder
+  // reconciliation, which tests/lidarr.test.ts covers directly.
+  resolveRootFolderPath: vi.fn(async (p: string) => p),
   waitForArtistRefresh: vi.fn(async () => ({ timedOut: false })),
   lookupArtist: vi.fn(async () => []),
   // The job now pre-checks Lidarr's existing library; an empty one keeps these
@@ -52,7 +55,7 @@ vi.mock('../server/utils/lidarr', () => ({
 }))
 vi.mock('../server/utils/settings', () => ({
   loadSettings: async () => ({
-    rootFolderPath: '/music',
+    rootFolderPath: '/data/music',
     qualityProfileId: 1,
     metadataProfileId: 1,
     monitorMode: 'all' as const,
