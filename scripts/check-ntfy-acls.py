@@ -52,8 +52,21 @@ EXPECTED: dict[str, tuple[str, frozenset[str] | str]] = {
   "nas-phone": ("read-only", "nas-*"),
 }
 
+# The retired topics, and the accounts that must be explicitly DENIED them.
+# An explicit per-topic deny beats the `nas-*` wildcard in ntfy (measured), and
+# without it `nas-scripts` could still publish to nas-alerts -- the retirement
+# would be a convention rather than a closure. `nas-phone` deliberately keeps
+# READ on nas-alerts so the farewell message stays legible until the phone has
+# been reconfigured and unsubscribed.
+RETIRED_TOPICS = ("nas-alerts", "nas-cleanuparr")
+MUST_BE_DENIED = ("nas-scripts",)
+
 USER_LINE = re.compile(r"^user (\S+) \(role: (\S+?),")
-GRANT_LINE = re.compile(r"^- (read-write|read-only|write-only|denied) access to topic (\S+)")
+# ntfy prints a deny as "no access to topic X", not "denied access to topic X".
+# Parsing it matters: a deny is how the RETIRED topics are closed against the
+# `nas-*` wildcard, and a check that cannot see one cannot assert the closure.
+GRANT_LINE = re.compile(r"^- (read-write|read-only|write-only|no) access to topic (\S+)")
+DENIED = "no"
 
 
 def read_access() -> str | None:
@@ -99,7 +112,9 @@ def check(parsed: dict[str, dict[str, str]]) -> list[str]:
         findings.append(
           f"{user}: expected {mode} on {topics!r}, found {actual or 'no grant'}"
         )
-      extra = sorted(set(grants) - {topics})
+      # A per-topic DENY only ever narrows a wildcard, so it is never an
+      # "unexpected extra grant".
+      extra = sorted(t for t in set(grants) - {topics} if grants[t] != DENIED)
       if extra:
         findings.append(f"{user}: unexpected extra grant(s) {extra}")
       continue
@@ -109,12 +124,24 @@ def check(parsed: dict[str, dict[str, str]]) -> list[str]:
         f"{user}: expected {mode} on {wrong_mode}, found "
         f"{ {t: grants.get(t, 'none') for t in wrong_mode} }"
       )
-    extra = sorted(set(grants) - set(topics))
+    extra = sorted(t for t in set(grants) - set(topics) if grants[t] != DENIED)
     if extra:
       findings.append(
         f"{user}: has {extra} beyond its three lanes. This token lives in *arr "
         f"SQLite; widening it is how a compromised *arr reaches nas-critical."
       )
+
+  # The retirement, asserted rather than assumed.
+  for user in MUST_BE_DENIED:
+    grants = parsed.get(user) or {}
+    findings.extend(
+      f"{user}: {topic} is retired but not explicitly denied "
+      f"(found {grants.get(topic) or 'nothing'}). Its `nas-*` wildcard matches "
+      f"the retired topic, so without the deny the retirement is a convention "
+      f"rather than a closure."
+      for topic in RETIRED_TOPICS
+      if grants.get(topic) != DENIED
+    )
   return findings
 
 
