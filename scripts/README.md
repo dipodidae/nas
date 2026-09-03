@@ -863,6 +863,104 @@ python scripts/heartbeat.py
 
 Exit codes: `0` pinged alive; `1` a reported condition — no URL configured yet, or the local check failed and `/fail` was pinged; `2` the ping could not be delivered. Environment: `NAS_HEARTBEAT_URL`. Cron: `*/10`, wrapped. Until the URL is set, `stack_watchdog.py` raises a standing `heartbeat:unconfigured` warning so it cannot be quietly forgotten.
 
+### `notify.py`
+
+**The one place anything on this host publishes a notification.** Six lanes, all prefixed `nas-`: `critical` (prio 5), `attention` (4), `media` (3), `requests` (4), `infra` (2), `updates` (1). Callers name a **lane**, never a topic — the topic comes from `NTFY_TOPIC_<LANE>` with a `nas-<lane>` default, so the mapping is configurable in one place and `make check` can assert that no other file contains a topic string.
+
+**Severity is carried by the priority; audience by the topic.** Never encode severity in a topic name: a phone can mute a topic but cannot un-mute half of one, so `nas-errors`/`nas-warnings` just becomes two muted topics.
+
+Three properties are structural rather than conventional, and each is asserted by `make check`:
+
+- **`nas-critical` is never delayed and never cooldown-suppressed.** `cooldown_seconds()` pins it to zero and `build_message()` strips `X-Delay` for it, whatever the caller or the clock asks. There is no cooldown value that is correct for the one lane where a swallowed message is the failure mode itself.
+- **A failure to notify never crashes the caller.** Every path returns a `Result`; nothing raises. A dead server, a 403, a corrupt state file and an unwritable state file are all covered by tests. A 403 is _not_ retried — an ACL rejection is a config bug and retrying doubles the log noise.
+- **`transition()` publishes on the edge, not the poll.** 288 polls of one active condition produce exactly one message; the clear produces exactly one `nas-infra` message at priority 2 tagged `white_check_mark`.
+
+Publishes over **loopback** (`NTFY_URL`, default `http://127.0.0.1:8410`) so message contents never leave the box. Containers cannot use that address — they use `http://ntfy:8410`, because ntfy runs as `${PUID}:${PGID}` and a non-root process cannot bind `:80`.
+
+**One trap worth knowing:** `http.client` encodes header values as **latin-1**, so an `X-Title` with an em dash or an emoji raises `UnicodeEncodeError` and the message is silently never sent. `_wire_headers()` re-encodes at the wire boundary, byte-identically to what `curl` sends. Every emoji title in this stack's vocabulary was affected before that fix.
+
+```bash
+python -m scripts.notify --print-lanes
+python -m scripts.notify --lane infra --title "Something" --message "..." --markdown
+python -m scripts.notify --lane media --title "📺 Show S01E01" --message "..." --tags tv
+```
+
+Exit codes: `0` published or deliberately suppressed by a cooldown; `1` not published (no token, or the POST failed — non-fatal by design); `2` bad usage. Environment: `NTFY_URL`, `NTFY_TOKEN_SCRIPTS`, `NTFY_TOPIC_<LANE>`, `NTFY_QUIET_HOURS`. → [ADR-0033](../docs/decisions/0033-ntfy-topic-taxonomy.md)
+
+### `notify_digest.py`
+
+**One markdown message a day, replacing everything the six-lane split stopped sending.** The split works by _not_ pushing successful cron runs, `*/5` sweeps that changed nothing, or enforcer runs with no drift — but "not sent" and "not happening" look identical from a phone, and an alerting system you cannot distinguish from a broken one is not trustworthy.
+
+Reports **state, not events**, so a digest that arrives late is still correct: containers up/unhealthy/**absent**, disk usage and free space plus ext4's own superblock error counter, OOM kills in 24 h, cron failures and overdue jobs, the last good config backup, imports and download failures per \*arr, slskd login state, diun state freshness — and **the count of notifications the cooldowns swallowed**. That last number is what keeps the windows honest: zero every day means they are too short to matter, a huge number means something is flapping.
+
+A section that cannot collect renders a **visible gap** and exits `1`, rather than an empty digest that reads as good news.
+
+Two things it gets right that are easy to get wrong: Sonarr's import event is `downloadFolderImported` (`episodeFileImported` does not exist and counts zero forever), and the counts come from `/history/since?date=` — the paged `/history` cannot answer "how many in 24 h", because 200 rows of Sonarr history here reached back only a few hours.
+
+```bash
+python scripts/notify_digest.py --dry-run   # print the markdown, publish nothing
+python scripts/notify_digest.py
+```
+
+Exit codes: `0` built and published; `1` built with a gap, or the publish did not land; `2` fatal (no docker). Cron: `0 9 * * *`, wrapped.
+
+### `notify_test.py`
+
+Fires one representative message per lane, then **reads every one back out of ntfy's cache with the read-only `nas-phone` token** — the phone's own credential. A `200` is not delivery, and this repo has been bitten three times by a call that returned success and did nothing. The read-back proves the publish landed, that the message is in the topic a subscriber reads, and that the phone can see it.
+
+`nas-critical` is deliberately included: it is the lane whose delivery matters most. Every message says it is a test in its own title, so a phone that buzzes is not misleading. Quiet hours are bypassed, because the target is run _by_ a human watching their phone.
+
+```bash
+make notify-test                                 # all six
+python scripts/notify_test.py --lanes critical,media
+```
+
+### `check-ntfy-acls.py`
+
+Asserts the ntfy grant **shape** still matches ADR-0033: `nas-scripts` write-only on `nas-*`, `nas-arr` write-only on exactly its three lanes, `nas-phone` read-only on `nas-*`. The safety property of the whole taxonomy is that the token stored in three \*arr SQLite databases **cannot publish to `nas-critical`**, and that rests on one `ntfy access` grant.
+
+Parses `ntfy access` rather than probing with a publish — probing would put a message in every lane on every run, the monitor becoming the noise. `make notify-test` is the empirical version, on demand.
+
+```bash
+scripts/check-ntfy-acls.py            # assert (called by make verify-runtime)
+make notify-acl                       # print the grants and token labels, redacted
+```
+
+### `configure_arr_notifications.py` / `configure_service_notifications.py`
+
+Declare the desired notification-connector state for the \*arr suite and for jellyseerr + cleanuparr, and converge it idempotently. `--check` reports differences (this is what `make verify-runtime` calls); `--apply` writes them.
+
+They exist because these settings live in each app's own SQLite, where nothing in git can see them and a UI toggle can change them at any time. **This is the check that catches someone ticking "On Grab" back on.**
+
+Payloads are built from the **live** `GET /notification/schema`, never from remembered field names, because the four apps genuinely differ and an unsupported trigger flag in a `PUT` body is accepted and silently dropped:
+
+| App      | Native Ntfy connector → `nas-attention`                                                                     | Custom Script → `nas-media`                                 |
+| -------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| sonarr   | `onManualInteractionRequired`                                                                               | `onImportComplete`,`onUpgrade`                              |
+| radarr   | `onManualInteractionRequired`                                                                               | `onDownload`,`onUpgrade` (radarr has no `onImportComplete`) |
+| lidarr   | `onImportFailure`,`onDownloadFailure`                                                                       | none — `process_soulseek_imports.py` publishes instead      |
+| prowlarr | **none** — it supports only `onGrab`/`onHealthIssue`/`onHealthRestored`/`onApplicationUpdate`, all excluded | none                                                        |
+
+`onHealthIssue`/`onHealthRestored` stay **off** on all four; `stack_watchdog.py` owns \*arr health (ADR-0032).
+
+```bash
+python scripts/configure_arr_notifications.py --check
+python scripts/configure_arr_notifications.py --apply
+python scripts/configure_service_notifications.py --check
+```
+
+### `arr_notify.sh`
+
+POSIX `sh`, bind-mounted `:ro` at `/custom-scripts/arr_notify.sh` into sonarr, radarr and lidarr as their Custom Script connector. Builds the message a human actually reads — `📺 The Expanse S02E07 / The Seventh Man · WEBDL-1080p · 2.1G · NTb`, with a tap through to Jellyfin — instead of the native connector's bare release name. A season pack is **one** message with an episode range, not ten.
+
+**It exits `0` unconditionally.** It runs inside the \*arr import pipeline, so a non-zero exit is reported as a failed notification and invites someone to "fix" an import that was fine. A notifier must never be able to affect the thing it observes.
+
+Reads its token from `/run/ntfy-arr-token` (`0600`, bind-mounted `:ro`) — never an environment variable (ADR-0011).
+
+**The \*arr Test button cannot verify the payload variable names**: measured, it passes exactly one variable, `<app>_eventtype=Test`. So the script dumps its whole environment **once** on the first real event, marker-gated, into `/config/logs/arr_notify.log`, and every field degrades to `imported` rather than rendering blank.
+
+Tested against the real file with `sh` and a loopback ntfy — 30 tests covering all four message shapes, every excluded event type, and every failure path.
+
 ## 🧪 Testing & Linting
 
 Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.

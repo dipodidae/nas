@@ -14,13 +14,21 @@ stderr to notice.
 
 So this wraps a job and closes both halves:
 
-* **Failure is pushed.** A fatal exit sends an ntfy alert naming the job, its
-  exit code and the tail of its stderr. A job that keeps failing re-pushes at
-  `--alert-repeat-min` rather than on every run, so one broken `*/5` job is one
-  alert an hour instead of twelve.
-* **Recovery is pushed too.** When a job that was failing exits cleanly again
-  it sends `RESOLVED: cron:<name>:failed`, symmetric with the `:stale` keys
-  `stack_watchdog` already resolves. Without it every transient cron failure
+* **Failure is pushed, in the lane that failure deserves.** A fatal exit sends
+  an ntfy alert naming the job, its exit code and the tail of its stderr. A job
+  that keeps failing re-pushes at `--alert-repeat-min` rather than on every run,
+  so one broken `*/5` job is one alert an hour instead of twelve.
+
+  The *first* failure goes to `nas-infra`: most of them are transient and
+  self-heal on the next tick, and paging for those is precisely how an alert
+  feed gets muted. A **second consecutive** failure goes to `nas-attention` --
+  twice in a row is no longer a blip. Jobs whose failure is a real incident
+  regardless (`config-backup`, `offsite-backup`) pass `--fail-lane critical`
+  and skip the ladder: an unnoticed backup failure is only discovered when you
+  need the backup. ADR-0033.
+* **Recovery is pushed too**, always to `nas-infra` at priority 2. When a job
+  that was failing exits cleanly again it sends `RESOLVED: cron:<name>:failed`,
+  symmetric with the `:stale` keys `stack_watchdog` already resolves. Without it every transient cron failure
   stayed open forever, and an open alert that cannot close is indistinguishable
   from a live one.
 * **Silence is pushed too.** Each run records a state file under
@@ -58,7 +66,7 @@ Exit codes
 
 Environment
 -----------
-  NAS_ALERT_WEBHOOK / NAS_ALERT_USER / NAS_ALERT_PASSWORD   as stack_watchdog.py
+  NTFY_TOKEN_SCRIPTS / NTFY_URL / NTFY_TOPIC_<LANE>   as stack_watchdog.py
 
 Usage
 -----
@@ -67,6 +75,8 @@ Usage
   python scripts/cron_job.py --name docker-prune --max-age-min 10380 --ok-codes 0 -- \
       /usr/bin/docker image prune -f
   python scripts/cron_job.py --name album-art --max-age-min 10380 --register
+  python scripts/cron_job.py --name config-backup --max-age-min 1560 \
+      --fail-lane critical -- python scripts/config_backup.py ...
 """
 
 from __future__ import annotations
@@ -81,7 +91,7 @@ import threading
 import time
 from pathlib import Path
 
-if "NAS_ALERT_WEBHOOK" not in os.environ:
+if "NTFY_TOKEN_SCRIPTS" not in os.environ:
   try:
     from dotenv import load_dotenv  # type: ignore
 
@@ -89,11 +99,10 @@ if "NAS_ALERT_WEBHOOK" not in os.environ:
   except ImportError:
     pass
 
-# Reuse the watchdog's ntfy delivery rather than duplicating it: one place
-# builds the auth header and maps severity to priority. Imported by path
+# Publish through the same lane router everything else uses. Imported by path
 # because this file is executed as a script, not as part of a package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stack_watchdog import Alert, notify  # noqa: E402, I001
+import notify as notifier  # noqa: E402, I001
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -105,6 +114,9 @@ DEFAULT_ALERT_REPEAT_MIN = 60.0
 STDERR_TAIL_LINES = 12
 STDERR_ALERT_CHARS = 600
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+# A first failure is usually transient; a second consecutive one is not.
+FIRST_FAILURE_LANE = "infra"
+REPEAT_FAILURE_LANE = "attention"
 # How often to re-stamp `in_flight_heartbeat` while a job is still running.
 # stack_watchdog stops believing the marker after IN_FLIGHT_STALE_MIN (15min),
 # so this must be comfortably below that; 60s is 15 beats of headroom.
@@ -138,6 +150,19 @@ def parse_ok_codes(raw: str) -> set[int]:
 def tail(text: str, lines: int = STDERR_TAIL_LINES) -> str:
   kept = [ln for ln in text.splitlines() if ln.strip()][-lines:]
   return "\n".join(kept)
+
+
+def failure_lane(pinned: str | None, consecutive_failures: int) -> str:
+  """Which lane this failure belongs in. Pure, so the ladder is testable.
+
+  `--fail-lane` wins outright: for `config-backup` the first failure already
+  is the incident, because a backup failure is only ever discovered when the
+  backup is needed. Otherwise a single failure is nas-infra (most self-heal on
+  the next tick) and a second consecutive one is nas-attention.
+  """
+  if pinned:
+    return pinned
+  return FIRST_FAILURE_LANE if consecutive_failures <= 1 else REPEAT_FAILURE_LANE
 
 
 def _heartbeat_loop(name: str, state: dict, stop: threading.Event) -> None:
@@ -218,6 +243,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--fail-lane",
+    default=None,
+    metavar="LANE",
+    help=(
+      "Pin the lane a failure of THIS job publishes to, skipping the "
+      f"{FIRST_FAILURE_LANE} -> {REPEAT_FAILURE_LANE} ladder. Use "
+      "`critical` for a job whose failure is an incident on the first run "
+      "(config-backup, offsite-backup)."
+    ),
+  )
+  parser.add_argument(
     "--register",
     action="store_true",
     help="Write the state file without running anything, so a never-yet-run job is still watched.",
@@ -258,7 +294,6 @@ def main(argv: list[str] | None = None) -> int:
   state["last_exit"] = code
   state["last_duration_s"] = round(elapsed, 1)
 
-  webhook = os.getenv("NAS_ALERT_WEBHOOK") or os.getenv("SLSKD_ALERT_WEBHOOK") or ""
   key = f"cron:{args.name}:failed"
   # Was this job in a failed state before this run? `failing_since` is the
   # marker: it is set on the first failing run and only cleared by a success.
@@ -272,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
     state.pop("last_error", None)
     state.pop("failing_since", None)
     state.pop("last_failure_notified", None)
+    state.pop("last_failure_lane", None)
+    state.pop("consecutive_failures", None)
     save_state(args.name, state)
     # Close the alert. Without this every transient cron failure stays open
     # forever and the topic stops distinguishing live problems from old ones —
@@ -279,27 +316,28 @@ def main(argv: list[str] | None = None) -> int:
     if failing_since:
       msg = f"cleared after {(now - failing_since) / 60.0:.0f} min (exit {code})"
       print(f"[RESOLVED] {key}: {msg}")
-      if webhook:
-        notify(webhook, Alert(key, "info", msg), resolved=True)
+      notifier.resolved(key, msg)
     return 0
 
   state["last_error"] = tail(stderr_text)
   state.setdefault("failing_since", now)
+  state["consecutive_failures"] = int(state.get("consecutive_failures") or 0) + 1
   detail = tail(stderr_text)[-STDERR_ALERT_CHARS:] or "(no stderr)"
-  alert = Alert(key, "critical", f"exit {code} after {elapsed:.0f}s\n{detail}")
+  lane = failure_lane(args.fail_lane, state["consecutive_failures"])
+  message = f"exit {code} after {elapsed:.0f}s\n{detail}"
   # Re-push a *continuing* failure at the same slow interval the watchdog uses,
   # not on every run: a job on a */5 schedule would otherwise push 12 times an
-  # hour for one broken thing.
+  # hour for one broken thing. An ESCALATION is exempt -- the same reasoning as
+  # stack_watchdog's: a first failure that lands in nas-infra and then becomes a
+  # repeat failure must actually reach nas-attention, not wait out the window in
+  # the quiet lane.
   last_notified = float(state.get("last_failure_notified", 0) or 0)
-  if (now - last_notified) / 60.0 >= args.alert_repeat_min:
-    # The print-only path honours the same window as the push path, so what you
-    # see in the job log is what the phone would have received.
-    if webhook:
-      if notify(webhook, alert):
-        state["last_failure_notified"] = now
-    else:
-      print(f"ALERT (no webhook configured): {alert.message}", file=sys.stderr)
+  escalated = state.get("last_failure_lane") not in (None, lane)
+  if (now - last_notified) / 60.0 >= args.alert_repeat_min or escalated:
+    print(f"ALERT nas-{lane}: {key}: {message}", file=sys.stderr)
+    if notifier.notify(lane, key, message).sent:
       state["last_failure_notified"] = now
+      state["last_failure_lane"] = lane
   save_state(args.name, state)
   return code
 

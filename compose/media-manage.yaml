@@ -24,6 +24,21 @@ services:
       # silently fell back to a full copy. The legacy mounts above are kept
       # deliberately to keep this reversible. ADR-0002.
       - ${SHARE_DIRECTORY}:/data
+      # INVARIANT: the media-notification script and its token are mounted
+      # READ-ONLY, and the token is a FILE and not an environment variable --
+      # a credential in an `environment:` block leaks into `docker inspect`
+      # (ADR-0011). The token is `nas-arr`, scoped write-only to
+      # nas-media/nas-attention/nas-requests, so this mount cannot reach
+      # nas-critical even if the container is compromised. ADR-0033.
+      - ../scripts/arr_notify.sh:/custom-scripts/arr_notify.sh:ro
+      - ${CONFIG_DIRECTORY}/ntfy/arr-token:/run/ntfy-arr-token:ro
+    environment:
+      # Where the nas-media message's X-Click sends you. Reuses the existing
+      # JELLYFIN_PUBLISHED_URL rather than adding a key -- a "new episode"
+      # notification you cannot tap through to is half a notification. Not a
+      # credential, so an `environment:` entry is fine here (ADR-0011 is about
+      # secrets; the token stays in the 0600 file above).
+      - NTFY_MEDIA_CLICK=${JELLYFIN_PUBLISHED_URL}
     ports:
       - '127.0.0.1:8989:8989'
     depends_on:
@@ -53,6 +68,21 @@ services:
       # silently fell back to a full copy. The legacy mounts above are kept
       # deliberately to keep this reversible. ADR-0002.
       - ${SHARE_DIRECTORY}:/data
+      # INVARIANT: the media-notification script and its token are mounted
+      # READ-ONLY, and the token is a FILE and not an environment variable --
+      # a credential in an `environment:` block leaks into `docker inspect`
+      # (ADR-0011). The token is `nas-arr`, scoped write-only to
+      # nas-media/nas-attention/nas-requests, so this mount cannot reach
+      # nas-critical even if the container is compromised. ADR-0033.
+      - ../scripts/arr_notify.sh:/custom-scripts/arr_notify.sh:ro
+      - ${CONFIG_DIRECTORY}/ntfy/arr-token:/run/ntfy-arr-token:ro
+    environment:
+      # Where the nas-media message's X-Click sends you. Reuses the existing
+      # JELLYFIN_PUBLISHED_URL rather than adding a key -- a "new episode"
+      # notification you cannot tap through to is half a notification. Not a
+      # credential, so an `environment:` entry is fine here (ADR-0011 is about
+      # secrets; the token stays in the 0600 file above).
+      - NTFY_MEDIA_CLICK=${JELLYFIN_PUBLISHED_URL}
     ports:
       - '127.0.0.1:7878:7878'
     depends_on:
@@ -85,6 +115,21 @@ services:
       # retry via that endpoint. Keep this mount; it is ready for a safer
       # retry. ADR-0003 (background: ADR-0002).
       - ${SHARE_DIRECTORY}:/data
+      # INVARIANT: the media-notification script and its token are mounted
+      # READ-ONLY, and the token is a FILE and not an environment variable --
+      # a credential in an `environment:` block leaks into `docker inspect`
+      # (ADR-0011). The token is `nas-arr`, scoped write-only to
+      # nas-media/nas-attention/nas-requests, so this mount cannot reach
+      # nas-critical even if the container is compromised. ADR-0033.
+      - ../scripts/arr_notify.sh:/custom-scripts/arr_notify.sh:ro
+      - ${CONFIG_DIRECTORY}/ntfy/arr-token:/run/ntfy-arr-token:ro
+    environment:
+      # Where the nas-media message's X-Click sends you. Reuses the existing
+      # JELLYFIN_PUBLISHED_URL rather than adding a key -- a "new episode"
+      # notification you cannot tap through to is half a notification. Not a
+      # credential, so an `environment:` entry is fine here (ADR-0011 is about
+      # secrets; the token stays in the 0600 file above).
+      - NTFY_MEDIA_CLICK=${JELLYFIN_PUBLISHED_URL}
     ports:
       - '127.0.0.1:8686:8686'
     depends_on:

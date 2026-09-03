@@ -56,6 +56,7 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+import notify as notifier
 from lidarr_import_lib import (
     build_import_item as _lib_build_import_item,
     classify_reasons as _lib_classify_reasons,
@@ -66,6 +67,11 @@ from lidarr_import_lib import (
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# One nas-media message per ARTIST per six hours. A discography drop that
+# imports fourteen albums in one run is one thing that happened, and this box
+# does hundreds of music imports a day.
+NOTIFY_ARTIST_COOLDOWN_MIN = 360.0
 
 AUDIO_EXTENSIONS: set[str] = {
     ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wma", ".wav",
@@ -531,6 +537,52 @@ def process_folder(
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
+
+def notify_imports(summary: ImportSummary, *, log: logging.Logger, dry_run: bool) -> int:
+    """Publish one nas-media message per imported album. Returns the count sent.
+
+    Soulseek albums do NOT come through Lidarr's own import connector in this
+    stack -- Lidarr's only download client is slskd, and this script is what
+    actually moves a folder into the library. So without this, the one lane the
+    music half of the box should feed is the one lane it never touches.
+
+    The shape matches `scripts/arr_notify.sh`'s music message exactly, so an
+    album that arrives via Lidarr and an album that arrives via this script are
+    indistinguishable on the phone. That is the point: the lane is about what
+    the media IS, not which pipeline delivered it.
+
+    Cooldown is per ARTIST, not per album: a discography drop that imports
+    fourteen albums in one run is one thing that happened, and this box does
+    hundreds of music imports a day (AGENTS.md is explicit that per-track music
+    notifications would drown everything).
+    """
+    if dry_run:
+        return 0
+    sent = 0
+    for result in summary.results:
+        if result.status != "imported":
+            continue
+        artist = result.artist or "unknown artist"
+        album = result.album or "unknown album"
+        body = f"{result.tracks_imported} of {result.tracks_total} tracks · via slskd"
+        outcome = notifier.notify(
+            notifier.Lane.MEDIA,
+            f"\N{MUSICAL NOTE} {artist} — {album}",
+            body,
+            tags=(notifier.MEDIA_TAGS["music"],),
+            markdown=True,
+            dedup_key=f"media:music:{artist.lower()}",
+            cooldown=NOTIFY_ARTIST_COOLDOWN_MIN,
+        )
+        if outcome.sent:
+            sent += 1
+        elif not outcome.suppressed:
+            # Never fatal: a notifier that can fail an import is worse than no
+            # notifier at all.
+            log.warning("  nas-media publish failed for %s - %s: %s",
+                        artist, album, outcome.reason)
+    return sent
+
 
 def print_summary(summary: ImportSummary, *, log: logging.Logger) -> None:
     """Print a human-readable summary."""
@@ -1023,6 +1075,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # Print summary
     print_summary(summary, log=log)
+
+    # Publish the new music to nas-media. Soulseek albums never reach Lidarr's
+    # own import connector -- this script is what moves them into the library --
+    # so this is the only path by which the music half of the box feeds the one
+    # lane it should. ADR-0033.
+    if summary.imported and args.execute:
+        published = notify_imports(summary, log=log, dry_run=not args.execute)
+        log.info("nas-media: %d of %d imported album(s) published "
+                 "(the rest were inside an artist cooldown)",
+                 published, summary.imported)
 
     # Write report file
     if args.report:

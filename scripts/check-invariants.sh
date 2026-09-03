@@ -1162,6 +1162,222 @@ else:
     ok("no-host-namespaces", f"{len(services)} services, all isolated")
 
 # ==========================================================================
+# 25. The notification taxonomy: no topic literals, and no credential leaks
+# ==========================================================================
+# Six lanes, all prefixed `nas-`, and severity carried by the PRIORITY rather
+# than the topic name. The whole scheme only survives contact with a future
+# change if the mechanical parts are asserted, because every failure mode here
+# is silent: a bare topic literal still publishes, a wrong lane still returns
+# 200, and a token in an `environment:` block still works. ADR-0033.
+
+import glob as _glob
+
+REPO = os.getcwd()
+
+def _read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+def _code_lines(path, comment="#"):
+    """Non-comment, non-blank lines. Prose that DOCUMENTS a topic name is not a
+    topic literal -- a scanner that cannot tell the two apart fails on the very
+    files that explain the rule."""
+    out = []
+    in_doc = False
+    for line in _read(path).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Crude but sufficient triple-quote tracking for the Python scripts.
+        if path.endswith(".py"):
+            ticks = stripped.count('"""')
+            if in_doc:
+                if ticks:
+                    in_doc = False
+                continue
+            if ticks == 1:
+                in_doc = True
+                continue
+        if stripped.startswith(comment):
+            continue
+        out.append(line)
+    return out
+
+LANE_NAMES = ("critical", "attention", "media", "requests", "infra", "updates")
+NOTIFY_PY = os.path.join(REPO, "scripts", "notify.py")
+
+# --- 25a. no bare `nas-<lane>` literal outside the router -----------------
+# Every publisher names a LANE; the router is the only thing that may know a
+# topic string. compose files interpolate ${NTFY_TOPIC_*} instead.
+_scan = []
+for pattern in ("scripts/*.py", "scripts/*.sh", "compose/*.yaml",
+                "webapps/*/compose.yaml", "Makefile"):
+    _scan.extend(_glob.glob(os.path.join(REPO, pattern)))
+
+# Matched by SHAPE, not by mere presence: a topic name only matters where it is
+# a DESTINATION. `"pending updates go to nas-updates at 04:10"` in a digest
+# message is prose; `http://ntfy:8410/nas-updates` is a publish target. The
+# five shapes below are every way this stack can spell a destination -- a URL
+# path, a shell/compose assignment, a Python keyword or dict value, and a JSON
+# list element.
+def _destination_shapes(lane):
+    literal = "nas-" + lane
+    return (f"/{literal}", f"={literal}", f'="{literal}"', f"='{literal}'",
+            f': "{literal}"', f"['{literal}']", f'["{literal}"]')
+
+_literals = []
+for path in sorted(_scan):
+    rel = os.path.relpath(path, REPO)
+    if rel in ("scripts/notify.py", "scripts/check-invariants.sh"):
+        continue  # the router defines them; this file asserts them
+    for line in _code_lines(path):
+        # An env-var DEFAULT is the one allowed destination spelling, because a
+        # container's own notifier needs a fallback when .env is absent:
+        #   TOPIC=${NTFY_TOPIC_MEDIA:-nas-media}
+        if "NTFY_TOPIC_" in line:
+            continue
+        for lane in LANE_NAMES:
+            if any(shape in line for shape in _destination_shapes(lane)):
+                _literals.append(f"{rel}: {line.strip()[:90]}")
+                break
+
+if _literals:
+    fail("ntfy-no-topic-literals", "ADR-0033",
+         "a bare ntfy topic literal escaped the router -- every publisher must "
+         f"name a LANE and let scripts/notify.py resolve the topic: {_literals[:4]}")
+else:
+    ok("ntfy-no-topic-literals", f"{len(_scan)} files, none holds a topic name")
+
+# --- 25b. every NTFY_* referenced anywhere is documented -----------------
+_referenced = set()
+for path in sorted(_scan) + [os.path.join(REPO, ".env.example")]:
+    for m in re.finditer(r"NTFY_(?:TOPIC|TOKEN)_[A-Z_]+", _read(path)):
+        _referenced.add(m.group(0))
+
+_example = _read(os.path.join(REPO, ".env.example"))
+_agents = _read(os.path.join(REPO, "AGENTS.md"))
+_undocumented = sorted(
+    v for v in _referenced if v not in _example or v not in _agents
+)
+if _undocumented:
+    fail("ntfy-env-documented", "ADR-0033",
+         "these ntfy variables are referenced but not documented in BOTH "
+         f".env.example and AGENTS.md: {_undocumented}")
+else:
+    ok("ntfy-env-documented", f"{len(_referenced)} NTFY_TOPIC_*/NTFY_TOKEN_* documented")
+
+# --- 25c. every lane has a priority, and critical is never held back ------
+_router = _read(NOTIFY_PY)
+_missing_lane = [lane for lane in LANE_NAMES if f'{lane.upper()} = "{lane}"' not in _router]
+_lane_specs = re.findall(r"Lane\.([A-Z]+): LaneSpec\((\d)", _router)
+_spec_lanes = {name.lower() for name, _prio in _lane_specs}
+if _missing_lane or _spec_lanes != set(LANE_NAMES):
+    fail("ntfy-lane-priorities", "ADR-0033",
+         f"scripts/notify.py does not declare all six lanes with a priority: "
+         f"missing={_missing_lane} specs={sorted(_spec_lanes)}")
+elif any(not (1 <= int(prio) <= 5) for _n, prio in _lane_specs):
+    fail("ntfy-lane-priorities", "ADR-0033",
+         "a lane declares a priority outside ntfy's 1-5 range")
+elif 'if lane is Lane.CRITICAL:\n    return 0.0' not in _router:
+    fail("ntfy-critical-never-suppressed", "ADR-0033",
+         "cooldown_seconds() no longer pins nas-critical to a zero window. "
+         "A suppressed critical alert is the exact failure the lane exists to "
+         "prevent -- there is no cooldown value that is correct there.")
+elif 'if effective_delay and lane is not Lane.CRITICAL:' not in _router:
+    fail("ntfy-critical-never-delayed", "ADR-0033",
+         "build_message() no longer strips X-Delay for nas-critical. Quiet "
+         "hours must never hold a critical alert until 08:00.")
+else:
+    ok("ntfy-lane-priorities", "6 lanes, prio 5/4/3/4/2/1, critical unsuppressible")
+
+# --- 25d. the retired topic is gone from every ACTIVE surface -------------
+# Scoped to code and configuration on purpose. `nas-alerts` still appears in
+# docs/decisions/, docs/jellyfin-playback-audit.md, the archived crontab
+# snapshots and in prose explaining this migration -- those are RECORDS of what
+# was true, and rewriting history to satisfy a grep would be the wrong fix.
+_stale = []
+for path in sorted(_scan):
+    rel = os.path.relpath(path, REPO)
+    if rel == "scripts/check-invariants.sh":
+        continue
+    for line in _code_lines(path):
+        if any(s in line for s in ("/nas-alerts", "=nas-alerts", '="nas-alerts"',
+                                   "='nas-alerts'", ': "nas-alerts"',
+                                   "['nas-alerts']", '["nas-alerts"]')):
+            _stale.append(f"{rel}: {line.strip()[:80]}")
+if _stale:
+    fail("ntfy-alerts-retired", "ADR-0033",
+         f"the retired `nas-alerts` topic is still referenced in code or "
+         f"configuration: {_stale[:4]}")
+else:
+    ok("ntfy-alerts-retired", "no active reference to nas-alerts")
+
+# --- 25e. the arr token is a FILE, never an environment variable ----------
+_token_mount = "/ntfy/arr-token"
+_bad_env, _bad_ro, _mounted = [], [], []
+for svc, sv in sorted(services.items()):
+    for key in env_of(svc):
+        # Scoped to the *arr publisher token. `diun` DOES carry
+        # DIUN_NOTIF_NTFY_TOKEN in its environment, and that is a documented
+        # exception (ADR-0024): its native notifier accepts a token only, so it
+        # can use neither the ?auth= query trick nor URL userinfo, and it has no
+        # file-based option at all. It is also a DIFFERENT token -- minted on
+        # nas-scripts, revocable on its own. The rule being asserted here is
+        # narrower and absolute: the token that the three *arr containers hold,
+        # which is the one stored in their SQLite databases, must reach them as
+        # a read-only file and never as an inspectable environment variable.
+        if key in ("NTFY_TOKEN_ARR", "ARR_TOKEN", "NTFY_ARR_TOKEN"):
+            _bad_env.append(f"{svc}.{key}")
+    for vol in sv.get("volumes") or []:
+        if not isinstance(vol, dict):
+            continue
+        if _token_mount in str(vol.get("source", "")):
+            _mounted.append(svc)
+            if not vol.get("read_only"):
+                _bad_ro.append(svc)
+if _bad_env:
+    fail("ntfy-arr-token-is-a-file", "ADR-0011",
+         f"{_bad_env} carry an ntfy token in an `environment:` block. A "
+         "credential there leaks into `docker inspect`; the token belongs in "
+         "the 0600 file bind-mounted read-only at /run/ntfy-arr-token.")
+elif _bad_ro:
+    fail("ntfy-arr-token-is-a-file", "ADR-0011",
+         f"{_bad_ro} mount the arr-token WITHOUT :ro. A container that can "
+         "rewrite its own credential can escalate its own ACL.")
+elif not _mounted:
+    fail("ntfy-arr-token-is-a-file", "ADR-0033",
+         "nothing mounts ${CONFIG_DIRECTORY}/ntfy/arr-token, so no *arr can "
+         "publish its imports to nas-media.")
+else:
+    ok("ntfy-arr-token-is-a-file", f"{sorted(_mounted)}, all :ro, none in env")
+
+# --- 25f. arr_notify.sh is mounted :ro into exactly the three *arr ---------
+_expected = {"sonarr", "radarr", "lidarr"}
+_have, _rw = set(), []
+for svc, sv in sorted(services.items()):
+    for vol in sv.get("volumes") or []:
+        if not isinstance(vol, dict):
+            continue
+        if "arr_notify.sh" in str(vol.get("source", "")):
+            _have.add(svc)
+            if not vol.get("read_only"):
+                _rw.append(svc)
+if _rw:
+    fail("arr-notify-script-mount", "ADR-0033",
+         f"{_rw} mount scripts/arr_notify.sh writable. It runs inside the "
+         "import pipeline; it must not be modifiable from there.")
+elif _have != _expected:
+    fail("arr-notify-script-mount", "ADR-0033",
+         f"scripts/arr_notify.sh must be mounted into exactly {sorted(_expected)}, "
+         f"found {sorted(_have)}. Bazarr, lingarr, recyclarr and whisper "
+         "deliberately notify nothing at all.")
+else:
+    ok("arr-notify-script-mount", "sonarr, radarr, lidarr -- all :ro")
+
+# ==========================================================================
 # Report
 # ==========================================================================
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
