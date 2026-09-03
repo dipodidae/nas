@@ -914,10 +914,20 @@ def main(argv: list[str] | None = None) -> int:
     if webhook and not args.dry_run:
       notify(webhook, Alert(key, "info", f"cleared after {down_min:.0f} min"), resolved=True)
 
-  save_state(
-    args.state,
-    {"active": still, "restart_counts": restarts, "oom_cursor": oom_cursor},
-  )
+  # INVARIANT: --dry-run must not touch the state file. It used to, and that is
+  # how a recovery gets lost: an ad-hoc run loads `active`, sees the problem is
+  # over, prints [RESOLVED], skips the push because of --dry-run, and then saves
+  # the pruned state anyway. The pending resolve is consumed, the next cron run
+  # has nothing left to announce, and the alert stays open on the phone forever.
+  # Observed 2026-09-02 20:15 -> 20:20: autoheal:down, container:autoheal:down
+  # and container:slskd:unhealthy all vanished between two ticks with no
+  # [RESOLVED] line and no ntfy message, which is why the 2026-09-03 triage
+  # still listed all three as down hours after they had recovered.
+  if not args.dry_run:
+    save_state(
+      args.state,
+      {"active": still, "restart_counts": restarts, "oom_cursor": oom_cursor},
+    )
 
   if not alerts:
     print(f"OK: {len(containers)} containers, no alerts")

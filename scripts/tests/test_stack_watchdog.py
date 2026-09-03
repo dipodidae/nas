@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
     root = Path(__file__).resolve().parents[2]
@@ -393,3 +395,72 @@ def test_low_free_space_warns(monkeypatch):
 
     monkeypatch.setattr(wd, "_run", fake_run)
     assert [a.key for a in wd.check_media_storage()] == ["media:low-space"]
+
+
+# --- main(): --dry-run must not mutate the state file ---
+
+
+def _quiet_main(monkeypatch, wd_mod):
+    """Neutralise every collector so main() computes an empty alert list."""
+    monkeypatch.setattr(wd_mod, "inspect_containers", lambda *a, **k: {})
+    monkeypatch.setattr(wd_mod, "defined_services", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_containers", lambda *a, **k: ([], {}))
+    monkeypatch.setattr(wd_mod, "autoheal_logs", lambda *a, **k: "")
+    monkeypatch.setattr(wd_mod, "check_autoheal", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_cron_jobs", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_heartbeat_configured", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_wan_shaper", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_media_storage", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_stuck_starting", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "read_crontab", lambda *a, **k: "")
+    monkeypatch.setattr(wd_mod, "lint_crontab", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_jellyfin_memory", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "check_kernel_oom", lambda *a, **k: ([], 123.0))
+
+
+def test_dry_run_does_not_consume_a_pending_resolve(tmp_path, monkeypatch):
+    """The 2026-09-02 20:15->20:20 defect: --dry-run saved the pruned state.
+
+    An ad-hoc --dry-run loaded `active`, saw the problem was over, printed
+    [RESOLVED], skipped the push, and then persisted the pruned state anyway.
+    The next cron run had nothing left to announce, so autoheal:down and
+    container:slskd:unhealthy never sent a recovery and stayed open on the
+    phone for ~19h after they had actually cleared.
+    """
+    state = tmp_path / "watchdog.json"
+    before = json.dumps(
+        {"active": {"autoheal:down": {"first_seen": 1.0, "last_notified": 2.0}},
+         "restart_counts": {}, "oom_cursor": 0},
+        indent=1, sort_keys=True,
+    )
+    state.write_text(before)
+
+    _quiet_main(monkeypatch, wd)
+    monkeypatch.setenv("NAS_ALERT_WEBHOOK", "http://ntfy.invalid/nas-alerts")
+    monkeypatch.setattr(
+        wd, "notify",
+        lambda *a, **k: pytest.fail("--dry-run must not notify"),  # noqa: ARG005
+    )
+
+    assert wd.main(["--dry-run", "--state", str(state)]) == 0
+    assert state.read_text() == before, "--dry-run rewrote the state file"
+
+
+def test_a_real_run_does_persist_and_resolve(tmp_path, monkeypatch):
+    """The guard must not break the normal path: a real run still clears it."""
+    state = tmp_path / "watchdog.json"
+    state.write_text(json.dumps(
+        {"active": {"autoheal:down": {"first_seen": 1.0, "last_notified": 2.0}},
+         "restart_counts": {}, "oom_cursor": 0}))
+
+    _quiet_main(monkeypatch, wd)
+    monkeypatch.setenv("NAS_ALERT_WEBHOOK", "http://ntfy.invalid/nas-alerts")
+    sent: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        wd, "notify",
+        lambda _hook, alert, resolved=False: (sent.append((alert.key, resolved)), True)[1],
+    )
+
+    assert wd.main(["--state", str(state)]) == 0
+    assert sent == [("autoheal:down", True)], "the recovery must be pushed"
+    assert json.loads(state.read_text())["active"] == {}
