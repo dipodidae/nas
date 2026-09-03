@@ -412,6 +412,8 @@ def _quiet_main(monkeypatch, wd_mod):
     # Must be neutralised or the unit suite reaches the live Prowlarr.
     monkeypatch.setattr(wd_mod, "fetch_indexer_failures", lambda *a, **k: None)
     monkeypatch.setattr(wd_mod, "check_indexer_failures", lambda *a, **k: [])
+    monkeypatch.setattr(wd_mod, "fetch_arr_health", lambda *a, **k: None)
+    monkeypatch.setattr(wd_mod, "check_arr_health", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_heartbeat_configured", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_wan_shaper", lambda *a, **k: [])
     monkeypatch.setattr(wd_mod, "check_media_storage", lambda *a, **k: [])
@@ -624,3 +626,67 @@ def test_malformed_timestamps_do_not_crash_the_run():
             {"name": "y", "initial_failure": "", "disabled_till": None},
             {"name": "z", "initial_failure": 12345, "disabled_till": None}]
     assert wd.check_indexer_failures(rows) == []
+
+
+# --- *arr health, owned here so onHealthIssue can be switched off ---
+
+
+def _hrow(app, source, message="something", type_="warning"):
+    return {"app": app, "source": source, "type": type_, "message": message}
+
+
+def test_short_term_indexer_check_is_dropped():
+    """IndexerStatusCheck flaps within minutes and is the whole source of churn."""
+    rows = [_hrow("prowlarr", "IndexerStatusCheck", "Indexers unavailable: Knaben")]
+    assert wd.check_arr_health(rows) == []
+
+
+def test_long_term_indexer_check_is_dropped_as_redundant():
+    """Accurate, but check_indexer_failures says it better and says it once.
+
+    All three apps raise this for the same indexers, so keeping it turned 2 dead
+    indexers into 6 alerts. The per-indexer check carries the real duration and
+    backs off; this one carries neither.
+    """
+    rows = [_hrow(app, "IndexerLongTermStatusCheck",
+                  "Indexers unavailable due to failures for more than 6 hours: 1337x")
+            for app in ("prowlarr", "sonarr", "radarr")]
+    assert wd.check_arr_health(rows) == []
+
+
+def test_non_indexer_warnings_survive_so_nothing_is_lost():
+    """Turning off onHealthIssue must not lose root-folder/client warnings."""
+    rows = [_hrow("sonarr", "RootFolderCheck", "Missing root folder: /data/series"),
+            _hrow("radarr", "DownloadClientCheck", "No download client is available",
+                  type_="error")]
+    alerts = wd.check_arr_health(rows)
+    assert [a.key for a in alerts] == ["arr:radarr:DownloadClientCheck",
+                                       "arr:sonarr:RootFolderCheck"]
+    # `error` must outrank `warning`, or a dead download client reads as cosmetic
+    assert [a.severity for a in alerts] == ["critical", "warning"]
+
+
+def test_the_same_warning_in_three_apps_is_three_keys_not_one_message():
+    """Each app is separately actionable, but each is deduped within itself."""
+    rows = [_hrow(app, "RootFolderCheck") for app in ("prowlarr", "sonarr", "radarr")]
+    rows += [_hrow("sonarr", "RootFolderCheck")]  # duplicate
+    assert len(wd.check_arr_health(rows)) == 3
+
+
+def test_arr_health_repeats_daily_not_hourly():
+    """These are standing conditions; hourly repetition is what killed the topic."""
+    (alert,) = wd.check_arr_health([_hrow("sonarr", "RootFolderCheck")])
+    assert alert.repeat_min == wd.CONFIG_GAP_REPEAT_MIN
+
+
+def test_no_reachable_app_is_not_a_health_alert():
+    """Containers being down is check_containers' job; do not double-report."""
+    assert wd.check_arr_health(None) == []
+
+
+def test_clean_apps_are_quiet():
+    assert wd.check_arr_health([]) == []
+
+
+def test_malformed_health_payload_does_not_crash():
+    assert wd.check_arr_health([{"app": "sonarr"}, "not a dict", {}]) == []

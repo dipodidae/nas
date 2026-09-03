@@ -48,8 +48,12 @@ What it checks
 9. Prowlarr indexers that have stayed failed past a threshold — *not* ones that
    flapped. Public trackers flap all day and that is their normal condition;
    treating each cycle as an incident produced 103 ntfy messages in 48 hours
-   describing two actually-dead indexers. This owns indexer status so the
-   *arr apps' own unfiltered `onHealthIssue` connections do not have to.
+   describing two actually-dead indexers.
+10. Every other *arr health warning (Prowlarr/Sonarr/Radarr/Lidarr `/health`),
+   deduped per app and repeated daily. Together, 9 and 10 let the three apps'
+   own `onHealthIssue` + `onHealthRestored` Ntfy connections be switched OFF
+   without losing anything: those have no filter, fire on every transition, and
+   all three fire for the same indexer. Indexer state is reported once, by 9.
 
 Delivery
 --------
@@ -157,6 +161,27 @@ IN_FLIGHT_STALE_MIN = 15.0
 # which was the single accurate line in the 2026-09-03 feed.
 PROWLARR_INDEXER_DOWN_MIN = 360.0
 DEFAULT_PROWLARR_URL = "http://localhost:9696"
+# The *arr apps whose /health this polls, and the API version each speaks.
+# Sonarr/Radarr are v3; Prowlarr/Lidarr are v1 (measured -- lidarr /api/v3/health
+# returns 404). Keys come from API_KEY_<APP> in .env.
+ARR_HEALTH_APPS = {
+  "prowlarr": ("http://localhost:9696", "v1"),
+  "sonarr": ("http://localhost:8989", "v3"),
+  "radarr": ("http://localhost:7878", "v3"),
+  "lidarr": ("http://localhost:8686", "v1"),
+}
+# INVARIANT: indexer state is owned by check_indexer_failures and reported ONCE.
+# Both of these are dropped here, for different reasons:
+#
+#  * IndexerStatusCheck is the SHORT-term check and the whole source of the flap
+#    churn -- it appears and clears within minutes as public trackers bounce.
+#  * IndexerLongTermStatusCheck is accurate but redundant. All three apps raise
+#    it for the same two indexers, so keeping it turned 2 dead indexers into 6
+#    alerts. check_indexer_failures says the same thing better: one key per
+#    indexer, the actual outage duration, and backoff.
+#
+# Anything else an *arr reports is kept -- that is the point of this check.
+ARR_HEALTH_IGNORE = frozenset({"IndexerStatusCheck", "IndexerLongTermStatusCheck"})
 
 
 @dataclass(frozen=True)
@@ -711,6 +736,90 @@ def check_indexer_failures(
   return alerts
 
 
+def fetch_arr_health(apps: dict[str, tuple[str, str]] | None = None) -> list[dict] | None:
+  """Every *arr health warning, as [{app, source, type, message}, ...].
+
+  Returns None only if NO app could be reached at all, which is a docker
+  problem rather than an application one and is already `check_containers`'
+  job. An app that individually fails to answer is skipped: its container
+  being down is reported elsewhere, and inventing a health warning for it here
+  would double-report the same outage.
+
+  Note the API versions differ: Sonarr and Radarr are v3, Prowlarr and Lidarr
+  are v1. Measured -- lidarr /api/v3/health returns 404.
+  """
+  apps = apps or ARR_HEALTH_APPS
+  rows: list[dict] = []
+  reached = False
+  for app, (base, ver) in sorted(apps.items()):
+    key = os.getenv(f"API_KEY_{app.upper()}", "")
+    if not key:
+      continue
+    payload = _arr_get(base, key, f"/api/{ver}/health")
+    if not isinstance(payload, list):
+      continue
+    reached = True
+    for item in payload:
+      if not isinstance(item, dict):
+        continue
+      rows.append({
+        "app": app,
+        "source": str(item.get("source", "")),
+        "type": str(item.get("type", "")),
+        "message": str(item.get("message", "")),
+      })
+  return rows if reached else None
+
+
+def check_arr_health(
+  rows: list[dict] | None,
+  ignore_sources: frozenset[str] = ARR_HEALTH_IGNORE,
+) -> list[Alert]:
+  """*arr health warnings, deduped by (app, source) and slow to repeat.
+
+  This exists so the three `onHealthIssue` + `onHealthRestored` Ntfy
+  connections in Prowlarr, Sonarr and Radarr can be switched OFF without losing
+  the warnings that matter. Those connections have no filter and fire on every
+  transition, so one flapping public tracker fanned out into 103 messages in
+  48h (counted from ntfy's cache.db). Prowlarr's own tag-based filtering is
+  unreliable (Prowlarr#1977), so the filtering has to live here.
+
+  `IndexerStatusCheck` is dropped on purpose. It is the SHORT-term check and the
+  entire source of the churn: it appears and clears within minutes as trackers
+  bounce. `check_indexer_failures` owns indexer state instead, keyed on how long
+  an indexer has actually been failing. `IndexerLongTermStatusCheck` is kept --
+  it is the >6h signal, and it was the one accurate line in the 2026-09-03 feed.
+
+  Cadence is deliberately daily. Almost every remaining warning is a standing
+  condition (root folder missing, no download client, an update available); none
+  of them is more urgent at 03:00 than at 09:00, and the watchdog announces the
+  recovery on its own when the warning clears.
+  """
+  if rows is None:
+    return []
+  alerts = []
+  seen = set()
+  # Filter before sorting: the sort key itself would raise on a non-dict, and a
+  # watchdog that dies on malformed input stops watching everything else.
+  usable = [r for r in rows if isinstance(r, dict) and r.get("source")]
+  for row in sorted(usable, key=lambda r: (str(r.get("app")), str(r.get("source")))):
+    source = str(row.get("source", ""))
+    app = str(row.get("app", ""))
+    if source in ignore_sources or (app, source) in seen:
+      continue
+    seen.add((app, source))
+    severity = "critical" if str(row.get("type", "")).lower() == "error" else "warning"
+    alerts.append(
+      Alert(
+        f"arr:{app}:{source}",
+        severity,
+        f"{app}: {row.get('message', '')}".strip(),
+        repeat_min=CONFIG_GAP_REPEAT_MIN,
+      )
+    )
+  return alerts
+
+
 def check_wan_shaper(wan_if: str = "enp88s0") -> list[Alert]:
   """Ask the shaper whether it is doing its job, not whether it exists.
 
@@ -1086,6 +1195,10 @@ def main(argv: list[str] | None = None) -> int:
     fetch_indexer_failures(args.prowlarr_url, os.getenv("API_KEY_PROWLARR", "")),
     args.indexer_down_min,
   )
+  # Owns the *arr health warnings so their own unfiltered onHealthIssue
+  # connections can be switched off; IndexerStatusCheck is dropped here because
+  # check_indexer_failures above covers indexer state without the flapping.
+  alerts += check_arr_health(fetch_arr_health())
   alerts += check_heartbeat_configured()
   alerts += check_wan_shaper()
   alerts += check_media_storage()
