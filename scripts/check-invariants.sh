@@ -347,7 +347,7 @@ for svc, sv in sorted(services.items()):
 # ==========================================================================
 DATA_REQUIRED = {
     "sonarr": "ADR-0002", "radarr": "ADR-0002",
-    "lidarr": "ADR-0003",   # staged but must stay mounted
+    "lidarr": "ADR-0003",   # root folder IS /data/music since 2026-09-02
     "bazarr": "ADR-0015",   # needed for path resolution, not hardlinks
 }
 for svc, adr in sorted(DATA_REQUIRED.items()):

@@ -1,7 +1,11 @@
-# ADR-0003 — Lidarr's `/data` mount is staged but NOT in use
+# ADR-0003 — Lidarr's `/data` mount (staged 2026-09-01, in use since 2026-09-02)
 
-**Date:** 2026-09-01
-**Status:** accepted (unfinished work, deliberately parked)
+> The filename and original title say "staged but NOT in use". That was true
+> for one day. The repath was executed on 2026-09-02 and the mount is now
+> load-bearing; the name is kept because other files and `make check` cite it.
+
+**Date:** 2026-09-01 (superseded in part 2026-09-02, see "Executed" below)
+**Status:** accepted; the parked work is **done**
 **Background:** `docs/arr-qbittorrent-pollution.md`, section
 "Lidarr — attempted, broke it, rolled back"
 
@@ -32,6 +36,9 @@ Keep the `${SHARE_DIRECTORY}:/data` mount in place — it is harmless and ready
 for a safer retry — but **Lidarr's root folder is still `/music`, so Lidarr
 still copies rather than hardlinks.** That is the status quo, not a regression,
 and it is unfinished work.
+
+> **Superseded 2026-09-02.** The retry happened, by the offline route below.
+> Lidarr's root folder is `/data/music` and the mount is load-bearing.
 
 ## A retry MUST NOT use `PUT /api/v1/artist/editor`
 
@@ -223,3 +230,44 @@ is how the mount-point problem above was found.
 Lidarr's `/music` and `/downloads` bind mounts are **deliberately left in
 place** — they cost nothing and are the fastest rollback if something surfaces
 weeks later. Removing them is a follow-up once a full cycle has run clean.
+
+---
+
+## The half nobody costed: a repath moves paths _out_ of other tools' reach
+
+**2026-09-03.** Seven Kraftwerk albums imported cleanly, sat correctly on disk
+under `/mnt/drive/music/Kraftwerk/`, were correct in Lidarr — and were **not in
+Jellyfin at all**, for a full day.
+
+`scripts/lidarr_jellyfin_bridge.py` exists because Lidarr's own Jellyfin
+connection reports `/music/...` paths that resolve to no Jellyfin library. It
+polls Lidarr's history and rewrites the prefix. Its `--map-from` was `/music`,
+hardcoded as a single string. The moment `RootFolders.Path` became
+`/data/music`, every folder the bridge saw failed its prefix test and was
+dropped — the exact silent no-op the bridge was written to eliminate,
+reintroduced at the bridge's own front door.
+
+**Two things made it invisible, and both are now fixed:**
+
+1. A dropped folder printed `WARNING: N folder(s) outside '/music'` to stderr
+   and then **returned 0**, and `cron_job.py`'s `--ok-codes` defaults to `0,1`.
+   Nothing could ever have alerted. An unmapped folder is now **exit 2**, and
+   the cursor is **not advanced**, so the album is retried instead of skipped
+   past forever.
+2. The bridge advanced its cursor over the dropped records, so even a later fix
+   would not have picked them up. Backfilled by hand on 2026-09-03; Jellyfin
+   went from 0 to 7 albums / 45 of 45 tracks.
+
+`DEFAULT_MAP_FROM` is now a tuple of **both** roots, `("/data/music", "/music")`,
+matched longest-first — history written on either side of a repath still maps.
+
+**The general lesson.** The repath was verified exhaustively _inside_ Lidarr:
+row counts, sampled paths on disk, root folder accessible, hardlinks proven with
+`ln`. Every one of those checks passed. None of them asked what else in the
+stack had `/music` compiled into it. A path migration's blast radius is every
+consumer that stores the old prefix, and Lidarr's DB was only the first.
+
+`scripts/check-lidarr-bridge-root.py` now asserts, in `make verify-runtime`,
+that Lidarr's live root folder is one the bridge can translate — the check that
+would have caught this on 2026-09-02 instead of a day later, by a human noticing
+an album was missing.

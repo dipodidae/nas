@@ -109,11 +109,14 @@ services:
       - ${CONFIG_DIRECTORY}/lidarr:/config
       - ${SHARE_DIRECTORY}/music:/music
       - ${SHARE_DIRECTORY}/downloads:/downloads
-      # WARNING: STAGED BUT NOT IN USE. Lidarr's root folder is still /music,
-      # so lidarr still copies rather than hardlinks. The repath was attempted
-      # and rolled back -- `PUT /api/v1/artist/editor` wiped TrackFiles. Do NOT
-      # retry via that endpoint. Keep this mount; it is ready for a safer
-      # retry. ADR-0003 (background: ADR-0002).
+      # INVARIANT: this mount is LOAD-BEARING, not staged. Lidarr's root folder
+      # is /data/music as of 2026-09-02, so /data/downloads and /data/music sit
+      # under one mount and imports hardlink instead of copying. The repath was
+      # done offline by scripts/lidarr_repath_db.py; do NOT retry it via
+      # `PUT /api/v1/artist/editor`, which wiped 150,187 TrackFiles rows on the
+      # first attempt. A root folder outside lidarr_jellyfin_bridge.py's
+      # DEFAULT_MAP_FROM silently hides every import from Jellyfin, which is
+      # asserted by `make verify-runtime`. ADR-0003 (background: ADR-0002).
       - ${SHARE_DIRECTORY}:/data
       # INVARIANT: the media-notification script and its token are mounted
       # READ-ONLY, and the token is a FILE and not an environment variable --
