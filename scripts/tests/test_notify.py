@@ -390,3 +390,27 @@ def test_cli_rejects_empty_text_with_exit_2():
 def test_cli_reports_a_delivery_failure_as_exit_1(monkeypatch):
   monkeypatch.setattr(nt, "publish", lambda _m: (False, "HTTP 500"))
   assert nt.main(["--lane", "infra", "--title", "t", "--message", "m"]) == 1
+
+
+# --- credential freshness ------------------------------------------------
+
+
+def test_the_token_is_read_at_call_time_not_cached_at_import(monkeypatch):
+    """A rotated token must take effect on the next publish, with no restart.
+
+    These tokens have been disclosed once already, so rotation is a routine
+    operation and not an emergency. If the router ever caches the token in a
+    module-level constant, every publisher keeps presenting the revoked one and
+    fails with a 403 that looks like an ACL bug.
+    """
+    monkeypatch.setenv("NTFY_TOKEN_SCRIPTS", "tk_first")
+    assert nt.build_message(nt.Lane.INFRA, "t", "m").headers["Authorization"] == "Bearer tk_first"
+    monkeypatch.setenv("NTFY_TOKEN_SCRIPTS", "tk_rotated")
+    assert nt.build_message(nt.Lane.INFRA, "t", "m").headers["Authorization"] == "Bearer tk_rotated"
+
+
+def test_the_topic_is_read_at_call_time_too(monkeypatch):
+    monkeypatch.setenv("NTFY_TOPIC_INFRA", "one")
+    assert nt.build_message(nt.Lane.INFRA, "t", "m").url.endswith("/one")
+    monkeypatch.setenv("NTFY_TOPIC_INFRA", "two")
+    assert nt.build_message(nt.Lane.INFRA, "t", "m").url.endswith("/two")

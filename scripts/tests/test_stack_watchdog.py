@@ -840,3 +840,21 @@ def test_severity_only_raises_a_lanes_priority_never_lowers_it(monkeypatch):
     seen.clear()
     wd.notify(wd.Alert("heartbeat:unconfigured", "critical", "m"))
     assert seen == [5], "a critical severity in nas-infra is worth raising"
+
+
+def test_a_known_slow_service_never_escalates_out_of_infra():
+    """playlist-generator's CPU-bound stages block its event loop for hours.
+
+    Measured CPU 101.63%, unhealthy streak 23. The container is busy, not
+    broken, so age must not turn legitimate work into a page — the same
+    reasoning as slskd's 4h start_period (ADR-0026).
+    """
+    key = "container:playlist-generator:unhealthy"
+    for age in (0.0, 15.0, 120.0, 60 * 24.0):
+        assert wd.lane_for(_alert(key), active_min=age) == "infra", age
+
+
+def test_the_slow_exemption_does_not_cover_absent_or_exited():
+    """Busy is an excuse for unhealthy. It is not an excuse for not existing."""
+    assert wd.lane_for(_alert("container:playlist-generator:missing")) == "critical"
+    assert wd.lane_for(_alert("container:playlist-generator:down"), active_min=99.0) == "attention"

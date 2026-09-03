@@ -8,6 +8,13 @@ Scans one or more root paths (default: CONFIG_DIRECTORY) for *.log files that:
 Actions:
   • If LOG_PRUNE_COMPRESS=true (default) compress oversize logs to log.<ts>.gz and truncate original
   • Otherwise simply truncate (copy tail marker)
+  • Prune stale entries out of logs/.notify_state.json
+
+The notify-state prune is here rather than in the router because it is exactly
+the same kind of chore: that file gains one entry per distinct dedup key and
+never loses one on its own, and the keys embed episode names, container names
+and indexer names. Left alone it grows without bound and turns into a slow leak
+of what this box has been doing. ADR-0033.
 
 Binary dependencies: gzip (for compression). Falls back to truncate only if missing.
 
@@ -119,6 +126,25 @@ def truncate(path: Path, dry_run: bool) -> tuple[bool, str]:
     return False, f"truncate failed: {e}"
 
 
+def prune_notify_state(dry_run: bool) -> int:
+  """Drop notify cooldown/condition entries untouched for 30 days.
+
+  Returns the number dropped, or -1 if the router could not be loaded -- this
+  is a chore, so it must never be the reason the log pruner fails.
+  """
+  try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import notify as notifier  # noqa: PLC0415
+  except ImportError as exc:  # pragma: no cover - the router is in-repo
+    print(f"⚠️  could not load the notify router: {exc}")
+    return -1
+  state = notifier.load_state()
+  dropped = notifier.prune_state(state, time.time())
+  if dropped and not dry_run:
+    notifier.save_state(state)
+  return dropped
+
+
 def main() -> int:
   args = parse_args()
   compress_env = os.getenv("LOG_PRUNE_COMPRESS", "true").lower() == "true"
@@ -146,6 +172,10 @@ def main() -> int:
         print(f"{status} {path} -> {action}{' (dry-run)' if args.dry_run else ''}")
         if not ok:
           failures += 1
+  dropped = prune_notify_state(args.dry_run)
+  if dropped >= 0:
+    print(f"✅ notify state -> pruned {dropped} stale entr"
+          f"{'y' if dropped == 1 else 'ies'}{' (dry-run)' if args.dry_run else ''}")
   print(f"Summary: processed {processed} file(s); failures={failures}")
   if failures:
     return 1

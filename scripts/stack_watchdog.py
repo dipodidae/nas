@@ -161,6 +161,24 @@ USER_VISIBLE_SERVICES = frozenset({"jellyfin", "nextcloud", "swag", "qbittorrent
 # An unhealthy container is usually a blip. Fifteen minutes of it is not.
 ESCALATE_ATTENTION_MIN = 15.0
 USER_VISIBLE_CRITICAL_MIN = 5.0
+
+# Services whose `unhealthy` is a KNOWN, self-clearing consequence of the work
+# they are doing, so age alone must not escalate them out of nas-infra. Same
+# shape as ADR-0026's slskd start_period: the container is not broken, it is
+# busy, and an alerter that cries wolf during normal operation trains you to
+# swipe it away.
+#
+#   playlist-generator: its CPU-bound enrichment stages (embeddings, profiles,
+#   clusters, banger-flags, genre-manifold, audio) block the single-worker
+#   backend's event loop for the duration -- measured CPU 101.63% with an
+#   unhealthy streak of 23 consecutive checks. Only the three I/O-bound stages
+#   are in the crontab for exactly this reason, but running a CPU-bound one by
+#   hand is a legitimate thing to do and must not page.
+#
+# They still ALERT -- in nas-infra, and the daily digest counts them. This
+# exempts them from the ladder, not from being watched. Note it does not exempt
+# `:missing` or `:down`: a service that is absent or exited is not busy.
+SLOW_UNHEALTHY_SERVICES = frozenset({"playlist-generator"})
 # A standing configuration gap is not an incident: it cannot resolve on its own
 # and re-reading it every hour teaches you to ignore the topic. Once a day is
 # enough to keep it from being forgotten, which is the only job it has.
@@ -1128,6 +1146,8 @@ def escalate_lane(key: str, base_lane: str, active_min: float) -> str:
   if key.endswith(":missing"):
     return "critical"
   service = _service_of(key)
+  if key.endswith(":unhealthy") and service in SLOW_UNHEALTHY_SERVICES:
+    return base_lane
   if service in USER_VISIBLE_SERVICES and active_min >= USER_VISIBLE_CRITICAL_MIN:
     return "critical"
   if active_min >= ESCALATE_ATTENTION_MIN:
