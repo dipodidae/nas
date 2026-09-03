@@ -8,15 +8,15 @@ Captured 2026-09-03, before any change.
 
 ## The ntfy instance
 
-| Fact                     | Value                                                       |
-| ------------------------ | ----------------------------------------------------------- |
-| container name           | `ntfy`                                                      |
-| listen address           | `:8410` (`NTFY_LISTEN_HTTP`, `compose/infra.yaml`)           |
-| **in-network URL**       | `http://ntfy:8410`                                          |
-| host publish             | `127.0.0.1:8410:8410` — loopback only                        |
-| public URL               | `https://ntfy.${PUBLIC_DOMAIN}` via SWAG proxy-conf          |
-| `auth-default-access`    | `deny-all`                                                   |
-| cache                    | 48 h (`NTFY_CACHE_FILE`, `NTFY_CACHE_DURATION`)              |
+| Fact                  | Value                                               |
+| --------------------- | --------------------------------------------------- |
+| container name        | `ntfy`                                              |
+| listen address        | `:8410` (`NTFY_LISTEN_HTTP`, `compose/infra.yaml`)  |
+| **in-network URL**    | `http://ntfy:8410`                                  |
+| host publish          | `127.0.0.1:8410:8410` — loopback only               |
+| public URL            | `https://ntfy.${PUBLIC_DOMAIN}` via SWAG proxy-conf |
+| `auth-default-access` | `deny-all`                                          |
+| cache                 | 48 h (`NTFY_CACHE_FILE`, `NTFY_CACHE_DURATION`)     |
 
 **The brief's `http://ntfy` (port 80) does not exist here.** ntfy runs as
 `${PUID}:${PGID}` (ADR-0014 — no LSIO root init to chown `/var/lib/ntfy`), and a
@@ -62,22 +62,22 @@ Three topics were in use: `nas-alerts`, `nas-media`, `nas-cleanuparr`.
 
 ## Every publish call site, before
 
-| # | Publisher                        | Where                                        | Target                                      |
-| - | -------------------------------- | -------------------------------------------- | ------------------------------------------- |
-| 1 | `stack_watchdog.py`              | `notify()` ~L1046, `NAS_ALERT_WEBHOOK`       | `nas-alerts` (the only delivery function)   |
-| 2 | `cron_job.py`                    | imports `Alert`/`notify` from the watchdog    | `nas-alerts`                                |
-| 3 | `slskd_login_watch.py`           | `post_webhook()` L121, `SLSKD_ALERT_WEBHOOK` | `nas-alerts` (unauthenticated POST!)        |
-| 4 | `scrutiny`                       | `compose/infra.yaml` `SCRUTINY_NOTIFY_URLS`  | `nas-alerts`, shoutrrr userinfo auth        |
-| 5 | `diun`                           | `compose/infra.yaml` `DIUN_NOTIF_NTFY_*`     | `nas-alerts`, priority 3, token auth        |
-| 6 | sonarr `ntfy — alerts` (id 2)    | Ntfy connector                                | `nas-alerts`, `onManualInteractionRequired` |
-| 7 | sonarr `ntfy — media` (id 3)     | Ntfy connector                                | `nas-media`, `onUpgrade,onImportComplete`   |
-| 8 | radarr `ntfy — alerts` (id 3)    | Ntfy connector                                | `nas-alerts`, `onManualInteractionRequired` |
-| 9 | radarr `ntfy — media` (id 4)     | Ntfy connector                                | `nas-media`, `onDownload,onUpgrade`         |
-|10 | lidarr `ntfy — alerts` (id 7)    | Ntfy connector                                | `nas-alerts`, `onHealthIssue,onHealthRestored` |
-|11 | prowlarr `ntfy — alerts` (id 1)  | Ntfy connector                                | `nas-alerts`, **no triggers at all**        |
-|12 | jellyseerr webhook agent         | `settings.json`, `types: 137`                 | `nas-alerts`, `?auth=` query param          |
-|13 | cleanuparr `ntfy (nas-cleanuparr)` | `cleanuparr.db` / `/api/configuration/notification_providers` | `nas-cleanuparr` |
-|14 | bazarr `ntfy` notifier           | `bazarr/db/bazarr.db` `table_settings_notifier` | `nas-media`, userinfo auth in the URL     |
+| #   | Publisher                          | Where                                                         | Target                                         |
+| --- | ---------------------------------- | ------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | `stack_watchdog.py`                | `notify()` ~L1046, `NAS_ALERT_WEBHOOK`                        | `nas-alerts` (the only delivery function)      |
+| 2   | `cron_job.py`                      | imports `Alert`/`notify` from the watchdog                    | `nas-alerts`                                   |
+| 3   | `slskd_login_watch.py`             | `post_webhook()` L121, `SLSKD_ALERT_WEBHOOK`                  | `nas-alerts` (unauthenticated POST!)           |
+| 4   | `scrutiny`                         | `compose/infra.yaml` `SCRUTINY_NOTIFY_URLS`                   | `nas-alerts`, shoutrrr userinfo auth           |
+| 5   | `diun`                             | `compose/infra.yaml` `DIUN_NOTIF_NTFY_*`                      | `nas-alerts`, priority 3, token auth           |
+| 6   | sonarr `ntfy — alerts` (id 2)      | Ntfy connector                                                | `nas-alerts`, `onManualInteractionRequired`    |
+| 7   | sonarr `ntfy — media` (id 3)       | Ntfy connector                                                | `nas-media`, `onUpgrade,onImportComplete`      |
+| 8   | radarr `ntfy — alerts` (id 3)      | Ntfy connector                                                | `nas-alerts`, `onManualInteractionRequired`    |
+| 9   | radarr `ntfy — media` (id 4)       | Ntfy connector                                                | `nas-media`, `onDownload,onUpgrade`            |
+| 10  | lidarr `ntfy — alerts` (id 7)      | Ntfy connector                                                | `nas-alerts`, `onHealthIssue,onHealthRestored` |
+| 11  | prowlarr `ntfy — alerts` (id 1)    | Ntfy connector                                                | `nas-alerts`, **no triggers at all**           |
+| 12  | jellyseerr webhook agent           | `settings.json`, `types: 137`                                 | `nas-alerts`, `?auth=` query param             |
+| 13  | cleanuparr `ntfy (nas-cleanuparr)` | `cleanuparr.db` / `/api/configuration/notification_providers` | `nas-cleanuparr`                               |
+| 14  | bazarr `ntfy` notifier             | `bazarr/db/bazarr.db` `table_settings_notifier`               | `nas-media`, userinfo auth in the URL          |
 
 Nothing else publishes. `config_backup.py`, `offsite_backup.sh`,
 `post_update_verifier.py` and `log_pruner.py` have **no** notify path of their

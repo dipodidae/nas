@@ -22,7 +22,8 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 
 .PHONY: help check lint config diun-manifest bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
-        submodules install-hooks verify-runtime backup-offsite
+        submodules install-hooks verify-runtime backup-offsite \
+        notify-test notify-acl
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -190,6 +191,11 @@ install-hooks: ## Install the pre-commit hook that runs `make check`
 	chmod +x "$$hook"; \
 	echo "installed $$hook"
 
+# The three notification checks below are the ones that catch a UI edit: the
+# *arr connectors and the jellyseerr/cleanuparr notifiers live in each app's own
+# SQLite, so nothing in git would show someone ticking "On Grab" back on, and
+# the ntfy grants live in ntfy's user.db. ADR-0033.
+#
 # `VERIFY_NOTIFY=1` makes this target PUSH its findings, and the 06:15 cron line
 # sets it. An interactive run stays silent on purpose: this target is also how
 # you check your own work, and a hand-run must not page anyone.
@@ -244,6 +250,15 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	     note "qui and qbittorrent see /downloads on different devices (ADR-0027)"; fi; \
 	echo "==> scrutiny's collector has reported within 24h (ADR-0023)"; \
 	scripts/check-smart-freshness.py || { rc=1; note "scrutiny has not reported SMART in 24h (ADR-0023)"; }; \
+	echo "==> the ntfy grants still match ADR-0033"; \
+	scripts/check-ntfy-acls.py \
+	  || { rc=1; crit=1; note "ntfy ACLs have drifted -- nas-arr may be able to reach nas-critical (ADR-0033)"; }; \
+	echo "==> *arr notification connectors match the taxonomy (ADR-0033)"; \
+	.venv/bin/python scripts/configure_arr_notifications.py --check \
+	  || { rc=1; note "*arr notification connectors have drifted (ADR-0033)"; }; \
+	echo "==> jellyseerr + cleanuparr notifiers match the taxonomy (ADR-0033)"; \
+	.venv/bin/python scripts/configure_service_notifications.py --check \
+	  || { rc=1; note "jellyseerr/cleanuparr notifiers have drifted (ADR-0033)"; }; \
 	echo "==> unhealthy or exited containers"; \
 	u=$$(docker compose ps -a --format '{{.Name}}\t{{.Status}}' \
 	     | grep -iE 'unhealthy|exited|restarting' || true); \
@@ -259,3 +274,15 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 
 backup-offsite: ## Push the newest local config backup off this box (restic)
 	@scripts/offsite_backup.sh --apply
+
+# ---------------------------------------------------------------- alerting
+
+notify-test: ## Fire one representative message per lane, then read them back
+	@echo "==> one message per lane, through the router (ADR-0033)"
+	@# nas-critical is deliberately included: it is the lane whose delivery
+	@# matters most and therefore the one worth proving. Each message says it is
+	@# a test in its own title, so a phone that buzzes is not misleading.
+	@.venv/bin/python scripts/notify_test.py
+
+notify-acl: ## Print the live ntfy users, grants and token labels (secrets redacted)
+	@scripts/check-ntfy-acls.py --print

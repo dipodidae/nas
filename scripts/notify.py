@@ -420,6 +420,28 @@ def suppressed_since(state: State, keys: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------
 
 
+def _wire_headers(headers: dict[str, str]) -> dict[str, str]:
+  """Re-encode header values so urllib puts UTF-8 bytes on the wire.
+
+  `http.client` encodes header values as **latin-1**, so an `X-Title` with an
+  em dash or an emoji raises `UnicodeEncodeError` — which `publish()` catches
+  as a `ValueError` and reports as a failed publish. The message is simply
+  never sent.
+
+  That is exactly what happened to every title in this file's own vocabulary:
+  `📺 The Expanse S02E07`, `🎵 Artist — Album`, `🗒 NAS digest`. It was invisible
+  because the failure is a logged warning on a best-effort notifier, and
+  because `scripts/arr_notify.sh` uses `curl`, which sends raw bytes and was
+  therefore fine — so the shell path worked and the Python path did not.
+
+  Encoding to UTF-8 and decoding as latin-1 hands `http.client` a string it can
+  encode 1:1, which puts the original UTF-8 bytes on the wire — byte-identical
+  to what curl sends, and what ntfy expects. Done at the wire boundary only, so
+  `Message.headers` stays readable for tests and logs.
+  """
+  return {k: v.encode("utf-8").decode("latin-1") for k, v in headers.items()}
+
+
 def publish(msg: Message) -> tuple[bool, str]:
   """POST one message. Returns (ok, reason). Never raises."""
   if "Authorization" not in msg.headers:
@@ -430,7 +452,9 @@ def publish(msg: Message) -> tuple[bool, str]:
     return False, "no NTFY_TOKEN_SCRIPTS configured"
   last = "unknown error"
   for attempt in range(1, POST_ATTEMPTS + 1):
-    req = urllib.request.Request(msg.url, data=msg.body, method="POST", headers=msg.headers)
+    req = urllib.request.Request(
+      msg.url, data=msg.body, method="POST", headers=_wire_headers(msg.headers),
+    )
     try:
       with urllib.request.urlopen(req, timeout=POST_TIMEOUT_S) as resp:  # noqa: S310
         if 200 <= resp.status < 300:

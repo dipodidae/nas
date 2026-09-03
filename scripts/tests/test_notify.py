@@ -414,3 +414,49 @@ def test_the_topic_is_read_at_call_time_too(monkeypatch):
     assert nt.build_message(nt.Lane.INFRA, "t", "m").url.endswith("/one")
     monkeypatch.setenv("NTFY_TOPIC_INFRA", "two")
     assert nt.build_message(nt.Lane.INFRA, "t", "m").url.endswith("/two")
+
+
+# --- non-ASCII titles ----------------------------------------------------
+
+
+def test_a_non_ascii_title_reaches_the_wire_as_utf8():
+  """http.client encodes headers as latin-1, so an em dash or an emoji in
+  X-Title raises UnicodeEncodeError — caught as a ValueError and reported as a
+  failed publish, with the message simply never sent. Every title in this
+  module's own vocabulary is affected: 📺, 🎵, 🗒, and the em dash."""
+  for title in ("📺 The Expanse S02E07", "🎵 Boards of Canada — Geogaddi",
+                "🗒 NAS digest · Thu 03 Sep", "TEST nas-critical — no container"):
+    wire = nt._wire_headers({"X-Title": title})
+    # The whole point: latin-1 can now encode it, and the bytes are the
+    # original UTF-8 — byte-identical to what curl sends.
+    assert wire["X-Title"].encode("latin-1") == title.encode("utf-8")
+
+
+def test_an_emoji_title_actually_publishes(monkeypatch):
+  """The end-to-end version of the above, through the real urllib path."""
+  seen: dict = {}
+
+  class _Resp:
+    status = 200
+
+    def __enter__(self):
+      return self
+
+    def __exit__(self, *_a):
+      return False
+
+  def _capture(req, **_kw):
+    # This is where it used to raise: http.client encodes the header values.
+    for value in req.headers.values():
+      value.encode("latin-1")
+    seen["title"] = req.get_header("X-title")
+    return _Resp()
+
+  monkeypatch.setattr(nt.urllib.request, "urlopen", _capture)
+  result = nt.notify(nt.Lane.MEDIA, "🎵 Artist — Album", "body", tags=("musical_note",))
+  assert result.sent, result.reason
+  assert seen["title"].encode("latin-1").decode("utf-8") == "🎵 Artist — Album"
+
+
+def test_ascii_headers_are_unchanged():
+  assert nt._wire_headers({"X-Priority": "5"}) == {"X-Priority": "5"}
