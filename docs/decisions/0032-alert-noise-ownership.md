@@ -1,11 +1,11 @@
-# ADR-0032 — The watchdog owns indexer and *arr health alerting
+# ADR-0032 — The watchdog owns indexer and \*arr health alerting
 
 **Date:** 2026-09-03
 **Status:** accepted
 
 `onHealthIssue` and `onHealthRestored` are now **off** on the Prowlarr, Sonarr
 and Radarr Ntfy connections. `scripts/stack_watchdog.py` reports that ground
-truth instead, from the Prowlarr and *arr APIs, with damping.
+truth instead, from the Prowlarr and \*arr APIs, with damping.
 
 This is a live-config change in three SQLite databases, not in the compose
 files, so `make check` cannot assert it. Hence a record.
@@ -97,7 +97,7 @@ radarr     masked-on-GET=True  password-preserved-through-PUT=True
 ```
 
 So the trap is **field- and implementation-specific**, not a property of the
-*arr API. Verify it on a throwaway before trusting it for another field; do not
+\*arr API. Verify it on a throwaway before trusting it for another field; do not
 generalise either way from this record.
 
 Two further points inherited from the MediaBrowser case and still true here:
