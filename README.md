@@ -52,7 +52,7 @@ make bootstrap      # creates nas-network and pre-chowns the two config dirs
                     # them crash-loop on `permission denied`. ADR-0014.
 
 make lint           # does the compose model even render?
-make check          # 43 invariant assertions
+make check          # 49 invariant assertions
 
 docker compose up -d 4eva-rootpage      # swag depends_on it being healthy
 docker compose up -d swag               # get TLS working first
@@ -320,7 +320,7 @@ ssh -L 8989:127.0.0.1:8989 <host>    # then http://localhost:8989
 
 ## Rules that will bite you
 
-These are asserted mechanically by `scripts/check-invariants.sh` — **43
+These are asserted mechanically by `scripts/check-invariants.sh` — **49
 assertions** over 32 services, run by `make check`, by the pre-commit hook, and
 by CI so a violation cannot merge. Each failure prints the ADR that explains why
 the rule exists — **read it before changing the rule.** Compose lines carrying
@@ -352,6 +352,10 @@ alone cannot prove.
 | Jellyfin's volume mappings are **not** changed — sources included                                                                                                                                                 | Owner instruction, and 3 systems are calibrated to `/data/movies`. Repointing the _source_ breaks the same three while leaving the target intact                                                                                                                                      | [0016](docs/decisions/0016-jellyfin-paths-are-load-bearing.md)                                                     |
 | Every `swag=enable` service has a tracked proxy-conf, and every conf has a label                                                                                                                                  | The **conf** is what routes, not the label — the auto-proxy mod is not installed. `lingarr` had a label and no conf (served SWAG's default page, answering `200`); `slskd` had a conf and no label. All 16 confs are tracked, nine of which existed nowhere else                      | [0022](docs/decisions/0022-proxy-confs-are-tracked.md)                                                             |
 | Every service: `cap_drop: ALL`, `no-new-privileges`, capped logs, loopback UI                                                                                                                                     | The hardening baseline. **No exceptions** — the last two waivers were closed with measured sets on 2026-09-02                                                                                                                                                                         | [0001](docs/decisions/0001-hardening-baseline.md), [0018](docs/decisions/0018-capability-gaps.md)                  |
+| No script and no compose file holds an ntfy **topic** string; every publisher names a **lane**                                                                                                                    | Six lanes, and severity carried by the priority, only survives if the routing is one lookup. A bare topic literal still publishes and a wrong lane still returns `200`, so both failures are silent. Containers interpolate the same `${NTFY_TOPIC_*}` variables the router reads     | [0033](docs/decisions/0033-ntfy-topic-taxonomy.md)                                                                 |
+| Every lane has a 1–5 priority, and **`nas-critical` is neither delayable nor cooldown-suppressible**                                                                                                              | Asserted in the source, not by convention: `cooldown_seconds()` pins it to zero and `build_message()` strips `X-Delay` for it. There is no cooldown value that is correct for the one lane where a swallowed message is the failure mode itself                                       | [0033](docs/decisions/0033-ntfy-topic-taxonomy.md)                                                                 |
+| The \*arr ntfy token is a `0600` **file** mounted `:ro`, never an `environment:` entry                                                                                                                            | A credential in an environment block leaks into `docker inspect`. `:ro` specifically because a container that can rewrite its own credential can escalate its own ACL — and this token is scoped so a compromised \*arr cannot reach `nas-critical` at all                            | [0011](docs/decisions/0011-qbittorrent-credentials.md), [0033](docs/decisions/0033-ntfy-topic-taxonomy.md)         |
+| `scripts/arr_notify.sh` is mounted `:ro` into exactly sonarr, radarr and lidarr                                                                                                                                   | It runs inside the import pipeline, so it must not be modifiable from there — and bazarr, lingarr, recyclarr and whisper deliberately notify nothing at all                                                                                                                           | [0033](docs/decisions/0033-ntfy-topic-taxonomy.md)                                                                 |
 
 Start at [`docs/decisions/README.md`](docs/decisions/README.md) for the full index.
 
@@ -369,7 +373,10 @@ twice left no container at all.
 `diun` reads a manifest generated from the compose model and watches each
 image's **repository**, so it can answer "what is newer than this pin" — which
 is why it covers `jellyfin` and `qbittorrent`, the two Watchtower structurally
-could not report on. It runs at 04:10 and pushes to the `nas-alerts` ntfy topic.
+could not report on. It runs at 04:10 and pushes to `nas-updates` at **priority 1** — its own lane,
+because an available update is the lowest-value message this stack produces:
+nothing is broken, nothing is waiting, and a human applies it deliberately
+([ADR-0033](docs/decisions/0033-ntfy-topic-taxonomy.md)).
 
 `diun` has **no route to the Docker API at all**, not even through
 `dockerproxy`. `make check` asserts the manifest covers every image-pulling
@@ -422,19 +429,56 @@ Before 2026-09-01 **nothing on this box reported failure** — Jellyfin was
 OOM-killed five times in 48 h and qBittorrent sat dead for 14 h, both found by
 accident. Four layers now cover it:
 
-| Layer                                             | What it catches                                                                                                           | Blind to                                                         |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Docker healthchecks                               | A service answering wrong                                                                                                 | A service that no longer exists                                  |
-| `autoheal`                                        | Unhealthy `qbittorrent`/`slskd`, restarts within ~30 s                                                                    | Anything unlabelled                                              |
-| `scripts/stack_watchdog.py` (`*/5`)               | A service defined in compose with **no container at all**, plus unhealthy ones                                            | The host itself                                                  |
-| `scripts/heartbeat.py` (`*/10`) → healthchecks.io | **The host being down**                                                                                                   | —                                                                |
-| `make verify-runtime` (daily 06:15)               | Running containers drifting from the invariants — a missing container, a lost capability, a stray `compose.override.yaml` | Anything the config alone can prove (that is `make check`'s job) |
-| `scripts/offsite_backup.sh` (daily 02:00)         | Config surviving the loss of this machine                                                                                 | Media — 4.6 T is not backed up anywhere, by choice               |
+| Layer                                             | What it catches                                                                                                                                                                                                  | Blind to                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Docker healthchecks                               | A service answering wrong                                                                                                                                                                                        | A service that no longer exists                                  |
+| `autoheal`                                        | Unhealthy `qbittorrent`/`slskd`, restarts within ~30 s                                                                                                                                                           | Anything unlabelled                                              |
+| `scripts/stack_watchdog.py` (`*/5`)               | A service defined in compose with **no container at all**, plus unhealthy ones                                                                                                                                   | The host itself                                                  |
+| `scripts/heartbeat.py` (`*/10`) → healthchecks.io | **The host being down**                                                                                                                                                                                          | —                                                                |
+| `make verify-runtime` (daily 06:15)               | Running containers drifting from the invariants — a missing container, a lost capability, a stray `compose.override.yaml`, **the ntfy grants, and every \*arr / jellyseerr / cleanuparr notification connector** | Anything the config alone can prove (that is `make check`'s job) |
+| `scripts/offsite_backup.sh` (daily 02:00)         | Config surviving the loss of this machine                                                                                                                                                                        | Media — 4.6 T is not backed up anywhere, by choice               |
 
-All alerts go to self-hosted `ntfy` (`nas-alerts`), published over loopback so
-contents never leave the box; only the phone's subscription goes out through
-SWAG. `deny-all` by default, accounts created by hand.
-→ [ADR-0012](docs/decisions/0012-ntfy-alerting.md)
+### Six lanes, not one topic
+
+Everything publishes to self-hosted `ntfy` over loopback, so contents never
+leave the box; only the phone's subscription goes out through SWAG. `deny-all`
+by default, accounts created by hand.
+
+**Severity is carried by the priority; audience by the topic.** Naming a topic
+for its audience is what makes each one configurable on the phone once and then
+left alone — a phone can mute a topic but cannot un-mute half of one, which is
+why `nas-errors`/`nas-warnings` was rejected.
+
+| Topic           | prio | What lands here                                                                                                                     | Phone setting          |
+| --------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `nas-critical`  | 5    | A compose service with **no container at all**, host OOM kill, disk error, failed config backup, user-visible service down >5 min   | bypass Do Not Disturb  |
+| `nas-attention` | 4    | Needs a human today: \*arr health, manual interaction, import/download failure, slskd logged out, disk >90 %, a cleanuparr deletion | default                |
+| `nas-media`     | 3    | New stuff you can watch, with quality, size and a tap through to Jellyfin                                                           | normal                 |
+| `nas-requests`  | 4    | Jellyseerr approvals, declines, failures, issues                                                                                    | bypass Do Not Disturb  |
+| `nas-infra`     | 2    | Recoveries, first cron failures, drift, the 09:00 digest                                                                            | min importance, silent |
+| `nas-updates`   | 1    | `diun`, and nothing else                                                                                                            | min importance, silent |
+
+**Nothing publishes directly.** `scripts/notify.py` is the only thing that knows
+a topic name; callers name a _lane_. `make check` asserts that no script and no
+compose file holds a topic string, that every lane has a priority, and that
+`nas-critical` can be neither delayed by quiet hours nor swallowed by a cooldown.
+
+Noise controls, which are the point rather than a refinement: alerts fire on a
+state **change** (a `*/5` job cannot send the same message 288 times a day);
+an unhealthy container starts in `nas-infra` and escalates to `nas-attention` at
+15 min, or `nas-critical` at 5 min if it is user-visible; cooldowns are 6 h on
+`nas-attention` and 1 h on `nas-infra` and **none** on `nas-critical`; quiet
+hours 23:00–08:00 delay only the three chatter lanes. Suppressed messages are
+counted and reported by the 09:00 digest — that number is what keeps the windows
+honest.
+
+```bash
+make notify-test    # one message per lane, read back with the phone's own token
+make notify-acl     # the live ntfy users, grants and token labels (redacted)
+```
+
+→ [ADR-0033](docs/decisions/0033-ntfy-topic-taxonomy.md) ·
+[ADR-0012](docs/decisions/0012-ntfy-alerting.md)
 
 ```bash
 # what's unhealthy right now
@@ -454,25 +498,29 @@ open https://4eva.me/ops.html
 
 ## Scheduled jobs
 
-27 cron entries, all wrapped in `scripts/cron_job.py`, which reports failures
-and staleness to ntfy — a job that stops running is itself an alert.
+28 cron entries, all wrapped in `scripts/cron_job.py`, which reports failures
+and staleness to ntfy — a job that stops running is itself an alert. A job's
+**first** failure goes to `nas-infra` (most self-heal on the next tick) and a
+second consecutive one to `nas-attention`; `config-backup` and `offsite-backup`
+pass `--fail-lane critical`, because a backup failure is only ever discovered
+when you need the backup. Successes never notify.
 
 > **Every cron line must `cd /home/tom/nas` first.** The scripts resolve `.env`
 > and `logs/` relative to the working directory.
 
-| When              | Job                                                                                                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `*/5`             | `stack_watchdog`, `media_ops_status`, `qbittorrent_settings_enforce`                                                                                                                                    |
-| `2-59/5`          | `lidarr_jellyfin_bridge` (Lidarr has no working path mapping)                                                                                                                                           |
-| `*/10`            | `heartbeat` (off-box dead-man's switch)                                                                                                                                                                 |
-| `*/15`            | `slskd_login_watch`                                                                                                                                                                                     |
-| `5,20,35,50`      | `lidarr_monitor_sweep --no-search`                                                                                                                                                                      |
-| `12,27,42,57`     | `lidarr_backlog_drip`                                                                                                                                                                                   |
-| `:07 :22 :37 :52` | Tubifarry/slskd unclog chain — **shares one flock**, do not run these concurrently                                                                                                                      |
-| `:17`             | `wan_shaper.sh apply` (scoped sudo)                                                                                                                                                                     |
-| daily             | `config_backup` 01:00 · `offsite_backup` 02:00 (commented until a destination is set) · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 |
-| every 6 h         | `playlist-sync`                                                                                                                                                                                         |
-| weekly            | `log_pruner` · `docker prune` · `album_art` · per-library Jellyfin scans (Fri/Sat/Sun 05:05)                                                                                                            |
+| When              | Job                                                                                                                                                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `*/5`             | `stack_watchdog`, `media_ops_status`, `qbittorrent_settings_enforce`                                                                                                                                                                |
+| `2-59/5`          | `lidarr_jellyfin_bridge` (Lidarr has no working path mapping)                                                                                                                                                                       |
+| `*/10`            | `heartbeat` (off-box dead-man's switch)                                                                                                                                                                                             |
+| `*/15`            | `slskd_login_watch`                                                                                                                                                                                                                 |
+| `5,20,35,50`      | `lidarr_monitor_sweep --no-search`                                                                                                                                                                                                  |
+| `12,27,42,57`     | `lidarr_backlog_drip`                                                                                                                                                                                                               |
+| `:07 :22 :37 :52` | Tubifarry/slskd unclog chain — **shares one flock**, do not run these concurrently                                                                                                                                                  |
+| `:17`             | `wan_shaper.sh apply` (scoped sudo)                                                                                                                                                                                                 |
+| daily             | `config_backup` 01:00 · `offsite_backup` 02:00 (commented until a destination is set) · `slskd_rescan` 03:30 · `post_update_verifier` 04:30 · `process_soulseek_imports` 05:30 · `verify-runtime` 06:15 · **`notify_digest` 09:00** |
+| every 6 h         | `playlist-sync`                                                                                                                                                                                                                     |
+| weekly            | `log_pruner` · `docker prune` · `album_art` · per-library Jellyfin scans (Fri/Sat/Sun 05:05)                                                                                                                                        |
 
 ```bash
 crontab -l                          # the real list
@@ -675,6 +723,30 @@ The pre-split `docker-compose.yml` is recoverable:
 ## Known gaps
 
 Honest list of things that are wrong or unfinished, all tracked:
+
+- **`pnpm lint` is red on three files this work did not touch.** 76 prettier
+  errors in `TRIAGE-2026-09-03.md`, `docs/decisions/0032-alert-noise-ownership.md`
+  and `docs/removed-indexers/torrent-core-2026-09-03.json` — table alignment and
+  `*emphasis*` vs `_emphasis_`, no content issues. They pre-date the ntfy
+  taxonomy branch and belong to in-flight work elsewhere, so they were left
+  alone rather than bundled into an unrelated commit. `pnpm lint:fix` clears
+  them; **CI's lint gate is red until someone does.**
+
+- **`arr_notify.sh`'s payload variable names are verified by the first real
+  import, not in advance.** The \*arr Custom Script **Test** passes exactly one
+  variable, `<app>_eventtype=Test`, so it proves invocation and confirms no
+  payload name; the names are not literals in the shipped DLLs either. The
+  script therefore dumps its whole environment once on the first real event
+  (marker-gated, in `/config/logs/arr_notify.log`) and every field degrades to
+  `imported` rather than rendering blank. Check that log after the next import
+  and correct anything thin.
+  → [ADR-0033](docs/decisions/0033-ntfy-topic-taxonomy.md)
+
+- **Jellyseerr's "now available" message has no tag and jellyseerr's own
+  title.** Its native ntfy agent hardcodes `priority = 3` and sets no tags, so
+  the configurable webhook agent went to `nas-requests` (which must be priority 4) and the native agent to `nas-media` (whose priority is 3 anyway). The lost
+  `popcorn` tag is decoration; the priority is the contract.
+  → [ADR-0033](docs/decisions/0033-ntfy-topic-taxonomy.md)
 
 - **Nothing sweeps the library for monitored-but-missing media, and the obvious
   tool is disqualified.** Cleanuparr handles the clean side; the fill side is
