@@ -126,6 +126,14 @@ POLICIES: dict[str, Policy] = {
         include=[r"^\d+\.\d+\.\d+$"],
         note="plain semver tags",
     ),
+    "ghcr.io/tinyauthapp/tinyauth": Policy(
+        # v-prefixed semver. The repo also carries -distroless variants and a
+        # steady stream of -rc/-beta/-alpha tags; the include below admits only
+        # plain releases, so the door is never offered a pre-release.
+        include=[r"^v\d+\.\d+\.\d+$"],
+        exclude=[r"-distroless$", r"-alpha", r"-beta"],
+        note="plain v-semver releases only; no -distroless, no pre-releases",
+    ),
 }
 
 

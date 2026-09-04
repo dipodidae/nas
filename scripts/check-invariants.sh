@@ -117,6 +117,7 @@ MANUAL_UPDATE_ONLY = {
     "streamystats-db":       "VectorChord/Postgres engine under live data",
     "streamystats":          "must stay in lockstep with its job server and schema",
     "streamystats-jobs":     "must stay in lockstep with the UI and schema",
+    "tinyauth":              "a bad auth container closes every protected door at once; chosen, never inherited",
 }
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
@@ -126,6 +127,16 @@ MANUAL_UPDATE_ONLY = {
 CAP_DROP_WAIVER = {}
 
 # Ports that are public on purpose. Anything else must bind 127.0.0.1.
+# The one service whose public name is not its service name. tinyauth answers
+# on auth.${PUBLIC_DOMAIN} because "auth" is what the door is called; the conf
+# is therefore auth.subdomain.conf. Recorded here rather than left to the
+# filename==subdomain assumption, so both directions of the conf<->label
+# reconciliation below stay honest instead of silently agreeing on the wrong
+# name. Do not grow this without an ADR. ADR-0034.
+ROUTE_ALIASES = {
+    "tinyauth": "auth",
+}
+
 PUBLIC_PORT_ALLOWLIST = {
     443:  "SWAG HTTPS",
     80:   "SWAG HTTP (ACME + redirect)",
@@ -776,10 +787,11 @@ for name, svc in sorted(services.items()):
         lbls = dict(x.split("=", 1) for x in lbls if "=" in x)
     if lbls.get("swag") != "enable" or name == "swag":
         continue
-    _tracked = (os.path.isfile(f"swag/proxy-confs/{name}.subdomain.conf")
-                or any(m.startswith(f"{name}.") for m in _swag_mounts))
+    _route = ROUTE_ALIASES.get(name, name)
+    _tracked = (os.path.isfile(f"swag/proxy-confs/{_route}.subdomain.conf")
+                or any(m.startswith(f"{_route}.") for m in _swag_mounts))
     _live = bool(_swag_dir) and os.path.isfile(
-        os.path.join(_swag_dir, f"{name}.subdomain.conf"))
+        os.path.join(_swag_dir, f"{_route}.subdomain.conf"))
     if _tracked:
         continue
     (_untracked if _live else _missing).append(name)
@@ -816,10 +828,12 @@ _labelled = {
         if isinstance(v.get("labels"), list) else (v.get("labels") or {})
         ).get("swag") == "enable"
 }
+_labelled_routes = {ROUTE_ALIASES.get(n, n) for n in _labelled}
 _undeclared = sorted(
     f[: -len(".subdomain.conf")]
     for f in (os.listdir("swag/proxy-confs") if os.path.isdir("swag/proxy-confs") else [])
-    if f.endswith(".subdomain.conf") and f[: -len(".subdomain.conf")] not in _labelled
+    if f.endswith(".subdomain.conf")
+    and f[: -len(".subdomain.conf")] not in _labelled_routes
 )
 if _undeclared:
     warn("swag-routes-are-declared", "ADR-0022",
@@ -1415,6 +1429,169 @@ else:
             ok("jellyfin-logging", "LibraryMonitor pinned at Information")
     except (ValueError, KeyError) as exc:
         fail("jellyfin-logging", "ADR-0008", f"{_jf_logging} is not valid: {exc}")
+
+# ==========================================================================
+# 34. One door: tinyauth's credential, its socket-lessness, and its pin
+# ==========================================================================
+# Four separate assertions, because four different things would each quietly
+# undo the design. ADR-0034.
+_ta = services.get("tinyauth")
+if _ta is None:
+    fail("tinyauth-present", "ADR-0034",
+         "there is no tinyauth service. It is the single door in front of every "
+         "browser-only surface; without it every protected proxy-conf fails "
+         "closed (502) and the stack has no login at all.")
+else:
+    _ta_env = env_of("tinyauth")
+
+    # (a) The credential is a file, never an environment variable. An env var is
+    # readable by anyone who can run `docker inspect` (ADR-0011), and the file
+    # must be mounted :ro because a container that can rewrite its own
+    # credential can escalate its own access (ADR-0033).
+    _users_in_env = sorted(
+        f"{svc}.{k}" for svc in services for k in env_of(svc)
+        if k in ("TINYAUTH_AUTH_USERS", "TINYAUTH_USERS")
+    )
+    _usersfile = _ta_env.get("TINYAUTH_AUTH_USERSFILE")
+    _users_mount = [
+        v for v in (_ta.get("volumes") or [])
+        if str(v.get("target", "")) == str(_usersfile or "\0")
+    ]
+    if _users_in_env:
+        fail("tinyauth-credential-is-a-file", "ADR-0011",
+             f"{_users_in_env} put the credential in an environment block. "
+             "`docker inspect` hands an env var to anyone who can run it. Use "
+             "TINYAUTH_AUTH_USERSFILE and `make tinyauth-users`.")
+    elif not _usersfile:
+        fail("tinyauth-credential-is-a-file", "ADR-0011",
+             "tinyauth sets neither TINYAUTH_AUTH_USERS nor "
+             "TINYAUTH_AUTH_USERSFILE, so it has no credential at all and "
+             "every login attempt fails.")
+    elif not _users_mount:
+        fail("tinyauth-credential-is-a-file", "ADR-0011",
+             f"TINYAUTH_AUTH_USERSFILE={_usersfile} but nothing is mounted "
+             "there, so the container starts with no credential.")
+    elif not _users_mount[0].get("read_only"):
+        fail("tinyauth-credential-is-a-file", "ADR-0033",
+             f"{_usersfile} is mounted read-WRITE. A container that can rewrite "
+             "its own credential file can escalate its own access. Add :ro.")
+    else:
+        ok("tinyauth-credential-is-a-file", f"{_usersfile} mounted :ro")
+
+    # (b) ... and the rendered file still matches .env, which is the one place a
+    # human edits it. The bcrypt hash contains `$`, which Make re-expanded once
+    # already (`$2: unbound variable`, 2026-09-04); this is what notices if the
+    # rendering ever mangles it again, or if .env moved on without a re-render.
+    _src = "secrets/tinyauth-users"
+    _u = _env_file_value("TINYAUTH_USER")
+    _h = _env_file_value("TINYAUTH_PASSWORD_HASH")
+    if _u is None or _h is None:
+        warn("tinyauth-credential-rendered", "ADR-0034",
+             ".env is unreadable from here (expected in CI), so the rendered "
+             f"{_src} could not be compared against it.")
+    elif not os.path.exists(_src):
+        fail("tinyauth-credential-rendered", "ADR-0034",
+             f"{_src} does not exist. Run `make tinyauth-users`. Without it the "
+             "bind mount is a DIRECTORY Docker creates, tinyauth reads no "
+             "credential, and every login fails.")
+    else:
+        _want = f"{_u}:{_h}\n"
+        _got = open(_src, encoding="utf-8", errors="replace").read()
+        _mode = oct(os.stat(_src).st_mode & 0o777)
+        if _got != _want:
+            fail("tinyauth-credential-rendered", "ADR-0034",
+                 f"{_src} does not match TINYAUTH_USER/TINYAUTH_PASSWORD_HASH in "
+                 ".env. Re-run `make tinyauth-users`; if it still differs, the "
+                 "`$` in the bcrypt hash is being re-expanded somewhere.")
+        elif _mode != "0o600":
+            fail("tinyauth-credential-rendered", "ADR-0034",
+                 f"{_src} is mode {_mode}, not 0o600.")
+        else:
+            ok("tinyauth-credential-rendered", f"{_src} 0600, matches .env")
+
+    # (c) No label provider, therefore no Docker socket and no dockerproxy
+    # route. Tinyauth's default LABELPROVIDER is `auto`, which discovers per-app
+    # ACLs from Docker labels and so needs the socket. dockerproxy is the sole
+    # socket holder (ADR-0013) and was narrowed to what autoheal alone needs
+    # (ADR-0025); this is the assertion that keeps it that way.
+    _lp = _ta_env.get("TINYAUTH_LABELPROVIDER")
+    _sock = [v for v in (_ta.get("volumes") or [])
+             if "docker.sock" in str(v.get("source", ""))]
+    _proxy_route = [
+        k for k, v in _ta_env.items()
+        if v and "dockerproxy" in str(v)
+    ]
+    if _lp != "none":
+        fail("tinyauth-no-socket", "ADR-0013",
+             f"TINYAUTH_LABELPROVIDER is {_lp!r}, not 'none'. `auto` and "
+             "`docker` discover per-app ACLs from Docker LABELS, which needs the "
+             "Docker socket. Express per-app rules as TINYAUTH_APPS_[NAME]_* "
+             "variables instead.")
+    elif _sock:
+        fail("tinyauth-no-socket", "ADR-0013",
+             f"tinyauth mounts {_sock}. dockerproxy is the only container in "
+             "this stack permitted to touch the Docker socket.")
+    elif _proxy_route:
+        fail("tinyauth-no-socket", "ADR-0025",
+             f"tinyauth points {_proxy_route} at dockerproxy. The proxy was "
+             "narrowed to CONTAINERS/POST/PING/VERSION for autoheal alone; an "
+             "auth server has no business there.")
+    else:
+        ok("tinyauth-no-socket", "LABELPROVIDER=none, no socket, no proxy route")
+
+    # (d) Its healthcheck probes nothing outside its own container. The image
+    # ships `tinyauth healthcheck`, which GETs its own 127.0.0.1:3000. A probe
+    # that reaches an OAuth provider or another container turns someone else's
+    # outage into every door closing. ADR-0009.
+    _hc = _ta.get("healthcheck") or {}
+    _test = " ".join(str(x) for x in (_hc.get("test") or []))
+    _external = [tok for tok in ("http://", "https://") if tok in _test] and not any(
+        h in _test for h in ("127.0.0.1", "localhost", "::1"))
+    if _hc.get("disable"):
+        fail("tinyauth-healthcheck-local", "ADR-0009",
+             "tinyauth has no healthcheck, so swag's depends_on cannot wait for "
+             "it and autoheal cannot restart it.")
+    elif _external:
+        fail("tinyauth-healthcheck-local", "ADR-0009",
+             f"tinyauth's healthcheck reaches outside its own container: {_test!r}. "
+             "A dependency in a healthcheck makes someone else's outage close "
+             "every protected door.")
+    else:
+        ok("tinyauth-healthcheck-local", _test or "container-local")
+
+    # (e) The tag is pinned, and the reason is written down. A floating auth
+    # container is one bad upstream release away from closing every door.
+    _img = str(_ta.get("image", ""))
+    _tag = _img.rsplit(":", 1)[-1] if ":" in _img else ""
+    if _tag in ("", "latest", "nightly") or not re.match(r"^v?\d+\.\d+\.\d+", _tag):
+        fail("tinyauth-pinned", "ADR-0006",
+             f"tinyauth's image is {_img!r}. Pin a concrete version: a bad auth "
+             "container closes every protected door at once, so this update is "
+             "chosen, never inherited.")
+    elif "tinyauth" not in MANUAL_UPDATE_ONLY:
+        fail("tinyauth-pinned", "ADR-0024",
+             "tinyauth is pinned but absent from MANUAL_UPDATE_ONLY, so nothing "
+             "records why a human must apply that update deliberately.")
+    else:
+        ok("tinyauth-pinned", f"{_tag}, MANUAL_UPDATE_ONLY")
+
+# ==========================================================================
+# 35. Nothing under secrets/ is tracked by git
+# ==========================================================================
+# secrets/ is gitignored, which is necessary and not sufficient: `git add -f`
+# and a stale index entry both defeat it, and this repo has already had a
+# `.sudo-pwd` sitting one `git add -A` away from the history. The credential for
+# the entire public surface lives here now. ADR-0034.
+_tracked_secrets = subprocess.run(
+    ["git", "ls-files", "secrets"], capture_output=True, text=True,
+).stdout.split()
+if _tracked_secrets:
+    fail("secrets-not-tracked", "ADR-0034",
+         f"git tracks {_tracked_secrets}. These are credentials. "
+         "`git rm --cached <path>` and confirm they never reached a pushed commit.")
+else:
+    ok("secrets-not-tracked", "nothing under secrets/ is tracked")
+
 
 # ==========================================================================
 # The cron-fleet tables in the pipeline doc are generated, not hand-written

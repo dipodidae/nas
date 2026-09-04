@@ -23,7 +23,7 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 .PHONY: help check lint config diun-manifest bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
         submodules install-hooks verify-runtime backup-offsite \
-        notify-test notify-acl
+        notify-test notify-acl tinyauth-users
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -72,7 +72,7 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	@# permission bits and fail with `Permission denied` on influxdb's config.
 	@# Docker's default -- auto-creating the bind-mount source as root:root --
 	@# is correct there. Do not add it to this loop. ADR-0023.
-	@for d in qui ntfy diun beszel beszel-agent; do \
+	@for d in qui ntfy diun beszel beszel-agent tinyauth; do \
 	  p="$(CONFIG_DIRECTORY)/$$d"; \
 	  echo "==> $$p -> $(PUID):$(PGID)"; \
 	  mkdir -p "$$p"; \
@@ -81,6 +81,36 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	  else echo "    already correct"; fi; \
 	done
 	@echo "bootstrap complete."
+
+# The single credential for the whole public surface. It lives in .env (one
+# place a human edits) and reaches the container as a 0600 file mounted :ro --
+# never an environment variable, which `docker inspect` would hand to anyone
+# who can run it (ADR-0011), and :ro because a container that can rewrite its
+# own credential can escalate its own access (ADR-0033). ADR-0034.
+#
+# The bcrypt hash contains `$$`. Nothing here interpolates: sed reads .env
+# verbatim and printf writes it verbatim, and `make check` asserts the rendered
+# file still matches .env character for character.
+tinyauth-users: ## Render secrets/tinyauth-users (0600) from TINYAUTH_* in .env
+	@# NOT $(call getenv,...): that expands at Make-parse time, so the `$$` in a
+	@# bcrypt hash is re-read first by Make and then by bash -u, which failed
+	@# with `$$2: unbound variable` (measured 2026-09-04). Reading it inside the
+	@# recipe's own shell keeps the value in a shell variable, unexpanded.
+	@u=$$(sed -n 's/^TINYAUTH_USER=//p' $(ENV_FILE) 2>/dev/null | tail -1); \
+	h=$$(sed -n 's/^TINYAUTH_PASSWORD_HASH=//p' $(ENV_FILE) 2>/dev/null | tail -1); \
+	if [ -z "$$u" ] || [ -z "$$h" ]; then \
+	  echo "!!! TINYAUTH_USER and TINYAUTH_PASSWORD_HASH must both be set in $(ENV_FILE)." >&2; \
+	  echo "    Mint a hash with:" >&2; \
+	  echo "      docker run --rm -it ghcr.io/tinyauthapp/tinyauth:v5.1.3 user create --interactive" >&2; \
+	  exit 2; \
+	fi; \
+	mkdir -p secrets; \
+	umask 077; \
+	printf '%s:%s\n' "$$u" "$$h" > secrets/tinyauth-users; \
+	chmod 0600 secrets/tinyauth-users; \
+	echo "wrote secrets/tinyauth-users ($$(stat -c '%a %U:%G' secrets/tinyauth-users)) for user $$u"
+	@echo "tinyauth reads it at start only -- restart to apply:"
+	@echo "  docker compose up -d tinyauth"
 
 up: ## Start the whole stack (see the ongehoord caveat in its compose file)
 	@docker compose up -d

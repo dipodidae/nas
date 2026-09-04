@@ -14,7 +14,7 @@ project, one reverse proxy, one 10 TB disk.
 | Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0                |
 | Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                           |
 | Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe (42 % worn, SMART-watched) |
-| Services        | 32 (4 built locally; ALL watched by diun, 10 manual-update)     |
+| Services        | 33 (4 built locally; ALL watched by diun, 11 manual-update)     |
 | Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01       |
 
 ---
@@ -205,16 +205,17 @@ listed with its reason in `MANUAL_UPDATE_ONLY` in the checker.
 
 ### Control plane — `compose/infra.yaml`
 
-| Service        | Image                         | Ports            | wt     | Notes                                                                                                                        |
-| -------------- | ----------------------------- | ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `swag`         | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                           |
-| `dockerproxy`  | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md) |
-| `autoheal`     | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                     |
-| `ntfy`         | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                  |
-| `beszel`       | henrygd/beszel                | `127.0.0.1:8090` | **NO** | Trend lines: CPU/RAM/disk/per-container history [ADR-0028](docs/decisions/0028-beszel-trend-lines.md)                        |
-| `beszel-agent` | henrygd/beszel-agent          | —                | **NO** | Collector. **No host networking** — see the ADR before "fixing" that                                                         |
-| `diun`         | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md) |
-| `scrutiny`     | ghcr.io/analogj/scrutiny      | `127.0.0.1:8086` | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md) |
+| Service        | Image                         | Ports            | wt     | Notes                                                                                                                                   |
+| -------------- | ----------------------------- | ---------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `swag`         | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                                      |
+| `tinyauth`     | ghcr.io/tinyauthapp/tinyauth  | `127.0.0.1:3005` | **NO** | **One forward-auth door for every browser-only surface.** Pinned; no Docker socket [ADR-0034](docs/decisions/0034-one-door-tinyauth.md) |
+| `dockerproxy`  | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md)            |
+| `autoheal`     | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                                |
+| `ntfy`         | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                             |
+| `beszel`       | henrygd/beszel                | `127.0.0.1:8090` | **NO** | Trend lines: CPU/RAM/disk/per-container history [ADR-0028](docs/decisions/0028-beszel-trend-lines.md)                                   |
+| `beszel-agent` | henrygd/beszel-agent          | —                | **NO** | Collector. **No host networking** — see the ADR before "fixing" that                                                                    |
+| `diun`         | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md)            |
+| `scrutiny`     | ghcr.io/analogj/scrutiny      | `127.0.0.1:8086` | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md)            |
 
 ### Download path — `compose/media-download.yaml`
 
@@ -293,13 +294,14 @@ auto-proxy mod is not installed here, so `swag=enable` is documentation and
 answering `200`); `slskd` had a conf and no label, a public route the compose
 file never declared. `make check` now asserts both directions.
 
-All 16 confs are tracked in `swag/proxy-confs/` and bind-mounted read-only —
+All 17 confs are tracked in `swag/proxy-confs/` and bind-mounted read-only —
 nine of them existed nowhere else, six being hand-written with no upstream
 sample. → [ADR-0022](docs/decisions/0022-proxy-confs-are-tracked.md)
 
 | URL                                                                                            | Service                                                      |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | `4eva.me`                                                                                      | `4eva-rootpage` (apex, via the mounted `root.conf`)          |
+| `auth.`                                                                                        | `tinyauth` — the login page. Never protected by itself       |
 | `4eva.me/ops.html`                                                                             | Live stack dashboard, fed by `media_ops_status.py`           |
 | `jellyfin.` · `jellyseerr.`                                                                    | Playback and requests                                        |
 | `sonarr.` · `radarr.` · `lidarr.` · `bazarr.` · `prowlarr.` · `lingarr.`                       | The \*arr suite                                              |

@@ -44,3 +44,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0031](0031-considered-and-rejected.md)            | Compose UIs, second notifiers/cleaners, socket mounts, Dozzle, Gatus        |
 | [0032](0032-alert-noise-ownership.md)              | The watchdog owns indexer/\*arr health alerting; onHealthIssue off          |
 | [0033](0033-ntfy-topic-taxonomy.md)                | Six ntfy lanes: priority carries severity, topic carries audience           |
+| [0034](0034-one-door-tinyauth.md)                  | One tinyauth door for every browser-only surface; sync clients excluded     |

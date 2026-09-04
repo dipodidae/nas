@@ -53,6 +53,7 @@ services:
       # Mounted file-by-file rather than as a directory ON PURPOSE: SWAG writes
       # 372 *.conf.sample files into /config/nginx/proxy-confs at every start, so
       # a read-only mount over the whole directory breaks its startup.
+      - ../swag/proxy-confs/auth.subdomain.conf:/config/nginx/proxy-confs/auth.subdomain.conf:ro
       - ../swag/proxy-confs/bazarr.subdomain.conf:/config/nginx/proxy-confs/bazarr.subdomain.conf:ro
       - ../swag/proxy-confs/cleanuparr.subdomain.conf:/config/nginx/proxy-confs/cleanuparr.subdomain.conf:ro
       - ../swag/proxy-confs/jellyfin.subdomain.conf:/config/nginx/proxy-confs/jellyfin.subdomain.conf:ro
@@ -80,12 +81,103 @@ services:
     depends_on:
       4eva-rootpage:
         condition: service_healthy
+      # Ordering only. nginx must never HARD-depend on the auth container:
+      # the auth location uses a variable upstream + the Docker resolver, so an
+      # absent tinyauth makes protected routes fail CLOSED (502) while
+      # jellyfin/nextcloud/ntfy keep serving. This condition just stops swag
+      # from starting into a window where every protected door is 502.
+      # ADR-0034.
+      tinyauth:
+        condition: service_healthy
     healthcheck:
       test: [CMD, curl, -f, 'https://localhost:443', -k]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 90s
+
+  # tinyauth -- ONE forward-auth door in front of every browser-only surface.
+  # ADR-0034.
+  #
+  # INVARIANT: LABELPROVIDER=none. Tinyauth's default is `auto`, which
+  # discovers per-app ACLs from Docker LABELS and therefore needs the Docker
+  # socket. dockerproxy is the sole socket holder (ADR-0013) and was narrowed
+  # to what autoheal alone needs (ADR-0025); tinyauth gets neither the socket
+  # nor a route to the proxy. Every per-app rule would be a
+  # TINYAUTH_APPS_[NAME]_* variable instead.
+  #
+  # INVARIANT: the credential is a 0600 file mounted :ro, never an
+  # environment variable -- an env var is readable by anyone who can run
+  # `docker inspect` (ADR-0011), and :ro specifically because a container that
+  # can rewrite its own credential file can escalate its own access (ADR-0033).
+  # Render it with `make tinyauth-users`.
+  #
+  # INVARIANT: the tag is pinned. A bad auth container closes every protected
+  # door at once, so this update is chosen, never inherited. `diun` still
+  # reports newer tags (ADR-0024); MANUAL_UPDATE_ONLY records the reason.
+  tinyauth:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: ghcr.io/tinyauthapp/tinyauth:v5.1.3
+    container_name: tinyauth
+    # Not a linuxserver image and no root init to chown its state dir. The
+    # image's own `tinyauth` user is uid/gid 1000, so this matches upstream's
+    # intent rather than fighting it -- but ${CONFIG_DIRECTORY}/tinyauth must
+    # already be ${PUID}:${PGID} or it crash-loops on `permission denied`.
+    # `make bootstrap`. ADR-0014.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    environment:
+      - TINYAUTH_APPURL=https://auth.${PUBLIC_DOMAIN}
+      # One cookie for *.${PUBLIC_DOMAIN}, so one login serves every protected
+      # subdomain. Upstream default is already true; stated because it is the
+      # whole point of the design.
+      - TINYAUTH_AUTH_SUBDOMAINSENABLED=true
+      # Every route here is HTTPS, so the session cookie may be Secure-only.
+      # Upstream default is false.
+      - TINYAUTH_AUTH_SECURECOOKIE=true
+      - TINYAUTH_AUTH_USERSFILE=/secrets/users
+      - TINYAUTH_LABELPROVIDER=none
+      - TINYAUTH_DATABASE_PATH=/data/tinyauth.db
+      # Who tried to get in, and failed. Off by default upstream.
+      - TINYAUTH_LOG_STREAMS_AUDIT_ENABLED=true
+      # Deliberately NOT set: TINYAUTH_AUTH_TRUSTEDPROXIES. It exists only to
+      # make IP-based ACLs work, and there are none: container IPs on
+      # nas-network are not static, and trusting 172.30.0.0/24 would trust
+      # every container on the bridge. It logs a WRN about this at startup --
+      # that warning is expected. ADR-0034.
+      # Deliberately NOT loosened: LOGINMAXRETRIES (3) and LOGINTIMEOUT (300s)
+      # keep their upstream defaults.
+      - TINYAUTH_ANALYTICS_ENABLED=false
+    volumes:
+      - ${CONFIG_DIRECTORY}/tinyauth:/data
+      - ../secrets/tinyauth-users:/secrets/users:ro
+    ports:
+      # Loopback only; the public side is SWAG's auth.${PUBLIC_DOMAIN}.
+      # 3005, not 3000: lidarr-bulk already owns 127.0.0.1:3000, which
+      # `docker compose config` renders happily and only fails at `up` time as
+      # a bind error on whichever container starts second. `make check`'s
+      # port-collision assertion caught it. ADR-0023.
+      - '127.0.0.1:3005:3000'
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      # Self-contained over SQLite with a container-local healthcheck, so it
+      # qualifies. It has no stop_grace_period, so the ADR-0010 relationship
+      # (autoheal stop timeout 150s >= the longest monitored grace period,
+      # CURL_TIMEOUT 180s > that) is unchanged by adding it.
+      - autoheal=true
+    # The image ships `tinyauth healthcheck`, which GETs its own
+    # http://127.0.0.1:3000 and nothing else -- no OAuth provider, no network,
+    # no second container. Restated here rather than inherited so the
+    # dependency-free property is visible in this repo. ADR-0009.
+    healthcheck:
+      test: [CMD, tinyauth, healthcheck]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Read-only Docker API proxy. INVARIANT: the only container in this stack
   # permitted to mount /var/run/docker.sock. ADR-0013.

@@ -44,3 +44,10 @@ vpn-configs/
 # local, non-committed compose tweaks (see docs/decisions/0000-compose-layout.md)
 compose.override.yaml
 compose.override.yml
+
+# Rendered credential files. `secrets/tinyauth-users` is the single credential
+# for the whole public surface, rendered from .env by `make tinyauth-users`
+# (ADR-0034). The whole directory is ignored, and `make check` asserts nothing
+# under it is TRACKED -- gitignoring is necessary and not sufficient, and this
+# very file was staged once by a `git add -A` before the entry existed.
+secrets/
