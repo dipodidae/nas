@@ -12,21 +12,21 @@ Captured on branch `harden/pipeline`, from `main` @ `aeb1720`.
 
 `docker inspect -f '{{index .RepoDigests 0}}'` on each running container's image:
 
-| Service | Tag | Digest | Image built |
-| --- | --- | --- | --- |
-| lidarr | `lscr.io/linuxserver/lidarr:nightly` | `sha256:24322462f93e00da24c4734aad243d294255d0d4c99e6d4f1ff93d587c1798b6` | 2026-09-02 |
-| slskd | `slskd/slskd:latest` | `sha256:ecd4026d4f8fb504e2cc55323efa2c1f5b56d20d3686b018249cc36b48ea17a6` | 2026-07-19 |
-| jellyfin | `lscr.io/linuxserver/jellyfin:10.11.11ubu2604-ls47` | `sha256:438e44330078e6b1a810fdec9dc0f4773e6595edb137c5eb4417a516da4c7f0e` | 2026-09-01 |
-| autoheal | `willfarrell/autoheal:latest` | `sha256:515e6fa8a610eb7dcfea39280a56ec7770917f9f6e30b7371f9eb3228bae26d0` | 2026-09-02 |
+| Service  | Tag                                                 | Digest                                                                    | Image built |
+| -------- | --------------------------------------------------- | ------------------------------------------------------------------------- | ----------- |
+| lidarr   | `lscr.io/linuxserver/lidarr:nightly`                | `sha256:24322462f93e00da24c4734aad243d294255d0d4c99e6d4f1ff93d587c1798b6` | 2026-09-02  |
+| slskd    | `slskd/slskd:latest`                                | `sha256:ecd4026d4f8fb504e2cc55323efa2c1f5b56d20d3686b018249cc36b48ea17a6` | 2026-07-19  |
+| jellyfin | `lscr.io/linuxserver/jellyfin:10.11.11ubu2604-ls47` | `sha256:438e44330078e6b1a810fdec9dc0f4773e6595edb137c5eb4417a516da4c7f0e` | 2026-09-01  |
+| autoheal | `willfarrell/autoheal:latest`                       | `sha256:515e6fa8a610eb7dcfea39280a56ec7770917f9f6e30b7371f9eb3228bae26d0` | 2026-09-02  |
 
 Application versions, from each service's own API:
 
-| Component | Version | Notes |
-| --- | --- | --- |
-| **Jellyfin** | **10.11.11** | `GET /System/Info`. Within the range of the open full-rescan bug (#16729, reported vs 10.11.8). |
-| **Lidarr** | **3.1.5.5056** (`packageVersion 3.1.5.5056-ls213`) | `GET /api/v1/system/status`. Branch **`nightly`**, `isNetCore: true`, runtime **.NET 8.0.27**. Plugin support present. |
-| **Tubifarry** | **2.1.1.0** | `GET /api/v1/system/plugins`. Built against `Lidarr.Core 2.1.1`, target `.NETCoreApp v8.0`. |
-| **slskd** | **0.26.0.0** (`0.26.0.0+e42a525d`) | `GET /api/v0/application`. `isUpdateAvailable: false`. |
+| Component     | Version                                            | Notes                                                                                                                  |
+| ------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Jellyfin**  | **10.11.11**                                       | `GET /System/Info`. Within the range of the open full-rescan bug (#16729, reported vs 10.11.8).                        |
+| **Lidarr**    | **3.1.5.5056** (`packageVersion 3.1.5.5056-ls213`) | `GET /api/v1/system/status`. Branch **`nightly`**, `isNetCore: true`, runtime **.NET 8.0.27**. Plugin support present. |
+| **Tubifarry** | **2.1.1.0**                                        | `GET /api/v1/system/plugins`. Built against `Lidarr.Core 2.1.1`, target `.NETCoreApp v8.0`.                            |
+| **slskd**     | **0.26.0.0** (`0.26.0.0+e42a525d`)                 | `GET /api/v0/application`. `isUpdateAvailable: false`.                                                                 |
 
 **Two version facts that matter for later phases:**
 
@@ -110,19 +110,19 @@ connection cannot work regardless of how it is configured.
 
 Event toggles, with the capability flag beside each:
 
-| Toggle | Value | `supportsOn…` |
-| --- | --- | --- |
-| `onReleaseImport` | **True** | True |
-| `onRename` | **True** | True |
-| `onTrackRetag` | **True** | True |
-| `onUpgrade` | **True** | True |
-| `onArtistDelete` | **False** (deliberate, §10) | True |
-| `onAlbumDelete` | **False** (deliberate, §10) | True |
-| `onArtistAdd` | False | True |
-| `onGrab` | False | True |
-| `onHealthIssue` / `onHealthRestored` | False | True |
-| `onApplicationUpdate` | False | True |
-| `onDownloadFailure` / `onImportFailure` | False | **False** (unsupported) |
+| Toggle                                  | Value                       | `supportsOn…`           |
+| --------------------------------------- | --------------------------- | ----------------------- |
+| `onReleaseImport`                       | **True**                    | True                    |
+| `onRename`                              | **True**                    | True                    |
+| `onTrackRetag`                          | **True**                    | True                    |
+| `onUpgrade`                             | **True**                    | True                    |
+| `onArtistDelete`                        | **False** (deliberate, §10) | True                    |
+| `onAlbumDelete`                         | **False** (deliberate, §10) | True                    |
+| `onArtistAdd`                           | False                       | True                    |
+| `onGrab`                                | False                       | True                    |
+| `onHealthIssue` / `onHealthRestored`    | False                       | True                    |
+| `onApplicationUpdate`                   | False                       | True                    |
+| `onDownloadFailure` / `onImportFailure` | False                       | **False** (unsupported) |
 
 The four `True` toggles are firing into the dead connection described above — they cost a
 wasted HTTP call per import and nothing else.
@@ -131,11 +131,11 @@ wasted HTTP call per import and nothing else.
 
 ### Libraries — `GET /Library/VirtualFolders`
 
-| Name | CollectionType | ItemId | Location |
-| --- | --- | --- | --- |
-| Music | `music` | `7e64e319657a9516ec78490da03edccb` | `/data/movies/music` |
-| Movies | `movies` | `f137a2dd21bbc1b99aa5c0f6bf02a805` | `/data/movies/movies` |
-| TV Shows | `tvshows` | `767bffe4f11c93ef34b805451a696a4e` | `/data/movies/series` |
+| Name     | CollectionType | ItemId                             | Location              |
+| -------- | -------------- | ---------------------------------- | --------------------- |
+| Music    | `music`        | `7e64e319657a9516ec78490da03edccb` | `/data/movies/music`  |
+| Movies   | `movies`       | `f137a2dd21bbc1b99aa5c0f6bf02a805` | `/data/movies/movies` |
+| TV Shows | `tvshows`      | `767bffe4f11c93ef34b805451a696a4e` | `/data/movies/series` |
 
 **Exactly one music library, one location.** This eliminates "a second music library" as an
 explanation for the §1.1 count discrepancy before it is investigated.
@@ -164,14 +164,14 @@ Full `slskd.yml` is in the repo at `.docker-config/slskd/slskd.yml` (5638 bytes,
 modified 2026-09-02). The settings that Phase 4 proposed to adopt are recorded here because
 **most of them are already in place**:
 
-| Phase 4 proposal | Actual state on this box |
-| --- | --- |
-| 4.1 `retention:` for transfers and files | **ALREADY SET.** `search: 1440`; download `succeeded 1440 / errored 10080 / cancelled 60 / failed 10080`; `files.complete: 20160`, `files.incomplete: 43200`; `logs: 180`. |
-| 4.2 `shares.cache.retention` | **ALREADY SET** to `10080` (weekly), with `storage_mode: disk` and `workers: 4`. The comment records that a memory cache caused a 45-min unbound-port window and an autoheal restart loop on 2026-09-02. |
-| 4.3 `transfers.download.destination.permissions.mode` | **ALREADY SET** to `644`. |
-| 4.3 `transfers.download.retry` | **ABSENT.** Genuinely available. |
-| 4.4 `integrations.webhooks` / `integrations.scripts` | **BOTH EMPTY** (`{}`). Genuinely available. |
-| 4.7 `metrics.enabled` | **`false`.** Genuinely available; `/metrics` route configured, auth enabled. |
+| Phase 4 proposal                                      | Actual state on this box                                                                                                                                                                                 |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.1 `retention:` for transfers and files              | **ALREADY SET.** `search: 1440`; download `succeeded 1440 / errored 10080 / cancelled 60 / failed 10080`; `files.complete: 20160`, `files.incomplete: 43200`; `logs: 180`.                               |
+| 4.2 `shares.cache.retention`                          | **ALREADY SET** to `10080` (weekly), with `storage_mode: disk` and `workers: 4`. The comment records that a memory cache caused a 45-min unbound-port window and an autoheal restart loop on 2026-09-02. |
+| 4.3 `transfers.download.destination.permissions.mode` | **ALREADY SET** to `644`.                                                                                                                                                                                |
+| 4.3 `transfers.download.retry`                        | **ABSENT.** Genuinely available.                                                                                                                                                                         |
+| 4.4 `integrations.webhooks` / `integrations.scripts`  | **BOTH EMPTY** (`{}`). Genuinely available.                                                                                                                                                              |
+| 4.7 `metrics.enabled`                                 | **`false`.** Genuinely available; `/metrics` route configured, auth enabled.                                                                                                                             |
 
 Other values captured for later reference:
 
@@ -198,10 +198,10 @@ server.state = "Connected, LoggedIn"
 
 28 active `cron_job.py`-wrapped entries. Classified by whether they declare ok-codes:
 
-| Declares `--ok-codes` | Count | Jobs |
-| --- | --- | --- |
-| **Explicit** | **2** | `docker-prune` (`0`), `verify-runtime` (`0`) |
-| **Implicit `0,1`** | **26** | everything else, including **`lidarr-jellyfin-bridge`** |
+| Declares `--ok-codes` | Count  | Jobs                                                    |
+| --------------------- | ------ | ------------------------------------------------------- |
+| **Explicit**          | **2**  | `docker-prune` (`0`), `verify-runtime` (`0`)            |
+| **Implicit `0,1`**    | **26** | everything else, including **`lidarr-jellyfin-bridge`** |
 
 The Phase 5.1 premise is **CONFIRMED**: 26 of 28 jobs inherit a default that swallows
 exit 1, and the stage-4 bridge is one of them. `cron_job.py`'s own docstring states the
@@ -218,13 +218,13 @@ The Music scan is deliberately after the 04:45 `album_art.py` cover backfill.
 
 ## 7. Baseline verification results
 
-| Check | Command | Result |
-| --- | --- | --- |
-| Compose invariants | `make check` | **PASS** — "invariants hold: 49 assertions over 32 services, 0 warning(s)" |
-| Containers | `docker compose ps` | 32/32 up; all with healthchecks report healthy |
-| Lidarr health | `GET /api/v1/health` | `[]` |
-| slskd Soulseek login | `GET /api/v0/application` | `Connected, LoggedIn` |
-| Bridge cursor | `logs/lidarr_jellyfin_bridge.json` | `{"cursor": "2026-09-04T07:57:19Z"}` |
+| Check                | Command                            | Result                                                                     |
+| -------------------- | ---------------------------------- | -------------------------------------------------------------------------- |
+| Compose invariants   | `make check`                       | **PASS** — "invariants hold: 49 assertions over 32 services, 0 warning(s)" |
+| Containers           | `docker compose ps`                | 32/32 up; all with healthchecks report healthy                             |
+| Lidarr health        | `GET /api/v1/health`               | `[]`                                                                       |
+| slskd Soulseek login | `GET /api/v0/application`          | `Connected, LoggedIn`                                                      |
+| Bridge cursor        | `logs/lidarr_jellyfin_bridge.json` | `{"cursor": "2026-09-04T07:57:19Z"}`                                       |
 
 `make verify-runtime` was **not** run during baseline capture. It is gated behind
 `VERIFY_NOTIFY ?= 0` (Makefile:209) and only pushes when `VERIFY_NOTIFY=1`, which the 06:15
@@ -248,25 +248,24 @@ DEFAULT_FIRST_RUN_MINUTES = 30
 
 State of the Phase 3 proposals against the code as it stands:
 
-| Phase 3 item | Actual state |
-| --- | --- |
-| 3.4 "page until caught up" | **ALREADY DONE.** `fetch_history` pages backwards until it passes the cursor, bounded by `MAX_HISTORY_PAGES=10` (2000 records). The "single `pageSize=1000` grab" the prompt describes is not this code. |
-| 3.4 use `id` not `date` | **OPEN.** Cursor is an ISO date (`2026-09-04T07:57:19Z`) and `changed_folders` advances it with `max(cursor, date)`. |
-| 3.4 atomic cursor write | **OPEN.** `save_cursor` is a bare `state_path.write_text(...)`. |
-| 3.4 `cursor.schema_version` | **OPEN.** State file is `{"cursor": "..."}` only. |
-| 3.3 confirm effect before advancing | **OPEN.** Cursor advances on POST success. |
-| 3.2 two-tier dispatch | **OPEN.** Single `POST /Library/Media/Updated` batch. |
-| 3.2 `UpdateType` field | **OPEN.** Not sent. |
-| 3.5 `artistFolderImported` | **OPEN.** Not in `FILE_EVENTS`. |
-| Exit 2 on unmappable | **PRESENT** — §10-protected, unchanged. |
+| Phase 3 item                        | Actual state                                                                                                                                                                                             |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3.4 "page until caught up"          | **ALREADY DONE.** `fetch_history` pages backwards until it passes the cursor, bounded by `MAX_HISTORY_PAGES=10` (2000 records). The "single `pageSize=1000` grab" the prompt describes is not this code. |
+| 3.4 use `id` not `date`             | **OPEN.** Cursor is an ISO date (`2026-09-04T07:57:19Z`) and `changed_folders` advances it with `max(cursor, date)`.                                                                                     |
+| 3.4 atomic cursor write             | **OPEN.** `save_cursor` is a bare `state_path.write_text(...)`.                                                                                                                                          |
+| 3.4 `cursor.schema_version`         | **OPEN.** State file is `{"cursor": "..."}` only.                                                                                                                                                        |
+| 3.3 confirm effect before advancing | **OPEN.** Cursor advances on POST success.                                                                                                                                                               |
+| 3.2 two-tier dispatch               | **OPEN.** Single `POST /Library/Media/Updated` batch.                                                                                                                                                    |
+| 3.2 `UpdateType` field              | **OPEN.** Not sent.                                                                                                                                                                                      |
+| 3.5 `artistFolderImported`          | **OPEN.** Not in `FILE_EVENTS`.                                                                                                                                                                          |
+| Exit 2 on unmappable                | **PRESENT** — §10-protected, unchanged.                                                                                                                                                                  |
 
 ## 9. Open `[VERIFY]` items after Phase 0
 
-| # | Claim | Status after baseline |
-| --- | --- | --- |
-| 1.3 | Soulseek login handshake "hardcoded 5000 ms" | **Partially refuted.** `soulseek.connection.timeout.connect` is explicitly `10000` in our config. Whatever produces the 5000 ms figure, it is **not** this setting. Source still to be found before the claim is rewritten. |
-| 3.5 | `artistFolderImported` fires on this setup | **Unresolved.** Needs a history query for the event type. |
-| 3.7 | 10.11.x rescans the whole library on any new item | **Unresolved.** We are on 10.11.11; must be measured here. |
-| 4.6 | Tubifarry QueueCleaner overlaps `lidarr_queue_unstick.py` | **Refuted for this box.** QueueCleaner is a 2.2.x feature; we run **2.1.1.0**. Not adoptable without a GUID-changing migration. |
-| 4.1/4.2/4.3 | slskd native features not yet adopted | **Largely refuted.** `retention`, `shares.cache.retention`, and download permissions are already configured. Only `transfers.download.retry`, webhooks/scripts, and metrics remain unadopted. |
-
+| #           | Claim                                                     | Status after baseline                                                                                                                                                                                                       |
+| ----------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.3         | Soulseek login handshake "hardcoded 5000 ms"              | **Partially refuted.** `soulseek.connection.timeout.connect` is explicitly `10000` in our config. Whatever produces the 5000 ms figure, it is **not** this setting. Source still to be found before the claim is rewritten. |
+| 3.5         | `artistFolderImported` fires on this setup                | **Unresolved.** Needs a history query for the event type.                                                                                                                                                                   |
+| 3.7         | 10.11.x rescans the whole library on any new item         | **Unresolved.** We are on 10.11.11; must be measured here.                                                                                                                                                                  |
+| 4.6         | Tubifarry QueueCleaner overlaps `lidarr_queue_unstick.py` | **Refuted for this box.** QueueCleaner is a 2.2.x feature; we run **2.1.1.0**. Not adoptable without a GUID-changing migration.                                                                                             |
+| 4.1/4.2/4.3 | slskd native features not yet adopted                     | **Largely refuted.** `retention`, `shares.cache.retention`, and download permissions are already configured. Only `transfers.download.retry`, webhooks/scripts, and metrics remain unadopted.                               |
