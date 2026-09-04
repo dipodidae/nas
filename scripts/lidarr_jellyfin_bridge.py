@@ -48,12 +48,36 @@ printed a WARNING and still returned 0, and `cron_job.py` treats 0 and 1 alike
 **fatal**, and the cursor is left where it is so the album is retried rather
 than skipped past forever.
 
+The cursor
+----------
+The cursor is a **history id high-water mark**, not a timestamp, and the state
+file is written atomically. Both were data-loss paths, measured 2026-09-04:
+
+* **Timestamps tie.** 600 live history records held only 125 distinct dates,
+  and one single second was shared by 22 records. The old `date <= cursor`
+  test skipped every record sharing the cursor's second, including ones that
+  had not been written yet when the cursor was taken. `id` is monotonic and
+  unique (0 inversions over 600 records), so `id > high_water_id` is exact.
+* **A partial write was indistinguishable from no state at all.** The old
+  `write_text` was not atomic, and a truncated, empty, or unparseable file
+  fell through to a silent 30-minute lookback that then *saved* itself --
+  permanently discarding everything between the real cursor and now-30min.
+  Absent, empty, corrupt, and future-schema states are now each a distinct
+  **exit 2**; none of them guesses.
+* **Running out of pages used to skip the gap and advance anyway.** See
+  `HistoryExhausted` below.
+
+Bootstrapping a new state file is therefore deliberate: pass `--since-min N`
+(or `--bootstrap`) once. Cron never passes either, so a lost state file alerts
+instead of quietly re-basing.
+
 Exit codes
 ----------
   0  nothing to do, or every path reported successfully
   2  fatal: missing API key, Lidarr or Jellyfin unreachable, Jellyfin rejected
-     the batch, or a folder sat under no known media root. The cursor is not
-     advanced in any of these cases, so the next run retries.
+     the batch, a folder sat under no known media root, the cursor state file
+     could not be trusted, or history ran past MAX_HISTORY_PAGES. The cursor is
+     not advanced in any of these cases, so the next run retries.
 
 There is deliberately no exit 1: the report is a single all-or-nothing batch,
 so "partial" cannot arise.
@@ -74,6 +98,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -115,6 +140,63 @@ PATH_FIELDS = ("importedPath", "path", "sourcePath")
 HISTORY_PAGE_SIZE = 200
 MAX_HISTORY_PAGES = 10
 DEFAULT_FIRST_RUN_MINUTES = 30
+# Bumped only when the on-disk shape changes. A file claiming a HIGHER version
+# than this was written by a newer build and is refused rather than misread as
+# a stale cursor.
+STATE_SCHEMA_VERSION = 1
+
+
+class StateError(RuntimeError):
+  """The cursor state file cannot be trusted.
+
+  Every path that raises this used to fall through to a lookback, which then
+  saved itself over the real cursor. Guessing here is how imports go missing,
+  so the only safe response is to stop and alert.
+  """
+
+
+class HistoryExhausted(RuntimeError):
+  """More new history than MAX_HISTORY_PAGES covers.
+
+  The old code printed a WARNING to stderr, dispatched the newest 2000 records,
+  advanced the cursor to the newest of them, and returned 0 -- so `cron_job.py`
+  saw success and everything older was skipped forever. Demonstrated 2026-09-04
+  with a cursor of 2026-07-01: 2000 records fetched, two months silently
+  dropped, exit 0. It is now fatal with the cursor held.
+  """
+
+
+@dataclasses.dataclass(frozen=True)
+class Cursor:
+  """How much of Lidarr's history has been processed.
+
+  `high_water_id` is the authority. `date` is carried for humans and for the
+  one-shot migration from the pre-2026-09-04 date-only state file, where it is
+  the only thing available.
+  """
+
+  high_water_id: int | None
+  date: str
+
+  def is_new(self, record: dict) -> bool:
+    """True if `record` has not been processed yet."""
+    if self.high_water_id is not None:
+      record_id = record.get("id")
+      return isinstance(record_id, int) and record_id > self.high_water_id
+    return str(record.get("date", "")) > self.date
+
+  def __str__(self) -> str:
+    """Id when there is one, date during the v0 migration when there is not."""
+    return f"id={self.high_water_id}" if self.high_water_id is not None else f"date={self.date}"
+
+  def advanced_by(self, record: dict) -> Cursor:
+    """This cursor moved past `record` (whatever its event type)."""
+    record_id = record.get("id")
+    high = self.high_water_id
+    if isinstance(record_id, int):
+      high = record_id if high is None else max(high, record_id)
+    date = str(record.get("date", ""))
+    return Cursor(high, max(self.date, date) if date else self.date)
 
 
 def _get_json(url: str, headers: dict[str, str], timeout: int = 60):
@@ -126,51 +208,77 @@ def _get_json(url: str, headers: dict[str, str], timeout: int = 60):
     return None
 
 
-def fetch_history(host: str, api_key: str, since_iso: str) -> list[dict] | None:
-  """History records newer than `since_iso`, newest first.
+def fetch_history(host: str, api_key: str, cursor: Cursor) -> list[dict] | None:
+  """History records newer than `cursor`, newest first.
 
   Pages backwards until it reaches the cursor rather than trusting one page:
   during an import burst a single 200-record page covers well under five
-  minutes, and a missed record is a silently unrefreshed album. None if Lidarr
-  is unreachable.
+  minutes, and a missed record is a silently unrefreshed album.
+
+  Sorted by `id`, not `date`. Date ordering is ambiguous here -- 600 live
+  records held 125 distinct dates -- so a page boundary inside a shared second
+  cannot be resolved by timestamp. Ids are unique and monotonic.
+
+  Returns None if Lidarr is unreachable. Raises `HistoryExhausted` rather than
+  returning a partial set, because a partial set used to be dispatched and then
+  committed as if complete.
   """
   collected: list[dict] = []
   for page in range(1, MAX_HISTORY_PAGES + 1):
     url = (
       f"{host.rstrip('/')}/api/v1/history"
-      f"?page={page}&pageSize={HISTORY_PAGE_SIZE}&sortKey=date&sortDirection=descending"
+      f"?page={page}&pageSize={HISTORY_PAGE_SIZE}&sortKey=id&sortDirection=descending"
     )
     body = _get_json(url, {"X-Api-Key": api_key})
     if not isinstance(body, dict):
-      return None if page == 1 else collected
+      # A mid-run failure used to return what had been collected so far, which
+      # is the same silent truncation as running out of pages. Fail the run.
+      return None
     records = body.get("records")
-    if not isinstance(records, list) or not records:
-      return collected
+    if not isinstance(records, list):
+      return None
+    if not records:
+      return collected  # genuinely reached the end of Lidarr's history
     collected.extend(records)
-    if any(str(r.get("date", "")) <= since_iso for r in records):
+    if any(not cursor.is_new(record) for record in records):
       return collected
-  print(
-    f"WARNING: cursor {since_iso} is older than {MAX_HISTORY_PAGES} history pages; "
-    "older changes are left to the scheduled library scan",
-    file=sys.stderr,
+  raise HistoryExhausted(
+    f"more than {MAX_HISTORY_PAGES * HISTORY_PAGE_SIZE} history records are newer "
+    f"than the cursor (id={cursor.high_water_id}, date={cursor.date}). Dispatching "
+    "only the newest of them would advance the cursor past the rest and lose them."
   )
-  return collected
 
 
-def changed_folders(records: list[dict], since_iso: str) -> tuple[list[str], str]:
-  """Album folders touched after `since_iso`, plus the new cursor.
+def changed_folders(records: list[dict], cursor: Cursor) -> tuple[list[str], Cursor]:
+  """Album folders touched after `cursor`, plus the cursor that now covers them.
 
   Returns Lidarr-side paths, de-duplicated and ordered oldest-first so a
-  Jellyfin refresh sees them in the order they actually happened.
+  Jellyfin refresh sees them in the order they actually happened. The cursor
+  advances over *every* new record, including non-file events, so a run that
+  reports nothing still makes progress.
   """
-  cursor = since_iso
   folders: list[str] = []
   seen: set[str] = set()
-  for record in reversed(records):  # oldest first
-    date = str(record.get("date", ""))
-    if date <= since_iso:
+
+  # v0 migration. A date-only cursor also covers every record at or before that
+  # date, so seed the high-water mark from their ids before processing. Without
+  # this the cursor would persist as null and keep using date comparison, which
+  # is the tie-prone test this change exists to remove.
+  if cursor.high_water_id is None:
+    covered = [
+      record["id"]
+      for record in records
+      if not cursor.is_new(record) and isinstance(record.get("id"), int)
+    ]
+    if covered:
+      cursor = Cursor(max(covered), cursor.date)
+
+  # Oldest first. Sorting by id rather than reversing the input means the
+  # caller does not have to hand them over pre-sorted.
+  for record in sorted(records, key=lambda r: r.get("id") or 0):
+    if not cursor.is_new(record):
       continue
-    cursor = max(cursor, date)
+    cursor = cursor.advanced_by(record)
     if record.get("eventType") not in FILE_EVENTS:
       continue
     data = record.get("data") or {}
@@ -241,27 +349,107 @@ def report_to_jellyfin(host: str, api_key: str, paths: list[str]) -> bool:
     return False
 
 
-def load_cursor(state_path: Path | None, first_run_minutes: int) -> str:
-  """Last processed history timestamp, or a short lookback on first run."""
-  if state_path is not None and state_path.exists():
-    try:
-      value = json.loads(state_path.read_text()).get("cursor")
-      if isinstance(value, str) and value:
-        return value
-    except (OSError, json.JSONDecodeError):
-      pass
+def _bootstrap(first_run_minutes: int) -> Cursor:
+  """A deliberately-requested lookback. Never reached by accident."""
   start = datetime.now(UTC) - timedelta(minutes=first_run_minutes)
-  return start.strftime("%Y-%m-%dT%H:%M:%SZ")
+  return Cursor(None, start.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
-def save_cursor(state_path: Path | None, cursor: str) -> None:
+def load_state(state_path: Path | None, first_run_minutes: int, *, bootstrap: bool) -> Cursor:
+  """The cursor, or `StateError` explaining why it cannot be trusted.
+
+  Every branch that once fell through to a lookback now raises. The four
+  states below were verified 2026-09-04 to be byte-identical in the old code --
+  all four printed `nothing to report` and exited 0.
+  """
+  if state_path is None:
+    return _bootstrap(first_run_minutes)
+
+  if not state_path.exists():
+    if bootstrap:
+      return _bootstrap(first_run_minutes)
+    raise StateError(
+      f"state file {state_path} does not exist. Refusing to invent a cursor: a "
+      "lookback would skip every import older than it and then save itself over "
+      "the gap. Bootstrap deliberately with --since-min N (or --bootstrap)."
+    )
+
+  try:
+    raw = state_path.read_text()
+  except OSError as exc:
+    raise StateError(f"state file {state_path} could not be read: {exc}") from exc
+
+  if not raw.strip():
+    raise StateError(
+      f"state file {state_path} is empty -- the signature of an interrupted "
+      "write. It is not a fresh install; the cursor it held is unknown."
+    )
+
+  try:
+    data = json.loads(raw)
+  except json.JSONDecodeError as exc:
+    raise StateError(
+      f"state file {state_path} is not valid JSON ({exc}). A truncated file is "
+      "what a non-atomic write leaves behind on a crash; the cursor is unknown."
+    ) from exc
+
+  if not isinstance(data, dict):
+    raise StateError(f"state file {state_path} holds {type(data).__name__}, expected an object")
+
+  version = data.get("schema_version")
+
+  if version is None:
+    # Pre-2026-09-04 format: {"cursor": "<iso8601>"}. Migrate on the next save.
+    value = data.get("cursor")
+    if not isinstance(value, str) or not value:
+      raise StateError(
+        f"state file {state_path} has no schema_version and no usable 'cursor' "
+        "string, so it matches no format this script has ever written."
+      )
+    return Cursor(None, value)
+
+  if not isinstance(version, int) or version > STATE_SCHEMA_VERSION:
+    raise StateError(
+      f"state file {state_path} declares schema_version {version!r}, newer than "
+      f"the {STATE_SCHEMA_VERSION} this build understands. It was written by a "
+      "later version; reading it as a stale cursor would re-dispatch history."
+    )
+
+  high_water_id = data.get("high_water_id")
+  date = data.get("cursor_date")
+  if not isinstance(date, str) or not date:
+    raise StateError(f"state file {state_path} has no usable 'cursor_date'")
+  if high_water_id is not None and not isinstance(high_water_id, int):
+    raise StateError(
+      f"state file {state_path} has high_water_id {high_water_id!r}, expected an int or null"
+    )
+  return Cursor(high_water_id, date)
+
+
+def save_state(state_path: Path | None, cursor: Cursor) -> None:
+  """Write the cursor atomically: temp file, fsync, then `os.replace`.
+
+  `os.replace` is atomic on POSIX, so a reader sees either the old file or the
+  new one and never the half-written file that produced `StateError` above.
+  """
   if state_path is None:
     return
+  payload = {
+    "schema_version": STATE_SCHEMA_VERSION,
+    "high_water_id": cursor.high_water_id,
+    "cursor_date": cursor.date,
+  }
+  tmp = state_path.with_name(state_path.name + ".tmp")
   try:
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"cursor": cursor}))
+    with tmp.open("w", encoding="utf-8") as handle:
+      json.dump(payload, handle)
+      handle.flush()
+      os.fsync(handle.fileno())
+    os.replace(tmp, state_path)
   except OSError as exc:
     print(f"WARNING: could not write state file {state_path}: {exc}", file=sys.stderr)
+    tmp.unlink(missing_ok=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -281,8 +469,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument(
     "--since-min",
     type=int,
-    default=DEFAULT_FIRST_RUN_MINUTES,
-    help=f"Lookback when there is no state file (default {DEFAULT_FIRST_RUN_MINUTES} min).",
+    default=None,
+    help=(
+      "Bootstrap a MISSING state file with this lookback, in minutes "
+      f"(default {DEFAULT_FIRST_RUN_MINUTES} when --bootstrap is given). Passing "
+      "this is what makes creating a cursor deliberate; without it an absent "
+      "state file is fatal, so cron cannot silently re-base."
+    ),
+  )
+  parser.add_argument(
+    "--bootstrap",
+    action="store_true",
+    help="Permit creating a state file that does not exist. Implied by --since-min.",
   )
   parser.add_argument("--dry-run", action="store_true", help="Print paths, tell Jellyfin nothing.")
   return parser.parse_args(argv)
@@ -296,8 +494,26 @@ def main(argv: list[str] | None = None) -> int:
     print("ERROR: API_KEY_LIDARR and API_KEY_JELLYFIN must both be set", file=sys.stderr)
     return 2
 
-  cursor = load_cursor(args.state, args.since_min)
-  records = fetch_history(os.getenv("LIDARR_HOST", DEFAULT_LIDARR_HOST), lidarr_key, cursor)
+  try:
+    cursor = load_state(
+      args.state,
+      args.since_min if args.since_min is not None else DEFAULT_FIRST_RUN_MINUTES,
+      bootstrap=args.bootstrap or args.since_min is not None,
+    )
+  except StateError as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    return 2
+
+  try:
+    records = fetch_history(os.getenv("LIDARR_HOST", DEFAULT_LIDARR_HOST), lidarr_key, cursor)
+  except HistoryExhausted as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    print(
+      "  Cursor held. Raise MAX_HISTORY_PAGES, or bootstrap deliberately once the "
+      "backlog is understood -- do not let it advance past unprocessed records.",
+      file=sys.stderr,
+    )
+    return 2
   if records is None:
     print("ERROR: could not read Lidarr history", file=sys.stderr)
     return 2
@@ -322,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
       return 2
     print(f"nothing to report (cursor {cursor} -> {new_cursor})")
     if not args.dry_run:
-      save_cursor(args.state, new_cursor)
+      save_state(args.state, new_cursor)
     return 0
 
   for path in paths:
@@ -339,8 +555,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"reported {len(paths)} folder(s) to Jellyfin; cursor held for the unmapped one(s)")
     return 2
 
-  save_cursor(args.state, new_cursor)
-  print(f"reported {len(paths)} folder(s) to Jellyfin (cursor -> {new_cursor})")
+  save_state(args.state, new_cursor)
+  print(f"reported {len(paths)} folder(s) to Jellyfin (cursor {cursor} -> {new_cursor})")
   return 0
 
 
