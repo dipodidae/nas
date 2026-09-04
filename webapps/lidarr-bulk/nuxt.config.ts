@@ -4,7 +4,7 @@ export default defineNuxtConfig({
     compatibilityVersion: 4,
   },
   compatibilityDate: '2025-01-01',
-  modules: ['@nuxt/eslint', '@nuxt/ui', 'nuxt-auth-utils'],
+  modules: ['@nuxt/eslint', '@nuxt/ui'],
   devtools: { enabled: true },
   colorMode: {
     preference: 'dark',
@@ -28,22 +28,14 @@ export default defineNuxtConfig({
       '/api/**': { cors: false },
     },
   },
+  // No auth keys here. This app has no login of its own: the public route is
+  // gated by the single tinyauth door at SWAG (ADR-0034), and nothing reaches
+  // it on nas-network except SWAG itself.
   runtimeConfig: {
     lidarrUrl: '',
     lidarrApiKey: '',
-    appBearerToken: '',
-    appUsername: '',
-    appPassword: '',
     configDir: '/config',
     rateLimitPerMinute: 30,
     bodyLimitBytes: 262144,
-    session: {
-      // nuxt-auth-utils picks NUXT_SESSION_PASSWORD from env; we generate one
-      // at boot if missing (see server/plugins/init.ts).
-      password: '',
-    },
-    public: {
-      authRequired: false,
-    },
   },
 })

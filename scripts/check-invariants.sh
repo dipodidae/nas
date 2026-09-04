@@ -128,6 +128,28 @@ CAP_DROP_WAIVER = {}
 
 # Ports that are public on purpose. Anything else must bind 127.0.0.1.
 # --------------------------------------------------------------------------
+# Per-app auth this migration RETIRED. None of these may come back.
+#
+# This is an explicit list, not a pattern, and deliberately so: qui, slskd,
+# nextcloud, ntfy and jellyfin all still hold their OWN login credentials, and
+# they must -- those are upstream application auth, not a second door this repo
+# bolted on. A blanket "no credential-shaped variable" rule would flag them and
+# then get waived into meaninglessness. What "one set of credentials" actually
+# claims is that the three gates THIS repo hand-rolled are gone and stay gone.
+# ADR-0034.
+RETIRED_AUTH_VARS = {
+    # ongehoord: SWAG basic auth baked into /config/nginx/.htpasswd-ongehoord
+    "BASIC_AUTH_USER", "BASIC_AUTH_PASS",
+    # playlist-generator: its container's own nginx basic auth
+    "PLAYLIST_GENERATOR_USERNAME", "PLAYLIST_GENERATOR_PASSWORD",
+    "AUTH_USER", "AUTH_PASS",
+    # lidarr-bulk: a Nuxt session login plus a bearer gate on /api/*
+    "LIDARR_BULK_USERNAME", "LIDARR_BULK_PASSWORD", "LIDARR_BULK_BEARER_TOKEN",
+    "APP_USERNAME", "APP_PASSWORD", "APP_BEARER_TOKEN",
+    "NUXT_SESSION_PASSWORD",
+}
+
+# --------------------------------------------------------------------------
 # The door: which published routes sit behind tinyauth and which must not.
 #
 # The rule that decides the column: anything with a native mobile or desktop
@@ -1904,6 +1926,72 @@ if _authbasic:
          "and a valid session can never get in.")
 else:
     ok("no-auth-basic", f"no live auth_basic in {len(_repo_confs)} confs")
+
+# ==========================================================================
+# 34e. No per-app auth survives: one door, one credential
+# ==========================================================================
+# The assertion that turns "one set of credentials" from an intention into a
+# fact. Three hand-rolled gates were removed -- ongehoord's SWAG basic auth,
+# playlist-generator's in-container nginx basic auth, and lidarr-bulk's Nuxt
+# session login plus its /api bearer gate -- and each was removed in a place
+# that would be easy to restore by habit: a compose environment block, a line
+# in .env.example, a bind-mounted htpasswd. All three are checked. ADR-0034.
+_retired_hits = []
+
+# (a) the rendered compose model
+for _svc in sorted(services):
+    for _k in env_of(_svc):
+        if _k in RETIRED_AUTH_VARS:
+            _retired_hits.append(f"compose:{_svc}.{_k}")
+
+# (b) every .env.example this repo tracks, and .env itself
+_env_files = sorted(
+    _p for _p in subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard",
+         ".env.example", "*/.env.example", "*/*/.env.example"],
+        capture_output=True, text=True,
+    ).stdout.split()
+    if os.path.isfile(_p)
+)
+_env_files_checked = list(_env_files)
+if os.path.isfile(".env"):
+    _env_files_checked.append(".env")
+for _p in _env_files_checked:
+    for _i, _ln in enumerate(
+            open(_p, encoding="utf-8", errors="replace"), start=1):
+        _name = _ln.split("=", 1)[0].strip()
+        if _name in RETIRED_AUTH_VARS:
+            _retired_hits.append(f"{_p}:{_i}:{_name}")
+
+# (c) an htpasswd file, tracked or mounted. The conf-level check above catches
+# `auth_basic_user_file`; this catches the file arriving at all, which is how
+# it would come back first.
+for _svc in sorted(services):
+    for _v in (services[_svc].get("volumes") or []):
+        if ".htpasswd" in str(_v.get("source", "")) or ".htpasswd" in str(_v.get("target", "")):
+            _retired_hits.append(f"compose:{_svc} mounts {_v.get('target')}")
+_tracked_htpasswd = subprocess.run(
+    ["git", "ls-files", "*htpasswd*"], capture_output=True, text=True,
+).stdout.split()
+_retired_hits += [f"tracked:{_p}" for _p in _tracked_htpasswd]
+
+if _retired_hits:
+    fail("no-per-app-auth", "ADR-0034",
+         f"{sorted(_retired_hits)} bring back per-app authentication. There is "
+         "one door and one credential (TINYAUTH_USER / TINYAUTH_PASSWORD_HASH); "
+         "a second one is not defence in depth, it is a second thing to rotate "
+         "and a second thing to forget. Read ADR-0034 first -- and note that "
+         "adding auth_basic next to the forward-auth include does not stack, it "
+         "PREEMPTS it.")
+elif not os.path.isfile(".env"):
+    warn("no-per-app-auth", "ADR-0034",
+         f"{len(_env_files)} .env.example files and the compose model are clean, "
+         "but .env is unreadable from here (expected in CI) so it was not "
+         "checked. `make check` on the host is what covers it.")
+else:
+    ok("no-per-app-auth",
+       f"{len(RETIRED_AUTH_VARS)} retired vars absent from the compose model, "
+       f"{len(_env_files_checked)} env files, and every volume")
 
 # ==========================================================================
 # 35. Nothing under secrets/ is tracked by git

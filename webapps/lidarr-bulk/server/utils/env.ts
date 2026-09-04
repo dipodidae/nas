@@ -6,11 +6,9 @@ const schema = z.object({
   // Lidarr's metadata backend, used to resolve Various Artists comps by MBID
   // (Lidarr's own /album/lookup hides the special VA entity from text search).
   LIDARR_METADATA_URL: z.string().url().default('https://api.lidarr.audio/api/v0.4'),
-  APP_BEARER_TOKEN: z.string().optional().default(''),
-  // Session login. When both are set, the UI requires login; /api/* requires
-  // either a valid session cookie or APP_BEARER_TOKEN (if set).
-  APP_USERNAME: z.string().optional().default(''),
-  APP_PASSWORD: z.string().optional().default(''),
+  // No APP_USERNAME / APP_PASSWORD / APP_BEARER_TOKEN. This app has no login
+  // of its own: the public route is gated by the one tinyauth door at SWAG
+  // (ADR-0034), and on nas-network nothing but SWAG can reach it.
   CONFIG_DIR: z.string().default('/config'),
   // Per-IP sliding window on /api/*. Sized for a single-user UI that makes one
   // request per candidate pick: 30 was tripping mid-session on a playlist with a

@@ -40,12 +40,10 @@ services:
       - LIDARR_URL=http://lidarr:8686
       - LIDARR_API_KEY=${API_KEY_LIDARR}
       - CONFIG_DIR=/config
-      # Session login. With both set, the UI requires login and /api/* requires
-      # a valid session cookie or bearer token.
-      - APP_USERNAME=${LIDARR_BULK_USERNAME:-}
-      - APP_PASSWORD=${LIDARR_BULK_PASSWORD:-}
-      # Optional bearer-token gate on /api/* for programmatic clients.
-      - APP_BEARER_TOKEN=${LIDARR_BULK_BEARER_TOKEN:-}
+      # No APP_USERNAME / APP_PASSWORD / APP_BEARER_TOKEN. The app's own session
+      # login was removed on 2026-09-04: the public route is gated by the one
+      # tinyauth door at SWAG, and on nas-network nothing but SWAG reaches it.
+      # ADR-0034; `make check` asserts these do not come back.
       # Optional: AI "Discover" tab. Shares OPENAI_API_KEY with
       # playlist-generator. Tab hides if unset.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

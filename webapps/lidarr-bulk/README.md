@@ -56,7 +56,6 @@ lidarr-bulk/
 ├── Dockerfile                    # multi-stage, runs as `node` user
 ├── nuxt.config.ts                # future.compatibilityVersion: 4
 ├── package.json
-├── lidarr-bulk.subdomain.conf.sample
 ├── app/                          # client-side (Nuxt 4: client lives under app/)
 │   ├── app.vue
 │   ├── assets/css/main.css
@@ -161,11 +160,15 @@ silent mis-add.
 
 - Runs as user `node` (uid 1000) inside the container.
 - `cap_drop: ALL`, `no-new-privileges: true`, port bound to `127.0.0.1`.
-- `APP_BEARER_TOKEN` (env) — if set, `/api/*` requires
-  `Authorization: Bearer <token>`. Leave unset to disable.
+- **No auth of its own.** The app's session login and its `APP_BEARER_TOKEN`
+  gate on `/api/*` were removed on 2026-09-04: the public route is gated by the
+  single tinyauth door at SWAG (ADR-0034), and on `nas-network` nothing but
+  SWAG can reach `lidarr-bulk:3000`. One credential for the whole surface.
 - Rate limit: `RATE_LIMIT_PER_MINUTE` (default 30) sliding window per IP on
   `/api/*` (excluding the SSE stream).
 - Body size cap: `BODY_LIMIT_BYTES` (default 256 KB) enforced in
   `/api/parse`. Tune `client_max_body_size` in the SWAG conf to match.
-- SWAG conf ships with Authelia/Authentik/basic-auth includes commented out
-  for easy enablement later.
+- The SWAG conf is tracked at `swag/proxy-confs/lidarr-bulk.subdomain.conf`
+  (the duplicate `.sample` that used to live here is gone — it was a second
+  source of truth for a conf ADR-0022 already tracks) and includes the tinyauth
+  forward-auth pair. Apply an edit with `make swag-apply`, not a reload.

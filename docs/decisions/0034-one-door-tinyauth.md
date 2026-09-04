@@ -178,6 +178,33 @@ never inherited._ `diun` still reports newer tags, because it watches the
 excluding the `-distroless` variants and the steady stream of `-rc`/`-beta`/`-alpha`
 tags this repo publishes.
 
+## What "one credential" actually cost to make true
+
+Three hand-rolled gates came out, in three different shapes:
+
+| App                  | What it was                                                                                                                                                                                                                                             | How it was removed                                                                                                                                                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ongehoord`          | SWAG `auth_basic` + `/config/nginx/.htpasswd-ongehoord`, creds in `webapps/ongehoord/.env`                                                                                                                                                              | the two conf lines, the htpasswd file (backed up outside the repo first), the `BASIC_AUTH_*` variables, and the duplicate `ongehoord.subdomain.conf.sample` that still shipped them                                                                                              |
+| `playlist-generator` | `auth_basic` inside its **own** container's nginx, htpasswd generated from `AUTH_USER`/`AUTH_PASS` at entrypoint                                                                                                                                        | its nginx conf is now tracked here as `webapps/playlist-generator/app.conf`, minus the auth lines, bind-mounted `:ro` over `/etc/nginx/sites-available/default` — the same move ADR-0022 makes for SWAG's confs, and it avoids editing a foreign repo or bumping a submodule pin |
+| `lidarr-bulk`        | a real Nuxt session login: `nuxt-auth-utils`, `/login`, `/api/login`, `/api/logout`, `/api/me`, a global route middleware, a server `/api/*` gate, a bearer-token gate, an account menu, and a session signing key generated into `/config/session.key` | all of it, plus the dependency, the `runtimeConfig` keys, the env schema fields, the entrypoint's key bootstrap and the orphaned key file                                                                                                                                        |
+
+The assertion that makes this stick is an **explicit retired-variable list**, not
+a pattern. qui, slskd, nextcloud, ntfy and jellyfin all still hold their own
+login credentials and must — those are upstream application auth, not a second
+door this repo bolted on, and a blanket "no credential-shaped variable" rule
+would flag them and then get waived into meaninglessness. What "one set of
+credentials" claims is narrower and checkable: the three gates _this repo_
+hand-rolled are gone, in the compose model, in every tracked `.env.example`, in
+`.env`, and as a mounted htpasswd.
+
+**One residue, stated rather than glossed:** the playlist-generator submodule's
+`docker-entrypoint.sh` still runs `htpasswd -cb /etc/nginx/.htpasswd` and, with
+`AUTH_USER`/`AUTH_PASS` unset, takes its `admin`/`admin` fallback branch. That
+file is referenced by nothing once the tracked conf is mounted, and
+re-referencing it would fail `make check`'s `no-auth-basic`. Removing the branch
+is a change to `dipodidae/jellyfin-playlist-generator`, which is outside this
+repo.
+
 ## Two nginx/Docker behaviours that shaped the rollout
 
 **`auth_basic` and `auth_request` cannot coexist, and the failure is silent.**
