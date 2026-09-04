@@ -155,15 +155,26 @@ than left to rot.
 
 This stage clogs in three distinct ways, each with its own cron job:
 
-| Clog                                              | Job                               | Cron  |
-| ------------------------------------------------- | --------------------------------- | ----- |
-| Stale slskd `Completed,*` transfers never cleared | `slskd_complete_sweep.py`         | `:22` |
-| Lidarr `importFailed` rows blocking the queue     | `lidarr_queue_unstick.py`         | `:07` |
-| Grabs stuck at 0 bytes                            | `lidarr_stuck_download_reaper.py` | `:52` |
-| slskd cruft / orphaned partials                   | `slskd_cleanup.py`                | `:37` |
+| Clog                                                    | Job                               | Cron    |
+| ------------------------------------------------------- | --------------------------------- | ------- |
+| Lidarr `importFailed` rows blocking the queue           | `lidarr_queue_unstick.py`         | `:07`   |
+| Download copies Lidarr already imported, still on disk  | `slskd_complete_sweep.py`         | `:22`   |
+| Stale slskd transfer records + orphan incomplete dirs   | `slskd_cleanup.py`                | `:37`   |
+| Grabs stuck at 0 bytes                                  | `lidarr_stuck_download_reaper.py` | `:52`   |
+| Orphaned slskd folders that lost their Lidarr queue row | `process_soulseek_imports.py`     | `05:30` |
 
-The first three share a **`flock` on `/tmp/nas-tubifarry-cleanup.lock`** so they cannot run
-concurrently and fight each other over the same queue rows.
+> **Corrected 2026-09-04.** This table previously credited `slskd_complete_sweep.py` with
+> clearing `Completed,*` transfer records and `slskd_cleanup.py` with disk cruft. **They
+> are the other way round**, per both docstrings and both logs: `complete_sweep` deletes
+> _directories_ whose audio is fully represented under `/music` (disk reclaim of import
+> hardlinks), and `cleanup` deletes _transfer records_. Anyone deciding which script to
+> retire from the old table would have retired the wrong one — and given the retention
+> finding below, that is the load-bearing one.
+
+**Five** jobs share the **`flock` on `/tmp/nas-tubifarry-cleanup.lock`** — not three, not
+four. `:07`, `:22` and `:37` take it with `flock -n` (skip silently if busy); `:52` uses
+`flock -w 120` and `05:30` uses `flock -w 600`, so the 05:30 job can hold the lock well
+into the `:37` window and make that run vanish without a trace.
 
 > **The reaper marks failures deliberately.** A `downloadFailed` history entry reading
 > `"Manually marked as failed"` is `lidarr_stuck_download_reaper.py` doing its job, **not**
@@ -179,6 +190,44 @@ the size changes. It matches on Lidarr import history instead.
   clog. Soulseek uploaders queue requesters; waiting hours is routine.
 - **`albumImportIncomplete`.** Usually a genuinely partial release on Soulseek (missing
   tracks), not a pipeline fault. The status message names the absent tracks.
+- **`slskd_complete_sweep.py` logging `deleted 0/0 dirs` on every run.** 63 consecutive
+  runs over four days deleted nothing. That is the script declining, not idling: the dirs
+  are `below threshold=1.0`, i.e. not fully represented under `/music`, so they were never
+  successfully imported and it correctly will not touch them.
+- **`slskd_cleanup.py` logging `nothing to clean`.** Expected since 2026-09-02 — slskd's
+  own `retention.transfers.*` now reaps the records first. Its rate decayed 21 → 2 → 1 as
+  retention took over.
+
+### slskd `retention` — half of it works, and the half that does not is why a script stays
+
+Read the **running** config (`GET /api/v0/options`), never `slskd.yml`; a file on disk is
+not evidence the process loaded it. Measured 2026-09-04 against slskd **0.26.0.0**:
+
+| Clock                | Setting                          | Reality                                                                    |
+| -------------------- | -------------------------------- | -------------------------------------------------------------------------- |
+| **Transfer records** | `retention.transfers.download.*` | **Works.** DB down to 24 rows, all `Queued, Remotely`, zero `Completed,*`. |
+| **Files on disk**    | `files.complete: 20160` (14 d)   | **Inert.** 75 dirs older, oldest **23.8 d**, holding 1.63 GB.              |
+| **Files on disk**    | `files.incomplete: 43200` (30 d) | **Inert.** 1299 dirs, oldest **77.4 d**.                                   |
+
+`docker logs slskd | grep -i '\bretention\b'` returns **zero** occurrences across a full
+startup and 19 h of operation. (Beware false positives when grepping loosely — this
+library contains Grim Reaper, _Don't Fear the Reaper_ and Portion Control's _Purge_.)
+
+**Consequence: `slskd_complete_sweep.py` is load-bearing, not redundant.** It is the only
+thing reclaiming disk. Retiring it in favour of native retention — which looked obviously
+correct, and which the old §5 table pointed at the wrong script for — would have removed
+the sole working reaper and left a growing orphan pile behind a config that reads fine.
+
+The mechanism is **UNVERIFIED**: plausibly `transfers.succeeded: 1440` destroys the DB row
+at 24 h, and file retention driven off that row can never see the bytes again. Unprovable
+without a 14-day wait or a scratch instance, and it changes no action we would take. Filed
+upstream; `make verify-runtime` pins the block so the day it starts working, an assertion
+says so.
+
+**`transfers.download.retry` is a trap of the same family.** The running config carries
+`attempts=3, delay=5000, maxDelay=60000, partial=resume` — and `slskd.yml` has no `retry:`
+block at all. Those are slskd's **own defaults**, and every measurement of the stuck reaper
+silently assumes them. `scripts/check-slskd-effective-config.py` pins them for that reason.
 
 ---
 
@@ -247,6 +296,35 @@ Lidarr's stay off for the same reason as §6.2 — enabling them would only send
 that Jellyfin silently drops. Music deletion is the bridge's job, via the
 `trackFileDeleted` event it already subscribes to.
 
+**Verified end-to-end 2026-09-04 — deletes really do propagate.** This had never been
+tested, and the bridge sends a hardcoded `UpdateType: "Modified"` for _every_ event
+including `trackFileDeleted`, so "Modified for a path that no longer exists" was a
+plausible silent no-op. It is not:
+
+```
+synthetic album under an EXISTING artist  ->  POST {Path, UpdateType: Created}  ->  item appears
+rm -rf the folder  ->  POST {Path, UpdateType: Modified}  ->
+  [INF] LibraryMonitor: "Kraftwerk" ... will be refreshed.
+  [INF] LibraryManager: Removing item, Type: "MusicAlbum",
+        Path: "/data/movies/music/Kraftwerk/9999 - ZZ Bridge Delete Probe"
+```
+
+133 ms between the two lines, item gone, album count back to its starting value.
+
+**The attribution is clean because `EnableRealtimeMonitor` is `false` on every library**
+(`.docker-config/jellyfin/data/root/default/*/options.xml`, confirmed via
+`GET /Library/VirtualFolders`). Jellyfin is not watching the filesystem, so nothing but the
+POST could have removed the item.
+
+That fact is load-bearing well beyond this test: **every music change reaches Jellyfin
+through the bridge or the weekly library scan, and through nothing else.** It also makes
+the upstream 10.11.x "real-time monitor triggers a full rescan on any new item" report
+moot on this box — the feature is off.
+
+A safe way to repeat this test without touching real media: copy one small track into a new
+folder under an **existing** artist (a brand-new artist costs a full Music scan, §6.1),
+announce it, delete it, announce it again.
+
 For Sonarr/Radarr, note that mapping decides **where** a call points; the per-event toggle
 decides **whether** a call is made at all. `onEpisodeFileDelete=True` does **not** cover a
 series delete: `DELETE /api/v3/series/N?deleteFiles=true` removes the folder in a single
@@ -256,15 +334,48 @@ series delete: `DELETE /api/v3/series/N?deleteFiles=true` removes the folder in 
 
 ## 7. Failure modes and their tells
 
-| #   | Failure                                                          | Tell                                                                                                                                                    | Fixed                                        |
-| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 1   | Lidarr sends `/music`, Jellyfin drops it, returns 204            | New albums on disk + in Lidarr, absent in Jellyfin                                                                                                      | 2026-09-01, bridge created                   |
-| 2   | Repath `/music` → `/data/music`, bridge translated only `/music` | `nothing to report` while the **cursor advances** across a window where imports demonstrably happened; `grep 'outside' logs/lidarr_jellyfin_bridge.log` | 2026-09-03, `MAP_FROM` tuple + exit 2        |
-| 3   | Dropped folder warned and returned 0, so cron could not alert    | 7 Kraftwerk albums missing for a day, no alert                                                                                                          | 2026-09-03, unmappable → exit 2, cursor held |
-| 4   | Delete events never dispatched                                   | Files gone, Jellyfin holds items on dead paths                                                                                                          | 2026-09-02, toggles on (Sonarr/Radarr)       |
-| 5   | `lidarr-bulk` still posted `rootFolderPath: /music`              | **Every** artist add a hard `400`, `Root folder '/music' does not exist`                                                                                | 2026-09-03                                   |
-| 6   | Tubifarry fallback fan-out                                       | Soulseek 30-min ban, "quickly repeat a search"                                                                                                          | 2026-06-17, both flags `False`               |
-| 7   | Login-aware healthcheck on autoheal path                         | slskd restart spiral, never recovers                                                                                                                    | by design — healthcheck is login-independent |
+| #   | Failure                                                           | Tell                                                                                                                                                    | Fixed                                        |
+| --- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| 1   | Lidarr sends `/music`, Jellyfin drops it, returns 204             | New albums on disk + in Lidarr, absent in Jellyfin                                                                                                      | 2026-09-01, bridge created                   |
+| 2   | Repath `/music` → `/data/music`, bridge translated only `/music`  | `nothing to report` while the **cursor advances** across a window where imports demonstrably happened; `grep 'outside' logs/lidarr_jellyfin_bridge.log` | 2026-09-03, `MAP_FROM` tuple + exit 2        |
+| 3   | Dropped folder warned and returned 0, so cron could not alert     | 7 Kraftwerk albums missing for a day, no alert                                                                                                          | 2026-09-03, unmappable → exit 2, cursor held |
+| 4   | Delete events never dispatched                                    | Files gone, Jellyfin holds items on dead paths                                                                                                          | 2026-09-02, toggles on (Sonarr/Radarr)       |
+| 5   | `lidarr-bulk` still posted `rootFolderPath: /music`               | **Every** artist add a hard `400`, `Root folder '/music' does not exist`                                                                                | 2026-09-03                                   |
+| 6   | Tubifarry fallback fan-out                                        | Soulseek 30-min ban, "quickly repeat a search"                                                                                                          | 2026-06-17, both flags `False`               |
+| 7   | Login-aware healthcheck on autoheal path                          | slskd restart spiral, never recovers                                                                                                                    | by design — healthcheck is login-independent |
+| 8   | **The expiring guard** — the bridge's cursor hold released itself | **none.** No artifact to grep: the lost records were never fetched                                                                                      | 2026-09-04, exhaustion is exit 2             |
+| 9   | Bridge cursor was a timestamp, and timestamps are not unique      | An import in the cursor's own second is skipped; nothing distinguishes it from a quiet window                                                           | 2026-09-04, cursor is a history `id`         |
+| 10  | Corrupt cursor state read as "no state"                           | `nothing to report`, exit 0, and the cursor silently re-based to now-30min                                                                              | 2026-09-04, four distinct exit 2s            |
+
+### 7.1 The expiring guard (#8) — a new failure class
+
+Failures #2 and #3 were fixed by making an unmappable folder **exit 2 with the cursor
+held**, so the album is retried rather than skipped. That guard had a shelf life.
+
+```
+unmapped folder → exit 2, cursor held → cursor ages while history grows
+   → >2000 records newer than the cursor
+   → fetch_history hits MAX_HISTORY_PAGES and returns only the newest 2000
+   → the unmapped record is older than that window, so it is NOT in the record set
+   → `unmapped` computes as EMPTY → the run "succeeds"
+   → cursor jumps to the newest record, exit 0, THE ALERT STOPS
+```
+
+**A safety mechanism that expires into the exact bug it was guarding against.** The
+longer the guard held, the closer it came to releasing itself, and the release looked
+identical to the problem being fixed.
+
+Its tell is worse than any other row in this table: **there is no artifact.** Failure #2
+at least left `outside` lines in the log to grep. Here the lost records are never
+fetched, so nothing in any log mentions them. The only signature was one stderr
+`WARNING` line, on a run that exited 0.
+
+Measured 2026-09-04 with a cursor of `2026-07-01`: 2000 records fetched, oldest
+`2026-09-01T11:56:37Z`, 68 folders dispatched, **two months skipped**, exit 0.
+
+**When auditing anything else in this stack, ask of every hold, retry ceiling, backoff
+and cooldown: can the thing it is holding for fall outside the window that would detect
+it?** If yes, the guard has an expiry date and the expiry is silent.
 
 **The cursor-advances-silently signature (#2) needs care.** Cursor movement with
 `nothing to report` is _normal_ when the only new history records are non-file events
@@ -362,15 +473,24 @@ grep 'outside' logs/lidarr_jellyfin_bridge.log     # expect nothing after 2026-0
 
 ### 8.3 Did Jellyfin actually act? — verify by effect, not by log
 
-> **The documented log-grep does not work at the current log level.** Jellyfin logs at
-> **Information**; `LibraryMonitor … will be refreshed` is a **Debug** line. Confirm with
-> `grep -c '\[DBG\]' .docker-config/jellyfin/log/log_$(date +%Y%m%d).log` → `0`.
+> **Corrected 2026-09-04. `LibraryMonitor … will be refreshed` is an `[INF]` line and is
+> being logged right now.** The premise was right and the conclusion wrong: there are
+> genuinely zero `[DBG]` lines (`grep -c '\[DBG\]'` → `0`), but the LibraryMonitor line is
+> not a Debug line, so its absence was never evidence of anything. Observed:
 >
-> So an A/B `POST /Library/Media/Updated` with a **correct** path and a **bogus** one both
-> return `204` and both produce **zero log lines**. That is indistinguishable from total
-> failure. Raising the level needs a `logging.json` edit **and a container restart** (it is
-> not hot-reloaded). `LibraryManager: Removing item` — used for _delete_ verification — **is**
-> Information-level, so that half of the chain still works.
+> ```
+> [2026-09-04 11:34:52.487] [INF] Emby.Server.Implementations.IO.LibraryMonitor:
+>     "Kraftwerk" ("/data/movies/music/Kraftwerk") will be refreshed.
+> ```
+>
+> **No `logging.json` and no restart are needed to observe stage 4.** The bridge's own live
+> dispatches appear in the log today — 05:33 and 10:15 on 2026-09-04, both for
+> `/data/movies/music/Kraftwerk/1986 - Electric Cafe`.
+>
+> The one real caveat: the line is emitted when a reported path resolves to a library item
+> **and the refresh finds a change**. A correct path whose folder is unchanged logs nothing,
+> exactly like a bogus path. So the A/B discriminates only when there is a real change to
+> find — which is the only case the bridge ever reports, so it is sufficient here.
 
 **Use this instead.** For an album Lidarr just re-imported, only the files it actually
 replaced get **new Jellyfin item entries**; untouched tracks keep their old `DateCreated`.
@@ -460,23 +580,37 @@ Every entry must `cd /home/tom/nas` first, and every one is wrapped in `scripts/
 so a failure reaches ntfy. `cron_job.py --ok-codes` defaults to **`0,1`** — this is why a
 genuine fault must exit **2**, not 1.
 
-| Schedule      | Job                                               | Purpose                                                 |
-| ------------- | ------------------------------------------------- | ------------------------------------------------------- |
-| `2-59/5`      | `lidarr_jellyfin_bridge.py`                       | **stage 4** — translate & report to Jellyfin            |
-| `*/15`        | `slskd_login_watch.py`                            | alert-only on dead Soulseek login (never restarts)      |
-| `5,20,35,50`  | `lidarr_monitor_sweep.py --limit 5 --no-search`   | re-monitor drift; `--no-search` prevents bans           |
-| `12,27,42,57` | `lidarr_backlog_drip.py --threshold 80`           | throttled missing-album search, gated on live in-flight |
-| `:07`         | `lidarr_queue_unstick.py`                         | clear `importFailed` rows                               |
-| `:22`         | `slskd_complete_sweep.py`                         | clear stale `Completed,*` transfers                     |
-| `:37`         | `slskd_cleanup.py`                                | slskd cruft / orphaned partials                         |
-| `:52`         | `lidarr_stuck_download_reaper.py --stuck-hours 6` | fail grabs stuck at 0 bytes                             |
-| `03:30`       | `slskd_rescan.py --wait`                          | rebuild slskd's share index                             |
-| `05:05`       | `jellyfin_library_scan.py`                        | per-library scan (Jellyfin's own task is global-only)   |
-| `05:30`       | `process_soulseek_imports.py --purge-not-upgrade` | import what Lidarr's polling missed                     |
+| Schedule        | Job                                               | Purpose                                                 |
+| --------------- | ------------------------------------------------- | ------------------------------------------------------- |
+| `2-59/5`        | `lidarr_jellyfin_bridge.py`                       | **stage 4** — translate & report to Jellyfin            |
+| `*/15`          | `slskd_login_watch.py`                            | alert-only on dead Soulseek login (never restarts)      |
+| `5,20,35,50`    | `lidarr_monitor_sweep.py --limit 5 --no-search`   | re-monitor drift; `--no-search` prevents bans           |
+| `12,27,42,57`   | `lidarr_backlog_drip.py --threshold 80`           | throttled missing-album search, gated on live in-flight |
+| `:07`           | `lidarr_queue_unstick.py`                         | clear `importFailed` rows                               |
+| `:22`           | `slskd_complete_sweep.py`                         | clear stale `Completed,*` transfers                     |
+| `:37`           | `slskd_cleanup.py`                                | slskd cruft / orphaned partials                         |
+| `:52`           | `lidarr_stuck_download_reaper.py --stuck-hours 6` | fail grabs stuck at 0 bytes                             |
+| `03:30`         | `slskd_rescan.py --wait`                          | rebuild slskd's share index                             |
+| Fri `05:05`     | `jellyfin_library_scan.py --library Movies`       | per-library scan (Jellyfin's own task is global-only)   |
+| Sat `05:05`     | `jellyfin_library_scan.py --library 'TV Shows'`   | one library per day so two big scans never overlap      |
+| **Sun `05:05`** | `jellyfin_library_scan.py --library Music`        | **weekly**, and after 04:45 `album_art.py`              |
+| `05:30`         | `process_soulseek_imports.py --purge-not-upgrade` | import what Lidarr's polling missed                     |
 
-`:07`, `:22`, `:37`, `:52` share **`flock /tmp/nas-tubifarry-cleanup.lock`** so they never
-contend over the same queue rows. `:52` uses `flock -w 120` (waits); the others use
-`flock -n` (skip if busy).
+`:07`, `:22`, `:37`, `:52` **and `05:30`** share **`flock /tmp/nas-tubifarry-cleanup.lock`**
+so they never contend over the same queue rows — five holders, not four. `:52` uses
+`flock -w 120` and `05:30` uses `flock -w 600` (both wait); `:07`/`:22`/`:37` use `flock -n`
+(skip if busy).
+
+> **A skipped run currently looks exactly like a clean run.** `flock -n` exits 1 without
+> running anything, and the wrapper is inside the lock precisely so that is not read as
+> success — but nothing counts skips, so a 05:30 job holding the lock for its full 600 s
+> budget can silently erase the `:37` run. Lock-skip counting is an open item.
+
+> **Only two of the 28 cron entries declare `--ok-codes`** (`docker-prune` and
+> `verify-runtime`, both `0`). The other 26 inherit the `0,1` default — including
+> `lidarr-jellyfin-bridge`. That default exists because `stack_watchdog.py` and
+> `media_ops_status.py` legitimately exit 1, but it is applied far beyond them. This table
+> documents 11 of the 28; the full inventory is an open item.
 
 ---
 
@@ -492,15 +626,30 @@ contend over the same queue rows. `:52` uses `flock -w 120` (waits); the others 
   which Cleanuparr cannot see. `failedImport.skipIfNotFoundInClient` must stay `True`.
 - **The bridge's exit-2-on-unmappable-path behaviour** — reverting it to a warning
   re-creates failure #3.
+- **The bridge's exit-2-on-`HistoryExhausted` behaviour** — returning a partial record set
+  re-creates failure #8, the one with no artifact to grep. Raise `MAX_HISTORY_PAGES`
+  instead; the alert tells you what to raise it to.
+- **The bridge's cursor is a history `id`, not a date** — 600 live records held 125
+  distinct dates and one second was shared by 22. A date comparison against a non-unique
+  key silently drops whatever shares the cursor's second.
+- **The bridge's state file is written with `os.replace`** — the non-atomic write and the
+  "corrupt state reads as no state" fallback composed into a complete data-loss chain.
+  Absent / empty / corrupt / future-schema must each stay fatal.
+- **`slskd_complete_sweep.py` must not be retired in favour of slskd `retention`** — the
+  file half of retention is inert on 0.26.0.0 and this script is the only thing reclaiming
+  disk. See §5. Re-evaluate only when `check-slskd-effective-config.py` says otherwise.
+- **`EnableRealtimeMonitor: false` on the Jellyfin libraries** — every music change reaches
+  Jellyfin through the bridge or the weekly scan and nothing else. Turning it on would also
+  re-open the upstream 10.11.x full-rescan-on-new-item report, which is currently moot.
 
 ### Editing the \*arr → Jellyfin notifications over the API
 
 Two traps:
 
-1. **`GET /notification` masks `apiKey` as `**\*\*\***\*`.** Write the real key back into the
-   field before the `PUT`, or you will blank it. For Sonarr/Radarr that key is
-   `API_KEY_JELLYFIN_ARR`(the`arr-integrations`key) — **not**`API_KEY_JELLYFIN`, which
-   is Jellyseerr's.
+1. **`GET /notification` returns `apiKey` masked as asterisks.** Write the real key back
+   into the field before the `PUT`, or you will blank it. For Sonarr and Radarr the correct
+   key is `API_KEY_JELLYFIN_ARR` (the `arr-integrations` key) — **not** `API_KEY_JELLYFIN`,
+   which belongs to Jellyseerr.
 2. **`.docker-config/*/[app].db` is WAL-mode.** Confirm a change by reading the DB, not by
    re-`GET`ting (which re-masks) — and copy `*.db*` (`-wal`, `-shm`), not just `.db`, or a
    just-saved `1` reads back as `0`.
