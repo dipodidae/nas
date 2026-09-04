@@ -1833,6 +1833,41 @@ else:
     ok("door-classification-complete", f"{len(_published)} routes, all classified")
 
 # ==========================================================================
+# 34d. No nginx conf in this repo authenticates anyone by itself
+# ==========================================================================
+# One door means one door. A live `auth_basic` line is a second credential
+# store, and it is worse than a duplicate: ngx_http_auth_basic_module runs
+# BEFORE ngx_http_auth_request_module in the access phase, so its 401 is what
+# `error_page 401 = @tinyauth_login` converts -- the tinyauth subrequest is
+# never made, and a valid session gets bounced to the login page forever.
+# Measured 2026-09-04 on ongehoord, which is why the two lines came out in the
+# same commit that added the include. ADR-0034.
+#
+# Commented-out lines are fine and deliberately ignored: SWAG's upstream
+# samples ship `#auth_basic "Restricted";` in every proxy-conf, and rewriting
+# 17 files to delete a comment would be churn that hides the real signal.
+_authbasic = []
+for _root, _dirs, _files in os.walk("swag"):
+    for _f in sorted(_files):
+        if not _f.endswith(".conf"):
+            continue
+        _p = os.path.join(_root, _f)
+        for _i, _ln in enumerate(
+                open(_p, encoding="utf-8", errors="replace"), start=1):
+            if _ln.lstrip().startswith("#"):
+                continue
+            if re.search(r"\bauth_basic(_user_file)?\b", _ln):
+                _authbasic.append(f"{_p}:{_i}")
+if _authbasic:
+    fail("no-auth-basic", "ADR-0034",
+         f"{_authbasic} carry a live auth_basic directive. It does not stack "
+         "with forward auth -- it PREEMPTS it, so the route ends up gated by "
+         "basic auth alone with the tinyauth login page as its 401 handler, "
+         "and a valid session can never get in.")
+else:
+    ok("no-auth-basic", "no live auth_basic in any tracked conf")
+
+# ==========================================================================
 # 35. Nothing under secrets/ is tracked by git
 # ==========================================================================
 # secrets/ is gitignored, which is necessary and not sufficient: `git add -f`

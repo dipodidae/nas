@@ -55,9 +55,13 @@ file is 0.
 
 ## No secrets are being committed
 
-Checked before tracking: the confs reference `auth_basic_user_file` **paths**
-(`/config/nginx/.htpasswd-ongehoord`) and never contain credentials. The htpasswd
-files themselves stay in the gitignored config dir, which is correct.
+Checked before tracking: the confs referenced `auth_basic_user_file` **paths**
+(`/config/nginx/.htpasswd-ongehoord`) and never contained credentials. The
+htpasswd files themselves stayed in the gitignored config dir, which was correct.
+
+Moot since 2026-09-04: there is no `auth_basic` and no htpasswd file anywhere in
+the stack. Every protected route sits behind one tinyauth door and the single
+credential is a `0600` file rendered from `.env`, never a conf. ADR-0034.
 
 ## Invariant
 

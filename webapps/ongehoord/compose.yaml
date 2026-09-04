@@ -5,10 +5,12 @@
 #
 # Lives next to its Dockerfile so `build.context: .` resolves here.
 #
-# SWAG fronts it at ongehoord.${PUBLIC_DOMAIN} with HTTP basic auth at the
-# PROXY layer (creds in ./.env -> /config/nginx/.htpasswd-ongehoord); the app
-# itself has NO auth of its own. No host port: SWAG reaches it in-network at
-# ongehoord:3000.
+# SWAG fronts it at ongehoord.${PUBLIC_DOMAIN} behind the single tinyauth
+# forward-auth door, shared with every other protected route (ADR-0034). The
+# app has NO auth of its own and needs none; the per-app basic auth it used to
+# carry (BASIC_AUTH_* in ./.env -> /config/nginx/.htpasswd-ongehoord) was
+# retired on 2026-09-04, and `make check` asserts it does not come back.
+# No host port: SWAG reaches it in-network at ongehoord:3000.
 #
 # BUILD GOTCHA: this image is NOT buildable with a plain `docker compose
 # build` -- it needs buildx with `--network=host`. Combined with

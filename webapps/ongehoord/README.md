@@ -13,15 +13,20 @@ webapps/ongehoord/
 ├── .dockerignore
 ├── .env                             # SWAG basic-auth creds (gitignored)
 ├── .env.example
-├── ongehoord.subdomain.conf.sample  # SWAG proxy-conf (basic auth enabled)
 ├── README.md
 └── src/                             # git submodule → ongehoord-ui-content (tracks `acceptance`)
 ```
 
 App runtime secrets live in **`~/nas/.env.ongehoord`** (gitignored), injected into
-the container via the compose `env_file:` directive. SWAG basic-auth credentials
-live in **`webapps/ongehoord/.env`** and are baked into the SWAG htpasswd file —
-they never reach the container (auth is at nginx, not in the app).
+the container via the compose `env_file:` directive.
+
+This app has **no credentials of its own**. Access is gated at nginx by the single
+tinyauth door shared with every other protected route (ADR-0034); the proxy-conf
+that does it is tracked at `swag/proxy-confs/ongehoord.subdomain.conf`, not here.
+The per-app basic auth (`BASIC_AUTH_*` → `/config/nginx/.htpasswd-ongehoord`) and
+the duplicate `ongehoord.subdomain.conf.sample` that carried it were retired on
+2026-09-04 — the sample was a second source of truth for a conf ADR-0022 already
+tracks, and it still shipped `auth_basic` lines.
 
 ## Which branch is deployed
 
@@ -49,32 +54,26 @@ From `~/nas`:
 # 1. Build + start (reads app secrets from ~/nas/.env.ongehoord).
 docker compose up -d --build ongehoord
 
-# 2. Bake the basic-auth gate. Reads creds from this app's .env.
-set -a; . webapps/ongehoord/.env; set +a
-docker run --rm httpd:2.4-alpine \
-  htpasswd -nbB "$BASIC_AUTH_USER" "$BASIC_AUTH_PASS" \
-  > "${CONFIG_DIRECTORY:?}/swag/nginx/.htpasswd-ongehoord"
+# 2. Nothing to bake. There is no per-app credential: the route sits behind the
+#    single tinyauth door (ADR-0034), whose conf is already tracked at
+#    swag/proxy-confs/ongehoord.subdomain.conf and bind-mounted by swag. If you
+#    edited that conf, apply it with a RECREATE, not a reload -- Docker binds
+#    each conf by inode, so a replaced file never reaches the container:
+make swag-apply
 
-# 3. Install the proxy-conf (travels with the source; live copy in SWAG volume).
-cp webapps/ongehoord/ongehoord.subdomain.conf.sample \
-   "${CONFIG_DIRECTORY:?}/swag/nginx/proxy-confs/ongehoord.subdomain.conf"
-
-# 4. Reload nginx (no SWAG restart needed for proxy-conf changes).
-docker exec swag nginx -s reload
-
-# 5. (One-off) DNS: CNAME `ongehoord` → ${PUBLIC_DOMAIN}. The wildcard cert
+# 3. (One-off) DNS: CNAME `ongehoord` → ${PUBLIC_DOMAIN}. The wildcard cert
 #    already covers it; with Cloudflare proxy on, nothing else is needed.
 
-# 6. Verify (401 without creds, 200/301 with).
+# 4. Verify (302 to the login page anonymously, 200 with a session).
 curl -s -o /dev/null -w '%{http_code}\n' "https://ongehoord.${PUBLIC_DOMAIN}/nl"
-curl -s -o /dev/null -w '%{http_code}\n' -u "$BASIC_AUTH_USER:$BASIC_AUTH_PASS" \
-  "https://ongehoord.${PUBLIC_DOMAIN}/nl"
 ```
 
 ## Rotate the preview password
 
-Regenerate `BASIC_AUTH_PASS` in `webapps/ongehoord/.env`, then re-run deploy
-steps 2 and 4.
+There is no preview password any more. Rotate the one credential for the whole
+public surface instead: mint a new hash, put it in `~/nas/.env` as
+`TINYAUTH_PASSWORD_HASH`, then `make tinyauth-users && docker compose up -d
+tinyauth`. ADR-0034.
 
 ## Notes
 
