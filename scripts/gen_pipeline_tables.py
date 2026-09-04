@@ -153,6 +153,28 @@ def replace_block(doc_text: str, block: str) -> str:
   return doc_text[:start] + block + doc_text[end:]
 
 
+def canonical(text: str) -> str:
+  """Content with markdown-table padding removed.
+
+  `pnpm lint --fix` (prettier) re-pads table columns to align the pipes, so a
+  byte comparison would report the block stale every time the doc is formatted
+  and the two tools would fight forever. Comparing on cell CONTENT keeps the
+  gate semantic: it fires when a job, schedule, lock or docstring changes, and
+  ignores how wide the columns ended up.
+  """
+  out = []
+  for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("|"):
+      cells = [c.strip() for c in stripped.strip("|").split("|")]
+      if all(set(c) <= set("-: ") for c in cells if c):
+        continue  # the |---|---| separator row: pure formatting
+      out.append("|".join(cells))
+    else:
+      out.append(" ".join(stripped.split()))
+  return "\n".join(row for row in out if row)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   parser.add_argument("--check", action="store_true", help="Exit 1 if the doc is stale.")
@@ -183,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"    wrote the generated cron-fleet tables into {DOC.name}")
     return 0
 
-  if updated != doc_text:
+  if canonical(updated) != canonical(doc_text):
     print(
       f"    !!! {DOC.name}'s cron-fleet tables are stale.\n"
       "        The hand-maintained versions pointed at the wrong script twice.\n"
