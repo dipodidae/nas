@@ -23,7 +23,7 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 .PHONY: help check lint config diun-manifest bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
         submodules install-hooks verify-runtime backup-offsite \
-        notify-test notify-acl tinyauth-users
+        notify-test notify-acl tinyauth-users swag-apply
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -111,6 +111,19 @@ tinyauth-users: ## Render secrets/tinyauth-users (0600) from TINYAUTH_* in .env
 	echo "wrote secrets/tinyauth-users ($$(stat -c '%a %U:%G' secrets/tinyauth-users)) for user $$u"
 	@echo "tinyauth reads it at start only -- restart to apply:"
 	@echo "  docker compose up -d tinyauth"
+
+# A conf edit IS a deploy (ADR-0022), and the correct way to apply one is a
+# RECREATE, not `nginx -s reload`. Docker binds each conf by INODE, so anything
+# that replaces the host file rather than rewriting it in place -- git
+# checkout/revert/stash, prettier, `sed -i`, most editors -- silently detaches
+# the mount. nginx then keeps serving the old file while `git diff` is clean and
+# `nginx -t` passes. Measured 2026-09-04 on ongehoord.subdomain.conf. ADR-0034.
+swag-apply: ## Apply a proxy-conf/auth-conf edit (recreate swag, then prove it took)
+	@docker compose up -d --force-recreate swag
+	@$(MAKE) --no-print-directory wait-healthy SVC=swag
+	@echo "==> is nginx serving what this repo says?"
+	@scripts/check-swag-conf-drift.sh
+	@docker exec swag nginx -t
 
 up: ## Start the whole stack (see the ongehoord caveat in its compose file)
 	@docker compose up -d
@@ -265,6 +278,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	        || { echo "    !!! EPERM signalling nginx worker -- reload and graceful stop are broken"; exit 1; }; \
 	      break;; esac; done' \
 	  || { rc=1; crit=1; note "swag nginx cannot signal its workers (ADR-0021)"; }; \
+	echo "==> every SWAG conf tracked in this repo is what nginx is serving (ADR-0022)"; \
+	scripts/check-swag-conf-drift.sh \
+	  || { rc=1; crit=1; note "a tracked SWAG conf differs from the one nginx is serving -- a route may have lost its auth door while git looks clean (ADR-0022, ADR-0034)"; }; \
 	echo "==> nothing but dockerproxy has the Docker socket (ADR-0013)"; \
 	bad=$$(docker ps -q | xargs -r docker inspect \
 	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \

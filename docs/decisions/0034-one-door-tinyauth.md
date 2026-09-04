@@ -178,6 +178,49 @@ never inherited._ `diun` still reports newer tags, because it watches the
 excluding the `-distroless` variants and the steady stream of `-rc`/`-beta`/`-alpha`
 tags this repo publishes.
 
+## Two nginx/Docker behaviours that shaped the rollout
+
+**`auth_basic` and `auth_request` cannot coexist, and the failure is silent.**
+The plan was to give `ongehoord` _both_ doors for one commit, so the new one
+could be proven before the old one was removed. That does not work:
+`ngx_http_auth_basic_module` runs ahead of `ngx_http_auth_request_module` in
+nginx's access phase, so basic auth's `401` is what
+`error_page 401 = @tinyauth_login` converts into the redirect — **the auth
+subrequest is never made at all.** Measured 2026-09-04, all three combinations:
+
+| Request                                    | Result                         | `/api/auth/nginx` reached tinyauth?                                                                               |
+| ------------------------------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| valid tinyauth session, no `Authorization` | `302` to the login page        | **no**                                                                                                            |
+| valid basic-auth credentials, no session   | `302` to the login page        | yes, then `401` — tinyauth tried the credentials as its own and logged `error searching for user: user not found` |
+| both                                       | `301` (the app's own redirect) | yes, `200`                                                                                                        |
+
+So "both doors" is not two doors. It is basic auth wearing the login page as
+its error handler, and it locks out every real browser — the first row is the
+normal case. The two `auth_basic` lines therefore came out in the same commit
+that added the include. The split that _does_ revert independently is
+**conf edit** (this commit) then **credential retirement** (the next one): a
+revert of the first restores basic auth, a revert of the second restores the
+htpasswd file, and neither ever ships a redirect loop.
+
+**A conf edit that replaces the file does not reach the container.** ADR-0022
+mounts each conf _file_ individually, because a read-only mount over the whole
+`proxy-confs` directory breaks SWAG's startup (it rewrites 372 `*.conf.sample`
+files into it). Docker binds a single file by **inode**, so anything that
+replaces the host file rather than rewriting it in place silently detaches the
+mount: `git checkout`, `git revert`, `git stash pop`, prettier's writer,
+`sed -i`, and every editor that writes-then-renames. Measured here: a
+`git checkout` of `ongehoord.subdomain.conf` left the container serving the
+previous revision while `git diff` was clean, `nginx -t` passed and
+`nginx -s reload` changed nothing. `nginx -T` showing comment text that no
+longer existed in the repo was the only tell.
+
+Under ADR-0022 the conf _is_ the mechanism, so this is not cosmetic: it is the
+difference between a route having its door and appearing to. Two things now
+close it — `make swag-apply`, which recreates swag and then proves the confs
+took, and `scripts/check-swag-conf-drift.sh` in `make verify-runtime`, which
+compares every tracked conf's sha256 against the file nginx is actually
+serving and escalates a mismatch to `nas-critical`.
+
 ## Where the prompt for this work was wrong about v5
 
 Recorded because the next person will read the same docs.

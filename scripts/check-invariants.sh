@@ -127,6 +127,57 @@ MANUAL_UPDATE_ONLY = {
 CAP_DROP_WAIVER = {}
 
 # Ports that are public on purpose. Anything else must bind 127.0.0.1.
+# --------------------------------------------------------------------------
+# The door: which published routes sit behind tinyauth and which must not.
+#
+# The rule that decides the column: anything with a native mobile or desktop
+# client, a sync protocol, or an API consumed from OUTSIDE this box cannot sit
+# behind forward auth -- a 302 to a login page is not something a sync client
+# can follow. Verified before any door closed: no *arr-to-*arr, cleanuparr,
+# recyclarr, bazarr, jellyseerr or scripts/* integration is configured with a
+# https://<service>.${PUBLIC_DOMAIN} URL, in the live app configs and app
+# SQLite databases, not just the repo.
+#
+# `protect` means the auth include is in `location /`. It deliberately does NOT
+# mean every location: six of these confs carry an ungated `location ~ /api`,
+# because the *arr API's authentication is its API key and gating it would
+# break every native client that uses one for no gain. That is a path-scope,
+# not an oversight.
+#
+# BOTH DIRECTIONS ARE ASSERTED. A route silently losing its door answers 200,
+# which is exactly the failure ADR-0022's label<->conf reconciliation exists to
+# catch, one layer up. ADR-0034.
+DOOR = {
+    # never -- has real auth of its own AND clients that cannot follow a 302
+    "jellyfin":           "never",   # TV/phone/DLNA; LAN ports bypass SWAG entirely
+    "nextcloud":          "never",   # desktop + mobile sync over WebDAV
+    "ntfy":               "never",   # token auth; a door here makes a broken door SILENT
+    "auth":               "never",   # it is the thing that hands out the session
+    # protect -- browser-only UIs
+    "sonarr":             "protect",
+    "radarr":             "protect",
+    "lidarr":             "protect",
+    "bazarr":             "protect",
+    "prowlarr":           "protect",
+    "lingarr":            "protect",
+    "qui":                "protect",
+    "slskd":              "protect",
+    "cleanuparr":         "protect",
+    "lidarr-bulk":        "protect",
+    "playlist-generator": "protect",
+    "ongehoord":          "protect",
+    "jellyseerr":         "protect",
+}
+
+# Routes whose door has not been hung yet. This list SHRINKS to empty as the
+# migration lands, one commit per tier, and an empty list is the proof that
+# every `protect` route above actually has its door. Never add to it.
+DOOR_PENDING = {
+    "sonarr", "radarr", "lidarr", "bazarr", "prowlarr", "lingarr",
+    "qui", "slskd", "cleanuparr", "lidarr-bulk", "playlist-generator",
+    "jellyseerr",
+}
+
 # The one service whose public name is not its service name. tinyauth answers
 # on auth.${PUBLIC_DOMAIN} because "auth" is what the door is called; the conf
 # is therefore auth.subdomain.conf. Recorded here rather than left to the
@@ -1673,6 +1724,113 @@ if _appurl and os.path.isfile(_srv):
              "expired session bounces between two of them.")
     else:
         ok("auth-login-url-agrees", f"{_conf_host}. == TINYAUTH_APPURL")
+
+# ==========================================================================
+# 34c. Every `protect` route has its door; no `never` route has one
+# ==========================================================================
+# This is the assertion that catches the actual failure mode: a route that
+# loses its auth include and answers 200 to the whole internet, which nothing
+# else here would notice. Both directions, like ADR-0022's label<->conf
+# reconciliation one layer up. ADR-0034.
+_LOC_INC = "include /config/nginx/tinyauth-location.conf;"
+_SRV_INC = "include /config/nginx/tinyauth-server.conf;"
+
+def _conf_locations(text):
+    """[(header, body)] for each top-level `location ... { }` in a server block.
+
+    Brace-counted rather than regex-matched: a location body contains braces
+    (map blocks, if blocks), and a naive regex stops at the first one.
+    """
+    out = []
+    for m in re.finditer(r"^(\s*)location\s+([^\{]*)\{", text, re.M):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+            i += 1
+        out.append((m.group(2).strip(), text[m.end():i]))
+    return out
+
+_undoored, _overdoored, _halfdoored, _absent = [], [], [], []
+for _route, _decision in sorted(DOOR.items()):
+    _path = f"swag/proxy-confs/{_route}.subdomain.conf"
+    if not os.path.isfile(_path):
+        _absent.append(_route)
+        continue
+    _txt = open(_path, encoding="utf-8", errors="replace").read()
+    _live = "\n".join(ln for ln in _txt.splitlines()
+                      if not ln.lstrip().startswith("#"))
+    _locs = _conf_locations(_live)
+    _root = [b for h, b in _locs if h == "/"]
+    _has_srv = _SRV_INC in _live
+    # the location include, counted only inside `location /`
+    _has_loc = any(_LOC_INC in b for b in _root)
+    _any_loc = _LOC_INC in _live
+
+    if _decision == "never":
+        if _has_loc or _any_loc or _has_srv:
+            _overdoored.append(_route)
+    elif _route in DOOR_PENDING:
+        # not migrated yet -- must not be half-migrated either
+        if _has_loc or _any_loc:
+            _halfdoored.append(f"{_route} (listed as PENDING but already has the door)")
+    elif not _has_loc:
+        _undoored.append(_route)
+    elif not _has_srv:
+        _halfdoored.append(f"{_route} (location include without the server include)")
+
+if _absent:
+    fail("door-reconciliation", "ADR-0034",
+         f"{_absent} are classified in DOOR but have no proxy-conf. Either the "
+         "route was deleted (drop the DOOR entry) or the conf was lost.")
+elif _undoored:
+    fail("door-reconciliation", "ADR-0034",
+         f"{_undoored} are classified `protect` but their `location /` does not "
+         f"include tinyauth-location.conf. That route answers the whole internet "
+         "with a 200 and nothing else here would notice.")
+elif _overdoored:
+    fail("door-reconciliation", "ADR-0034",
+         f"{_overdoored} are classified `never` but reference the auth conf. "
+         "Read ADR-0034 before changing this: each of those has clients that "
+         "cannot follow a 302, and ntfy specifically must stay open or a broken "
+         "door becomes a SILENT one.")
+elif _halfdoored:
+    fail("door-reconciliation", "ADR-0034", "; ".join(_halfdoored) +
+         ". A location include without the server include means the 401 has "
+         "nowhere to redirect to; nginx fails the request instead of showing a "
+         "login page.")
+else:
+    _n_prot = sum(1 for r, d in DOOR.items()
+                  if d == "protect" and r not in DOOR_PENDING)
+    _n_never = sum(1 for d in DOOR.values() if d == "never")
+    _msg = f"{_n_prot} doored, {_n_never} deliberately open"
+    if DOOR_PENDING:
+        _msg += f", {len(DOOR_PENDING)} still to migrate"
+        warn("door-reconciliation", "ADR-0034",
+             f"{sorted(DOOR_PENDING)} are classified `protect` but not migrated "
+             "yet. This warning is the migration's own progress bar and must "
+             "reach zero.")
+    else:
+        ok("door-reconciliation", _msg)
+
+# ... and every published conf is classified. An unclassified one is a public
+# route nobody decided about, which is how eleven of them ended up with no
+# authentication at all.
+_published = {
+    f[: -len(".subdomain.conf")]
+    for f in (os.listdir("swag/proxy-confs") if os.path.isdir("swag/proxy-confs") else [])
+    if f.endswith(".subdomain.conf")
+}
+_unclassified = sorted(_published - set(DOOR))
+if _unclassified:
+    fail("door-classification-complete", "ADR-0034",
+         f"{_unclassified} are published but absent from DOOR. Every public route "
+         "gets a decision -- `protect` or `never` with a reason. Silence is how "
+         "eleven of these ended up with no authentication at all.")
+else:
+    ok("door-classification-complete", f"{len(_published)} routes, all classified")
 
 # ==========================================================================
 # 35. Nothing under secrets/ is tracked by git
