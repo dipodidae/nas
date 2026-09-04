@@ -471,10 +471,23 @@ for svc, (denied, why) in ENV_DENY.items():
     else:
         ok("env-secrets", f"{svc} clean of {sorted(denied)}")
 
+# Variables that MATCH the secret-shaped pattern but are public by definition.
+# Narrow, per-variable, and deliberately NOT done by adding the service to
+# SECRET_OK: tinyauth's whole design is that it carries no credential in its
+# environment at all (34a), so waiving the entire service to let one UI string
+# through would trade a real assertion for a cosmetic one.
+#
+# TINYAUTH_UI_FORGOTPASSWORDMESSAGE is rendered on the login page to anonymous
+# visitors. It contains the substring PASSWORD and nothing else. ADR-0034.
+NOT_A_SECRET = {
+    "TINYAUTH_UI_FORGOTPASSWORDMESSAGE",
+}
+
 for svc in sorted(services):
     if svc in SECRET_OK:
         continue
-    leaked = sorted(k for k in env_of(svc) if SECRET_PAT.search(k))
+    leaked = sorted(k for k in env_of(svc)
+                    if SECRET_PAT.search(k) and k not in NOT_A_SECRET)
     if leaked:
         fail("env-secrets", "ADR-0011",
              f"{svc} carries secret-shaped env {leaked} but is not on the "
@@ -1774,6 +1787,59 @@ if _appurl and os.path.isfile(_srv):
              "expired session bounces between two of them.")
     else:
         ok("auth-login-url-agrees", f"{_conf_host}. == TINYAUTH_APPURL")
+
+# ==========================================================================
+# 34f. The login page's stylesheet is mounted AND linked
+# ==========================================================================
+# Two halves that are useless apart, and the failure is visible rather than
+# silent: tinyauth's own default theme is LIGHT, so if the file stops being
+# mounted or the sub_filter that links it is lost, the door does not break --
+# it turns white. Which is precisely the kind of thing nobody writes an
+# assertion for and everybody notices at 2am. ADR-0034.
+_CSS_REPO = "tinyauth/custom.css"
+_CSS_TARGET = "/data/resources/custom.css"
+_CSS_HREF = "/resources/custom.css"
+_AUTH_CONF = "swag/proxy-confs/auth.subdomain.conf"
+
+if "tinyauth" not in services:
+    pass  # tinyauth-present already failed
+else:
+    _css_problems = []
+    if not os.path.isfile(_CSS_REPO):
+        _css_problems.append(f"{_CSS_REPO} is not in the repo")
+    _m = [v for v in (services["tinyauth"].get("volumes") or [])
+          if str(v.get("target", "")) == _CSS_TARGET]
+    if not _m:
+        _css_problems.append(f"nothing is mounted at {_CSS_TARGET}")
+    elif os.path.basename(str(_m[0].get("source", ""))) != "custom.css":
+        _css_problems.append(
+            f"{_CSS_TARGET} comes from {_m[0].get('source')!r}, not {_CSS_REPO}")
+    elif not _m[0].get("read_only"):
+        _css_problems.append(f"{_CSS_TARGET} is mounted read-WRITE; add :ro")
+    if os.path.isfile(_AUTH_CONF):
+        _ac = open(_AUTH_CONF, encoding="utf-8", errors="replace").read()
+        _ac_live = "\n".join(ln for ln in _ac.splitlines()
+                             if not ln.lstrip().startswith("#"))
+        if _CSS_HREF not in _ac_live:
+            _css_problems.append(
+                f"{_AUTH_CONF} no longer sub_filters a link to {_CSS_HREF}")
+        elif "sub_filter" not in _ac_live:
+            _css_problems.append(f"{_AUTH_CONF} names the href but has no sub_filter")
+        elif 'Accept-Encoding ""' not in _ac_live:
+            _css_problems.append(
+                f"{_AUTH_CONF} sub_filters without clearing Accept-Encoding; nginx "
+                "cannot rewrite a compressed body, so the link would silently not "
+                "be injected the moment gzip is enabled upstream")
+    else:
+        _css_problems.append(f"{_AUTH_CONF} is missing")
+
+    if _css_problems:
+        fail("tinyauth-login-styled", "ADR-0034",
+             "; ".join(_css_problems) + ". tinyauth's own default theme is LIGHT, "
+             "so losing either half turns the login page white rather than "
+             "breaking it.")
+    else:
+        ok("tinyauth-login-styled", "custom.css mounted :ro and linked by sub_filter")
 
 # ==========================================================================
 # 34c. Every `protect` route has its door; no `never` route has one

@@ -123,6 +123,27 @@ means the door really is open. It runs inside `make verify-runtime` at `nas-crit
 swag starting into a window where every protected door is 500. It is not what keeps the
 unprotected routes up; the variable upstream is.
 
+## Styling the login page
+
+tinyauth v5's UI is Tailwind v4 + shadcn themed through CSS custom properties,
+so restyle it by **overriding tokens** (`--background`, `--primary`, `--input`,
+`--radius`, on `:root` and `.dark` together) rather than utility classes — the
+tokens survive an upstream refactor. It serves `/resources/*` from its own
+resources dir but **loads nothing from there itself**, so the `<link>` is
+injected by a `sub_filter` in `auth.subdomain.conf` (which needs
+`proxy_set_header Accept-Encoding "";` — nginx cannot rewrite a compressed
+body).
+
+`tinyauth/custom.css` is tracked here and mounted `:ro`; `make check` asserts
+both the mount and the `sub_filter`, because **tinyauth's default theme is
+light** — losing either half turns the login page white rather than breaking it,
+which is the kind of failure nobody writes an assertion for.
+
+Never add a webfont or any external URL to this page: it handles the credential
+for thirteen routes, and it has to work when the WAN is down. `docker exec` +
+Playwright's cached chromium (`--headless --screenshot`, `--dump-dom`) is how to
+actually look at it and get exact selectors.
+
 ## "The password is definitely right and it still says no"
 
 That is the **lockout**, not the credential. `LOGINMAXRETRIES=3` within

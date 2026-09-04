@@ -249,6 +249,80 @@ not. A real restart fixed it immediately.
 The rotation script's happy path was never affected, because it stops the
 container before starting it. Only the rollback used a bare `up -d`.
 
+## Styling the login page
+
+The brief was "very minimalist, Tailwind, black, monochrome, dark". Three facts
+about tinyauth v5 decided how:
+
+- its UI is **Tailwind v4 + shadcn**, themed entirely through CSS custom
+  properties (`--background`, `--primary`, `--input`, `--radius`, …) with a
+  `.dark` class for the dark variant, and its default palette is already
+  chroma-0;
+- it serves arbitrary files from its resources directory at `/resources/*`
+  (verified: `content-type: text/css`), but **loads nothing from there itself** —
+  neither the HTML shell nor any JS chunk references `/resources/`;
+- `TINYAUTH_UI_BACKGROUNDIMAGE` defaults to `/background.jpg`, **a 542 KB
+  photograph** rendered as an inline style behind the form.
+
+So: `tinyauth/custom.css` is tracked in this repo, bind-mounted `:ro` to
+`/data/resources/custom.css`, and linked into the page by a `sub_filter` in
+`auth.subdomain.conf`. Written as **token overrides**, which restyle every
+component at once and survive an upstream markup refactor; overriding utility
+classes would not. `!important` appears three times, each beating an inline
+style or a utility, each commented.
+
+**No `@import`, no webfont, no external URL of any kind — deliberately.** This
+is the one page in the stack that handles the credential for thirteen routes; a
+third-party request here is a supply-chain surface on the highest-value asset we
+have, and it has to work when the WAN is down, which is exactly when you are
+logging in to fix something. The personality comes from scale, weight and
+tracking on the platform UI face.
+
+Design decisions worth the ink:
+
+- **True `#000`**, not `#0b0b0b`. The brief said black; a tinted near-black is
+  the usual tell; and it is the only value that actually turns pixels off on the
+  phone this is opened from.
+- **The container is removed, not recoloured.** `--card` becomes the page
+  colour _and_ the card's border goes transparent, so the form sits on the
+  black with nothing around it. Scoped to `.bg-card.rounded-xl`, because the
+  settings button is `.bg-card.rounded-full` and its hairline ring is the only
+  thing saying it is a control.
+- **Inversion is the only accent a monochrome palette has**, so it is spent
+  once: white fill, black label, on the submit button. `--primary` in shadcn's
+  dark theme was already near-white, so this uses the system rather than
+  fighting it.
+- **`--radius: 2px`** — not 0 (zero radius plus hairlines is the broadsheet
+  look) and not the stock 10px (the SaaS-card default).
+- **Fields get the height**, 44px rather than upstream's 36px: this page has
+  one job and that is where it happens. 44px is also the smallest comfortable
+  touch target. `font-size: 16px` on inputs is not taste — iOS Safari zooms the
+  viewport below that and throws the layout sideways mid-login.
+- **Cut** "Welcome back, please login". An instruction to log in, above a login
+  form, is filler.
+- Labels drop to 400 weight in the muted grey so they annotate the field
+  instead of competing with what you type. Sentence case, UI face —
+  deliberately **not** tracked-out capitals or a monospace, both of which are
+  the reflex for a monochrome interface and both of which are the tell.
+- **One deliberate break from "monochrome":** `--destructive` keeps 6% chroma.
+  The only feedback channel on this page is a line of text, and its most
+  important message is the lockout above — a strictly neutral error is
+  indistinguishable from body text. Set it to `oklch(75% 0 0)` for purity.
+
+**Reviewed by looking at it**, with Playwright's cached chromium
+(`--headless --screenshot`), at 1100px and at 390px. That caught two things
+reasoning had not: the card outline was still drawing a box the tokens had made
+invisible, and — self-inflicted — making the field 44px stranded the
+forgot-password link 8px low, because upstream positions it absolutely with
+`bottom-[2.565rem]`, a magic value tuned to its own 36px field. Pinned to
+`top: 0` instead of re-tuning the number, selected by `href` rather than a
+utility class, so it survives the next height change either side.
+
+`make check` asserts both halves (`tinyauth-login-styled`), because the failure
+is visible rather than silent: **tinyauth's own default theme is light**, so
+losing the mount or the `sub_filter` turns the login page white rather than
+breaking it.
+
 ## The lockout returns 401, and says so only in its log
 
 `TINYAUTH_AUTH_LOGINMAXRETRIES` (3) and `TINYAUTH_AUTH_LOGINTIMEOUT` (300 s) keep

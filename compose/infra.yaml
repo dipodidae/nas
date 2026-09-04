@@ -157,10 +157,36 @@ services:
       # that warning is expected. ADR-0034.
       # Deliberately NOT loosened: LOGINMAXRETRIES (3) and LOGINTIMEOUT (300s)
       # keep their upstream defaults.
+      # --- login page appearance (ADR-0034) -------------------------------
+      # Names the door by what the user recognises rather than by the vendor.
+      # On a login page the domain is also genuine anti-phishing signal: it is
+      # the one thing a lookalike page cannot copy.
+      - TINYAUTH_UI_TITLE=${PUBLIC_DOMAIN}
+      # Upstream's default is "You can change your password by changing the
+      # configuration.", which describes the system rather than telling you
+      # what to do. Active voice, and deliberately no path: this string is
+      # served to anonymous visitors.
+      - TINYAUTH_UI_FORGOTPASSWORDMESSAGE=One password for everything here. Rotate it on the host.
+      # A 1x1 transparent PNG, inline. Upstream's default is /background.jpg --
+      # a 542 KB photograph behind the form, which is the least minimal thing
+      # on the page and the largest thing it downloads. Pointing the variable
+      # at a data URI means the photo is never fetched at all; tinyauth/custom.css
+      # additionally forces `background-image: none` so the page stays black
+      # even if this is reset.
+      - TINYAUTH_UI_BACKGROUNDIMAGE=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4DwABBAEAX+RxlwAAAABJRU5ErkJggg==
       - TINYAUTH_ANALYTICS_ENABLED=false
     volumes:
       - ${CONFIG_DIRECTORY}/tinyauth:/data
       - ../secrets/tinyauth-users:/secrets/users:ro
+      # The login page's stylesheet, TRACKED IN THIS REPO and mounted read-only
+      # rather than dropped into the gitignored config dir -- same rule as the
+      # proxy-confs, and for the same reason: it is the mechanism, not a
+      # preference. tinyauth serves /data/resources/* at /resources/* (verified:
+      # content-type text/css), and swag's auth.subdomain.conf sub_filters a
+      # <link> to it into the page. A nested mount inside the /data bind above,
+      # which is why ${CONFIG_DIRECTORY}/tinyauth/resources must exist --
+      # `make bootstrap` creates it. ADR-0034.
+      - ../tinyauth/custom.css:/data/resources/custom.css:ro
     ports:
       # Loopback only; the public side is SWAG's auth.${PUBLIC_DOMAIN}.
       # 3005, not 3000: lidarr-bulk already owns 127.0.0.1:3000, which
