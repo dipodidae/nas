@@ -37,10 +37,10 @@ config, not the YAML:
 
 Against that, on disk:
 
-| Setting | Threshold | Observed |
-| --- | --- | --- |
-| `files.complete` | 14.0 days | **75 directories older**, oldest **23.8 days**, 1.63 GB |
-| `files.incomplete` | 30.0 days | **1299 directories**, oldest **77.4 days** |
+| Setting            | Threshold | Observed                                                |
+| ------------------ | --------- | ------------------------------------------------------- |
+| `files.complete`   | 14.0 days | **75 directories older**, oldest **23.8 days**, 1.63 GB |
+| `files.incomplete` | 30.0 days | **1299 directories**, oldest **77.4 days**              |
 
 And the container log contains **zero** occurrences of the word "retention" across a full
 startup and 19 hours of operation:
