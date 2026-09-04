@@ -123,6 +123,22 @@ means the door really is open. It runs inside `make verify-runtime` at `nas-crit
 swag starting into a window where every protected door is 500. It is not what keeps the
 unprotected routes up; the variable upstream is.
 
+## Logging out and the browser cache
+
+Logout is server-side and immediate: the session row is deleted and the same
+cookie `401`s straight away. But a protected page can keep rendering after logout
+if its upstream sends no `Cache-Control` — the browser heuristically caches the
+shell, the request never reaches nginx, and `auth_request` never runs. `Ctrl+F5`
+bounces correctly. Measured on `playlist-generator` (no `Cache-Control` at all);
+sonarr is immune because it sends `no-cache, no-store` itself.
+
+`swag/tinyauth-location.conf` therefore carries
+`add_header Cache-Control "no-cache" always;` for every protected route.
+**`no-cache`, not `no-store`** — the browser still caches and revalidates, so
+assets come back `304` and the revalidation passes through `auth_request`, which
+is the point. If you ever see a logged-out tab still working, check that line
+before suspecting the session store.
+
 ## tinyauth specifics that cost time to learn
 
 - **The credential is a file, never an env var.** `.env` holds `TINYAUTH_USER` and

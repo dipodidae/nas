@@ -249,6 +249,45 @@ not. A real restart fixed it immediately.
 The rotation script's happy path was never affected, because it stops the
 container before starting it. Only the rollback used a bare `up -d`.
 
+## Logging out has to reach the browser cache too
+
+Logout **is** server-side and immediate — verified against a throwaway instance:
+`POST /api/user/logout` deletes the session row from SQLite (1 → 0) and the same
+cookie then returns `401` from `/api/auth/nginx`. There is no lingering
+server-side access.
+
+What is _not_ immediate is the browser. Observed 2026-09-04: log in to
+`playlist-generator`, log out at `auth.4eva.me` in another tab, soft-refresh the
+app — and the page still renders. `Ctrl+F5` bounces you correctly. The reason is
+that **playlist-generator's SPA shell sends no `Cache-Control` at all**, only
+`ETag`/`Last-Modified`, so browsers apply _heuristic_ caching: the request never
+reaches nginx, so `auth_request` never runs. Nothing new can be fetched — every
+API call does go out and does get the `302` — but the shell keeps painting.
+
+Sonarr does **not** behave this way, because it sends
+`Cache-Control: no-cache, no-store` itself. The gap is per-app, which is why the
+fix lives in the shared `swag/tinyauth-location.conf` rather than in thirteen
+confs:
+
+```nginx
+add_header Cache-Control "no-cache" always;
+```
+
+**`no-cache`, deliberately not `no-store`.** `no-cache` still lets the browser
+keep the entity and revalidate it, so a content-hashed asset comes back `304`
+(a few hundred bytes) — and the revalidation goes _through nginx_, which is the
+whole point, because that is what makes `auth_request` run. `no-store` would
+forbid caching outright and re-download every asset on every page load for no
+extra safety. `always` so it also covers the login redirect.
+
+Proven by effect rather than by reading nginx's docs: an isolated server block
+whose auth subrequest pointed at a throwaway tinyauth (so the session was one
+this session controlled) returned `cache-control: no-cache` alongside the
+upstream's own `etag` on an authenticated `200`, and `302` on the same cookie
+after logout. It stacks harmlessly with an upstream that already sets the header
+— the response then carries two lines, which browsers read as one comma-joined
+value.
+
 ## Rotating the password
 
 `scripts/tinyauth_set_password.sh` does every step and proves each one:
