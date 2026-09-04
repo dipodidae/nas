@@ -82,6 +82,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -258,8 +259,76 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     action="store_true",
     help="Write the state file without running anything, so a never-yet-run job is still watched.",
   )
+  parser.add_argument(
+    "--lock",
+    help=(
+      "Hold an exclusive lock on this path for the duration of the job. Use this "
+      "instead of wrapping the line in `flock -n`: an external flock exits 1 "
+      "WITHOUT running anything, so cron_job never starts and the skip leaves no "
+      "trace at all -- a skipped run is then indistinguishable from a clean one."
+    ),
+  )
+  parser.add_argument(
+    "--lock-wait",
+    type=float,
+    default=0.0,
+    help="Seconds to wait for --lock before giving up (default 0 = don't wait).",
+  )
+  parser.add_argument(
+    "--max-skips",
+    type=int,
+    default=3,
+    help=(
+      "Alert after this many CONSECUTIVE lock skips (default 3). One skip is "
+      "contention; several in a row means the holder is starving this job."
+    ),
+  )
   parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the command to run.")
   return parser.parse_args(argv)
+
+
+def acquire_lock(path: str, wait_seconds: float):
+  """An exclusive flock, or None if it is held. Caller keeps the handle open.
+
+  Deliberately mirrors `flock -n` / `flock -w N`, so migrating a cron line from
+  an external flock to `--lock` does not change the contention behaviour -- only
+  whether the skip is recorded.
+  """
+  handle = open(path, "a+")  # noqa: SIM115 - must outlive this function
+  deadline = time.monotonic() + max(0.0, wait_seconds)
+  while True:
+    try:
+      fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+      return handle
+    except OSError:
+      if time.monotonic() >= deadline:
+        handle.close()
+        return None
+      time.sleep(0.25)
+
+
+def record_skip(name: str, state: dict, lock: str, max_skips: int) -> int:
+  """Count a lock skip, and alert once it stops looking like ordinary contention.
+
+  Exits 0 either way: a skip is not a failure of this job, it is a report about
+  another job holding the lock too long. Five jobs share
+  /tmp/nas-tubifarry-cleanup.lock and the 05:30 one takes it with `flock -w 600`,
+  so it can hold the lock straight through the :37 window.
+  """
+  skips = int(state.get("consecutive_lock_skips") or 0) + 1
+  state["consecutive_lock_skips"] = skips
+  state["last_lock_skip"] = time.time()
+  save_state(name, state)
+  print(f"--- {name} SKIPPED: lock {lock} is held (consecutive skips: {skips})")
+  if skips >= max_skips:
+    notifier.notify(
+      "attention",
+      f"cron:{name}:lock-starved",
+      f"{name} has skipped {skips} consecutive runs waiting on {lock}. "
+      "Another holder is starving it; a skipped run produces no output, so this "
+      "would otherwise look exactly like a healthy quiet period.",
+    )
+  return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -282,6 +351,16 @@ def main(argv: list[str] | None = None) -> int:
   if not command:
     print("ERROR: no command given (put it after --)", file=sys.stderr)
     return 2
+
+  lock_handle = None
+  if args.lock:
+    lock_handle = acquire_lock(args.lock, args.lock_wait)
+    if lock_handle is None:
+      return record_skip(args.name, state, args.lock, args.max_skips)
+    # Reaching the job means contention (if any) resolved; the streak is over.
+    if state.get("consecutive_lock_skips"):
+      print(f"--- {args.name} lock acquired after {state['consecutive_lock_skips']} skip(s)")
+    state["consecutive_lock_skips"] = 0
 
   ok_codes = parse_ok_codes(args.ok_codes)
   started = time.strftime("%Y-%m-%dT%H:%M:%S%z")

@@ -1,4 +1,4 @@
-"""Tests for scripts/cron_job.py — the in-flight heartbeat half of the contract.
+"""Tests for scripts/cj.py — the in-flight heartbeat half of the contract.
 
 The read side lives in test_stack_watchdog.py (`check_cron_jobs`); these cover
 the writer, plus one end-to-end pass proving the two halves actually agree.
@@ -217,3 +217,66 @@ def test_a_success_clears_the_consecutive_failure_count(monkeypatch, tmp_path):
     state = cj.load_state("clr")
     assert "consecutive_failures" not in state
     assert "last_failure_lane" not in state
+
+
+# --- lock skips must leave a trace (an external `flock -n` leaves none) ---
+
+
+def test_lock_is_acquired_when_free(tmp_path):
+    lock = tmp_path / "l.lock"
+    handle = cj.acquire_lock(str(lock), 0.0)
+    assert handle is not None
+    handle.close()
+
+
+def test_lock_is_refused_when_held(tmp_path):
+    lock = tmp_path / "l.lock"
+    held = cj.acquire_lock(str(lock), 0.0)
+    assert held is not None
+    assert cj.acquire_lock(str(lock), 0.0) is None
+    held.close()
+
+
+def test_lock_wait_gives_up_after_the_deadline(tmp_path):
+    import time as _t
+
+    lock = tmp_path / "l.lock"
+    held = cj.acquire_lock(str(lock), 0.0)
+    start = _t.monotonic()
+    assert cj.acquire_lock(str(lock), 0.5) is None
+    assert _t.monotonic() - start >= 0.4
+    held.close()
+
+
+def test_a_skipped_run_exits_0_and_records_the_streak(tmp_path, monkeypatch):
+    """A skip is not this job's failure -- but it must not look like a clean run."""
+    monkeypatch.setattr(cj, "save_state", lambda name, st: None)
+    sent = []
+    monkeypatch.setattr(cj.notifier, "notify", lambda *a, **k: sent.append(a))
+    state = {}
+    assert cj.record_skip("j", state, "/tmp/x.lock", max_skips=3) == 0
+    assert state["consecutive_lock_skips"] == 1
+    assert sent == []
+
+
+def test_consecutive_skips_alert_once_past_the_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(cj, "save_state", lambda name, st: None)
+    sent = []
+    monkeypatch.setattr(cj.notifier, "notify", lambda *a, **k: sent.append(a))
+    state = {"consecutive_lock_skips": 2}
+    cj.record_skip("j", state, "/tmp/x.lock", max_skips=3)
+    assert state["consecutive_lock_skips"] == 3
+    assert len(sent) == 1
+    assert "lock-starved" in sent[0][1]
+
+
+def test_running_the_job_clears_the_skip_streak(tmp_path, monkeypatch):
+    monkeypatch.setattr(cj, "save_state", lambda name, st: None)
+    monkeypatch.setattr(cj, "load_state", lambda name: {"consecutive_lock_skips": 4})
+    monkeypatch.setattr(cj, "run_job", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(cj.notifier, "notify", lambda *a, **k: None)
+    lock = tmp_path / "l.lock"
+    rc = cj.main(
+        ["--name", "j", "--max-age-min", "60", "--lock", str(lock), "--", "true"]
+    )
+    assert rc == 0
