@@ -1811,6 +1811,38 @@ else:
     else:
         ok("door-reconciliation", _msg)
 
+# ... the apex is a separate case, because it is path-scoped rather than
+# all-or-nothing and it arrives as site-confs/root.conf rather than a
+# subdomain conf. The landing page must stay PUBLIC and the ops dashboard must
+# not -- and /ops-status.json counts, because gating only the HTML would leave
+# the payload one URL away. ADR-0034.
+_APEX = "webapps/4eva-rootpage/4eva-rootpage.root.conf"
+_APEX_GATED = {"= /ops.html", "= /ops-status.json"}
+if not os.path.isfile(_APEX):
+    fail("apex-path-scope", "ADR-0034", f"{_APEX} is missing; the apex is unrouted.")
+else:
+    _atxt = "\n".join(
+        ln for ln in open(_APEX, encoding="utf-8", errors="replace").read().splitlines()
+        if not ln.lstrip().startswith("#"))
+    _alocs = {h: b for h, b in _conf_locations(_atxt)}
+    _agated = {h for h, b in _alocs.items() if _LOC_INC in b}
+    if _SRV_INC not in _atxt and _agated:
+        fail("apex-path-scope", "ADR-0034",
+             f"{_APEX} gates {sorted(_agated)} but omits the server include, so "
+             "the 401 has nowhere to redirect to.")
+    elif _agated != _APEX_GATED:
+        _extra = sorted(_agated - _APEX_GATED)
+        _missing = sorted(_APEX_GATED - _agated)
+        _why = []
+        if _missing:
+            _why.append(f"{_missing} lost the door -- live stack status is public")
+        if _extra:
+            _why.append(f"{_extra} gained one -- the landing page is not supposed "
+                        "to need a login")
+        fail("apex-path-scope", "ADR-0034", "; ".join(_why))
+    else:
+        ok("apex-path-scope", "apex public, /ops.html + /ops-status.json gated")
+
 # ... and every published conf is classified. An unclassified one is a public
 # route nobody decided about, which is how eleven of them ended up with no
 # authentication at all.
