@@ -173,7 +173,6 @@ DOOR = {
 # migration lands, one commit per tier, and an empty list is the proof that
 # every `protect` route above actually has its door. Never add to it.
 DOOR_PENDING = {
-    "sonarr", "radarr", "lidarr", "bazarr", "prowlarr", "lingarr",
     "qui", "slskd", "cleanuparr", "lidarr-bulk", "playlist-generator",
     "jellyseerr",
 }
