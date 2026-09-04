@@ -1578,6 +1578,38 @@ else:
         else:
             ok("tinyauth-credential-rendered", f"{_src} 0600, matches .env")
 
+    # (b2) ... and the hash is QUOTED in .env. Not cosmetic: .env is
+    # `.`-sourced by shell in two Makefile recipes that run under `set -u`
+    # (.SHELLFLAGS is `-eu -o pipefail`), and an unquoted `$2a$10$...` there
+    # does not become a mangled value -- it becomes `$2: unbound variable` and
+    # an ABORT. `make verify-runtime` died at that line and silently skipped
+    # its last six assertions, including the ntfy grants and every *arr
+    # notification connector. An alerting check that stops running without
+    # saying so is the exact failure ADR-0032/0033 exist to prevent, and this
+    # is what stops it recurring. ADR-0034.
+    _raw = None
+    try:
+        with open(".env", encoding="utf-8", errors="replace") as _fh:
+            for _ln in _fh:
+                if _ln.startswith("TINYAUTH_PASSWORD_HASH="):
+                    _raw = _ln.split("=", 1)[1].rstrip("\n")
+    except OSError:
+        pass
+    if _raw is None:
+        pass  # covered by the warn above
+    elif not (
+        (_raw.startswith("'") and _raw.endswith("'"))
+        or (_raw.startswith('"') and _raw.endswith('"'))
+    ):
+        fail("tinyauth-hash-is-quoted", "ADR-0034",
+             "TINYAUTH_PASSWORD_HASH in .env is not quoted. A bcrypt hash "
+             "contains `$`, and .env is `.`-sourced by shell under `set -u`, "
+             "where `$2a$10$...` aborts with `$2: unbound variable` -- taking "
+             "every check after it in the same recipe with it, silently. "
+             "Wrap it in single quotes; `make tinyauth-users` strips them.")
+    else:
+        ok("tinyauth-hash-is-quoted", "single-quoted, so `. ./.env` survives")
+
     # (c) No label provider, therefore no Docker socket and no dockerproxy
     # route. Tinyauth's default LABELPROVIDER is `auto`, which discovers per-app
     # ACLs from Docker labels and so needs the socket. dockerproxy is the sole

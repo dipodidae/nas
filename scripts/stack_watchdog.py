@@ -154,10 +154,19 @@ OOM_PATTERN = re.compile(r"Out of memory: Killed process|oom-kill:|oom_reaper:")
 # for its lane -- info->3, warning->4, critical->5, notice->2 (ADR-0033).
 SEVERITY_PRIORITY = {"critical": 5, "warning": 4, "notice": 2, "info": 3}
 
-# The four services whose failure a human notices without being told. Anything
-# here that stays down past USER_VISIBLE_CRITICAL_MIN escalates to nas-critical
-# even though a merely-unhealthy container starts life in nas-infra.
-USER_VISIBLE_SERVICES = frozenset({"jellyfin", "nextcloud", "swag", "qbittorrent"})
+# The services whose failure a human notices without being told. Anything here
+# that stays down past USER_VISIBLE_CRITICAL_MIN escalates to nas-critical even
+# though a merely-unhealthy container starts life in nas-infra.
+#
+# tinyauth is on this list as of 2026-09-04 and belongs here for a reason worth
+# spelling out: it is the single forward-auth door in front of THIRTEEN routes
+# (ADR-0034), so losing it does not degrade one service, it closes every
+# protected one at once with a 502. The unprotected ones -- jellyfin, nextcloud,
+# ntfy, the apex -- keep serving, which is exactly what makes this failure easy
+# to miss: the box looks fine and the sysadmin surface is what is gone.
+USER_VISIBLE_SERVICES = frozenset({
+    "jellyfin", "nextcloud", "swag", "qbittorrent", "tinyauth",
+})
 # An unhealthy container is usually a blip. Fifteen minutes of it is not.
 ESCALATE_ATTENTION_MIN = 15.0
 USER_VISIBLE_CRITICAL_MIN = 5.0

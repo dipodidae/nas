@@ -96,8 +96,8 @@ tinyauth-users: ## Render secrets/tinyauth-users (0600) from TINYAUTH_* in .env
 	@# bcrypt hash is re-read first by Make and then by bash -u, which failed
 	@# with `$$2: unbound variable` (measured 2026-09-04). Reading it inside the
 	@# recipe's own shell keeps the value in a shell variable, unexpanded.
-	@u=$$(sed -n 's/^TINYAUTH_USER=//p' $(ENV_FILE) 2>/dev/null | tail -1); \
-	h=$$(sed -n 's/^TINYAUTH_PASSWORD_HASH=//p' $(ENV_FILE) 2>/dev/null | tail -1); \
+	@u=$$(sed -n "s/^TINYAUTH_USER=//p" $(ENV_FILE) 2>/dev/null | tail -1 | sed "s/^['\"]//; s/['\"]$$//"); \
+	h=$$(sed -n "s/^TINYAUTH_PASSWORD_HASH=//p" $(ENV_FILE) 2>/dev/null | tail -1 | sed "s/^['\"]//; s/['\"]$$//"); \
 	if [ -z "$$u" ] || [ -z "$$h" ]; then \
 	  echo "!!! TINYAUTH_USER and TINYAUTH_PASSWORD_HASH must both be set in $(ENV_FILE)." >&2; \
 	  echo "    Mint a hash with:" >&2; \
@@ -254,6 +254,7 @@ VERIFY_NOTIFY ?= 0
 verify-runtime: ## Assert the RUNNING containers match the invariants (not just the config)
 	@rc=0; crit=0; msg=""; \
 	note() { msg="$$msg$$1"$$'\n'; }; \
+	set -a; . ./.env; set +a; \
 	echo "==> every compose service has a container (ADR-0006)"; \
 	for s in $$(docker compose config --services); do \
 	  docker inspect "$$s" >/dev/null 2>&1 || { echo "    !!! $$s: NO CONTAINER"; rc=1; crit=1; \
@@ -281,6 +282,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> every SWAG conf tracked in this repo is what nginx is serving (ADR-0022)"; \
 	scripts/check-swag-conf-drift.sh \
 	  || { rc=1; crit=1; note "a tracked SWAG conf differs from the one nginx is serving -- a route may have lost its auth door while git looks clean (ADR-0022, ADR-0034)"; }; \
+	echo "==> the doors are actually closed on the live host (ADR-0034)"; \
+	scripts/check-door-live.sh \
+	  || { rc=1; crit=1; note "a protected route is answering the internet without a login, or a route that must stay open is redirecting to one (ADR-0034)"; }; \
 	echo "==> nothing but dockerproxy has the Docker socket (ADR-0013)"; \
 	bad=$$(docker ps -q | xargs -r docker inspect \
 	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
@@ -303,7 +307,6 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	.venv/bin/python scripts/check-lidarr-jellyfin-notification.py \
 	  || { rc=1; note "Lidarr notification 6 changed: either mapFrom/mapTo appeared (retire the bridge) or a delete toggle drifted on"; }; \
 	echo "==> Jellyfin's live logging.json matches the repo pin"; \
-	set -a; . ./.env; set +a; \
 	if [ ! -f "$$CONFIG_DIRECTORY/jellyfin/logging.json" ]; then \
 	  echo "    !!! not installed -- run: make jellyfin-logging"; rc=1; \
 	  note "Jellyfin logging.json is not installed; the LibraryMonitor level is unpinned"; \

@@ -716,14 +716,20 @@ def test_an_unhealthy_container_starts_quiet_and_escalates_with_age():
 
 
 def test_a_user_visible_service_reaches_critical_in_five_minutes():
-    for svc in ("jellyfin", "nextcloud", "swag", "qbittorrent"):
+    for svc in ("jellyfin", "nextcloud", "swag", "qbittorrent", "tinyauth"):
         key = f"container:{svc}:unhealthy"
         assert wd.lane_for(_alert(key), active_min=1.0) == "infra", svc
         assert wd.lane_for(_alert(key), active_min=5.0) == "critical", svc
 
 
-def test_the_user_visible_set_is_exactly_the_four_documented_services():
-    assert set(wd.USER_VISIBLE_SERVICES) == {"jellyfin", "nextcloud", "swag", "qbittorrent"}
+def test_the_user_visible_set_is_exactly_the_documented_services():
+    # tinyauth joined on 2026-09-04: it is the single forward-auth door in
+    # front of thirteen routes, so losing it closes every protected one at
+    # once while the unprotected ones keep serving -- the box looks fine and
+    # the whole sysadmin surface is gone. ADR-0034.
+    assert set(wd.USER_VISIBLE_SERVICES) == {
+        "jellyfin", "nextcloud", "swag", "qbittorrent", "tinyauth",
+    }
 
 
 def test_the_box_itself_is_always_critical():

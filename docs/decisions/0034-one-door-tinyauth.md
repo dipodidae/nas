@@ -107,9 +107,23 @@ could close every door at once. So the auth location uses a **variable upstream 
 the Docker resolver** — `set $upstream_tinyauth tinyauth; proxy_pass
 http://$upstream_tinyauth:3000/api/auth/nginx;` — because SWAG resolves a literal
 `proxy_pass` hostname at startup and refuses to start on a name it cannot resolve.
-With the variable, nginx still starts when tinyauth is absent: protected routes
-return `502`, and `jellyfin` / `nextcloud` / `ntfy` / the apex keep serving. **That
-asymmetry is the design.** `swag` additionally gets
+With the variable, nginx still starts when tinyauth is absent, and **the
+asymmetry was measured, not assumed.** Detaching tinyauth from `nas-network`
+(container left running, so nothing looked like a missing container):
+
+| Route                                | Answer with tinyauth unreachable |
+| ------------------------------------ | -------------------------------- |
+| `sonarr.`, `cleanuparr.` — protected | `500`                            |
+| `4eva.me/ops.html` — path-scoped     | `500`                            |
+| `jellyfin.`                          | `302` (its own login, unchanged) |
+| `ntfy.`, `nextcloud.`                | `200`                            |
+| `4eva.me` apex                       | `200`                            |
+
+**`500`, not `502`** — nginx returns `500` when the `auth_request` subrequest
+itself fails, which is what an unreachable upstream produces. Worth knowing,
+because a `500` on a protected route means the door is **jammed shut**, not
+open, and `scripts/check-door-live.sh` says so in those words rather than
+crying "the door is open" at the opposite failure. `swag` additionally gets
 `depends_on: tinyauth: condition: service_healthy`, which is ordering only — it stops
 swag starting into a window where every protected door is `502`; it is not what keeps
 the unprotected ones up.
@@ -205,6 +219,38 @@ re-referencing it would fail `make check`'s `no-auth-basic`. Removing the branch
 is a change to `dipodidae/jellyfin-playlist-generator`, which is outside this
 repo.
 
+## A third: the credential broke every shell that sources `.env`
+
+Putting `TINYAUTH_PASSWORD_HASH` in `.env` unquoted is not a cosmetic mistake.
+`.env` is `.`-sourced by shell in two places that run under `set -u` (the
+Makefile's `.SHELLFLAGS` is `-eu -o pipefail`), and `$2a$10$…` there does not
+become a mangled value — it becomes **`$2: unbound variable` and an abort**.
+`make verify-runtime` died at that line and silently skipped its last six
+assertions: slskd's effective config, the ntfy grants, the \*arr connectors,
+the jellyseerr/cleanuparr notifiers, and the unhealthy-container sweep. An
+alerting check that stops running without saying so is precisely the failure
+mode ADR-0032 and ADR-0033 exist to prevent, and this work introduced it.
+
+Three fixes, because one would not have been enough:
+
+- the value is **single-quoted** in `.env` and `.env.example`, and
+  `make check` asserts the quoting with that reasoning in the failure text;
+- `make tinyauth-users` strips the quotes when rendering, so the file the
+  container reads is unchanged (asserted byte for byte against `.env`);
+- `scripts/check-door-live.sh` does not source `.env` at all — it `sed`s out
+  the one value it needs. A `.env` is a data file, and the two Makefile
+  recipes that source it are the exception, not the pattern to copy.
+
+This is the same `$`-expansion trap that already broke `make tinyauth-users`
+via Make's own `$(call …)`. Three different layers re-read the same `$`, and
+each needed its own fix.
+
+**Found along the way, pre-existing:** `make verify-runtime` sourced `.env`
+_after_ the two checks that need `API_KEY_LIDARR`, so
+`check-lidarr-jellyfin-notification.py` had been exiting on
+`!!! API_KEY_LIDARR is not set` rather than actually checking the Lidarr#5646
+tripwire. The sourcing moved to the top of the recipe.
+
 ## Two nginx/Docker behaviours that shaped the rollout
 
 **`auth_basic` and `auth_request` cannot coexist, and the failure is silent.**
@@ -271,8 +317,8 @@ Recorded because the next person will read the same docs.
 
 ## Consequences
 
-- Losing the tinyauth container closes every **protected** door and leaves the rest
-  serving. That makes it a user-visible single point of failure, so
+- Losing the tinyauth container makes every **protected** door answer `500` and
+  leaves the rest serving. That makes it a user-visible single point of failure, so
   `scripts/stack_watchdog.py` treats it as one: `nas-critical` after the same
   5-minute escalation the other user-visible services get (ADR-0033).
 - One credential means one credential. A second `.env` variable, a per-app secret or
