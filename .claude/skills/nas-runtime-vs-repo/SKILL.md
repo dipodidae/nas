@@ -1,6 +1,6 @@
 ---
 name: nas-runtime-vs-repo
-description: Use when checking, asserting or changing configuration in this NAS stack. Much of what governs behaviour lives outside the repo - in app SQLite DBs, in gitignored config, and in upstream defaults nobody wrote down - so make check cannot see it and a config restore can undo it silently.
+description: Use when checking, asserting or changing configuration in this NAS stack, or deciding whether an assertion belongs in make check or make verify-runtime. Much of what governs behaviour lives outside the repo - in app SQLite DBs, in gitignored config, in bind-mounted files whose contents compose ignores, and in upstream defaults nobody wrote down - so make check cannot see it and a config restore, a git checkout or a plain up -d can undo it silently.
 ---
 
 # Runtime facts vs. repo facts
@@ -10,7 +10,7 @@ assertion in the wrong one makes it useless.
 
 ## `make check` — what the compose model can see
 
-`scripts/check-invariants.sh`, 51 assertions. Static, no containers needed, runs in CI.
+`scripts/check-invariants.sh`, 66 assertions. Static, no containers needed, runs in CI.
 Use it for anything derivable from files in the repo: compose structure, capabilities,
 labels vs proxy-confs, the generated cron tables, `jellyfin/logging.json` existing.
 
@@ -27,8 +27,13 @@ Use it for anything that lives outside the repo. Currently:
 - slskd's **effective** config matches its pins (`check-slskd-effective-config.py`)
 - Jellyfin's live `logging.json` matches the repo copy
 - ntfy ACLs, \*arr notification connectors, container health
+- every tracked SWAG conf is byte-identical to the one nginx is serving
+  (`check-swag-conf-drift.sh`) -- a stale one is a route that lost its auth door
+- the doors are actually shut, live (`check-door-live.sh`): every `protect` route `302`s to
+  the login page anonymously, no `never` route does, the apex is `200` and `/ops.html` is
+  not. Both of these escalate to `nas-critical`
 
-## The three places config hides from git
+## The four places config hides from git
 
 ### 1. \*arr SQLite databases
 
@@ -56,7 +61,24 @@ level (`jellyfin/logging.json`, `qbittorrent/custom-cont-init.d/`), install it w
 
 Note `/config` maps to `.docker-config/jellyfin/`, **not** `.docker-config/jellyfin/config/`.
 
-### 3. Upstream defaults nobody configured
+### 3. Bind-mounted files, whose CONTENTS compose ignores
+
+`secrets/tinyauth-users`, every `swag/proxy-confs/*.conf`, `swag/tinyauth-*.conf`,
+`jellyfin/logging.json`. These _are_ in the repo, so `make check` can read them -- but
+whether the **running process** has them is a different fact, and two traps sit between:
+
+- `docker compose up -d <svc>` compares the service **config**, not file **contents**, so
+  it does not recreate a running container and a new credential file never reaches the
+  process. Use `docker compose restart <svc>`.
+- Docker binds a single file by **inode**, so replacing the host file (`git checkout`,
+  `git revert`, prettier, `sed -i`) detaches the mount silently. `make swag-apply`.
+
+A conf baked into an image from a **submodule** is a third case: `git ls-files` cannot see
+inside a submodule, so `no-auth-basic` names
+`webapps/jellyfin-playlist-generator/nginx/app.conf` explicitly and reads it from the
+working tree.
+
+### 4. Upstream defaults nobody configured
 
 The worst class, because nothing anywhere records them.
 

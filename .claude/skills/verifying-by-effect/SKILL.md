@@ -20,16 +20,21 @@ what it was asked; what it was asked was wrong.
 
 ## Things in this repo that lie by succeeding
 
-| Surface                                   | What it says   | What is actually true                                                                                                  |
-| ----------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `POST /Library/Media/Updated`             | `204`          | `204` for a correct path **and** a path under no library. Jellyfin drops unknown paths without a word.                 |
-| Lidarr's Jellyfin connection, Test button | green          | It exercises an Emby _notify_ API Jellyfin does not implement. The connection has never worked (no `mapFrom`/`mapTo`). |
-| `GET /api/v1/notification` after a `PUT`  | your new value | `apiKey` comes back **masked as asterisks**. Re-`GET`ting re-masks, so it confirms nothing.                            |
-| `.docker-config/*/[app].db`               | the old value  | WAL mode. Copy `*.db*` including `-wal`/`-shm` or a just-saved `1` reads back as `0`.                                  |
-| `slskd.yml` on disk                       | your settings  | Not proof the process loaded them, and it omits defaults that are load-bearing. Read `GET /api/v0/options`.            |
-| slskd `retention.files.*`                 | configured     | Inert on 0.26.0.0. Files past both thresholds are never removed and nothing logs a word.                               |
-| `flock -n` in cron (pre-2026-09-04)       | nothing at all | Exited 1 without running the job. A skipped run was byte-identical to a clean one.                                     |
-| A cron job exiting 1                      | "partial"      | `cron_job.py --ok-codes` defaults to `0,1`, so exit 1 **cannot alert**. A real fault must exit 2.                      |
+| Surface                                                              | What it says              | What is actually true                                                                                                                                                                  |
+| -------------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /Library/Media/Updated`                                        | `204`                     | `204` for a correct path **and** a path under no library. Jellyfin drops unknown paths without a word.                                                                                 |
+| Lidarr's Jellyfin connection, Test button                            | green                     | It exercises an Emby _notify_ API Jellyfin does not implement. The connection has never worked (no `mapFrom`/`mapTo`).                                                                 |
+| `GET /api/v1/notification` after a `PUT`                             | your new value            | `apiKey` comes back **masked as asterisks**. Re-`GET`ting re-masks, so it confirms nothing.                                                                                            |
+| `.docker-config/*/[app].db`                                          | the old value             | WAL mode. Copy `*.db*` including `-wal`/`-shm` or a just-saved `1` reads back as `0`.                                                                                                  |
+| `slskd.yml` on disk                                                  | your settings             | Not proof the process loaded them, and it omits defaults that are load-bearing. Read `GET /api/v0/options`.                                                                            |
+| slskd `retention.files.*`                                            | configured                | Inert on 0.26.0.0. Files past both thresholds are never removed and nothing logs a word.                                                                                               |
+| `flock -n` in cron (pre-2026-09-04)                                  | nothing at all            | Exited 1 without running the job. A skipped run was byte-identical to a clean one.                                                                                                     |
+| A cron job exiting 1                                                 | "partial"                 | `cron_job.py --ok-codes` defaults to `0,1`, so exit 1 **cannot alert**. A real fault must exit 2.                                                                                      |
+| `docker compose up -d <svc>` after editing a bind-mounted **file**   | nothing, exit `0`         | Compose compares the service **config**, not file **contents**. A running container is not recreated, so a new `secrets/tinyauth-users` never reaches the process. Use `restart`.      |
+| A tracked proxy-conf after `git checkout`/`revert`/prettier/`sed -i` | `git diff` clean          | Docker binds a single file by **inode**. Replacing the host file detaches the mount: nginx serves the OLD conf, `nginx -t` passes and `nginx -s reload` is a no-op. `make swag-apply`. |
+| A route carrying both `auth_basic` and `auth_request`                | a `302` to the login page | That is **basic auth's** 401 being converted. `auth_basic` runs first, so tinyauth is never asked and a valid session is locked out.                                                   |
+| A protected route answering `500`                                    | "the door is open"        | The opposite: the auth subrequest failed, so the door is jammed **shut** -- every protected route is down while the unprotected ones serve fine.                                       |
+| `. ./.env` with an unquoted `$` in a value                           | nothing at all            | Under `set -u` a bcrypt hash aborts the shell with `$2: unbound variable`, taking every later line of that recipe with it. `make verify-runtime` lost six assertions this way.         |
 
 ## How to actually verify, per stage
 
@@ -68,6 +73,21 @@ grep -l EnableRealtimeMonitor .docker-config/jellyfin/data/root/default/*/option
 Copy one small track into a new folder under an **existing** artist (a brand-new artist
 costs a full Music scan), announce it, delete it, announce it again, then confirm the
 album count returned to where it started.
+
+### Did the config edit reach the process?
+
+Two separate questions, and the file being right answers neither.
+
+```bash
+scripts/check-swag-conf-drift.sh            # is nginx serving what the repo says?
+docker exec <svc> cat <mounted-file>        # bytes the container sees (the mount is live)
+docker exec swag nginx -T | grep -A5 '<marker>'   # what nginx actually PARSED
+```
+
+A bind mount is live, so `docker exec cat` can show the new bytes while the process still
+holds the old value -- that is exactly what makes it deceptive. For anything parsed once
+at start (tinyauth's users file, nginx confs), the only proof is a **restart plus a
+functional check**: log in with the new password, or watch the route's status code change.
 
 ### Did the setting stick?
 

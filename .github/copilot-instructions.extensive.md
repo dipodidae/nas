@@ -6,131 +6,49 @@ Short-form instruction file (auto-injected into chat per GitHub feature preview)
 
 ---
 
-## 1. Project Overview
+## 1–9. Project facts: read the authoritative docs, not this file
 
-Infrastructure-as-code + minimal landing page for a self‑hosted NAS / media stack (Raspberry Pi 5 tuned, but generic Linux capable). Core services: Jellyfin, \*arr suite (Sonarr/Radarr/Lidarr/Bazarr/Prowlarr), qBittorrent, slskd (Soulseek), Jellyseerr, Flaresolverr, Nextcloud, SWAG (reverse proxy + TLS), Watchtower, Autoheal, Cloudflare DDNS, supporting utilities. Frontend: a tiny static root page built with Vite + TailwindCSS.
+**Sections 1–9 of this file were deleted on 2026-09-04 because they had become
+actively wrong, and a stale second copy of the rules is worse than no copy.**
+They described a Raspberry Pi 5 host, a single Compose file, Watchtower,
+Cloudflare DDNS, `QBITTORRENT_USER`/`QBITTORRENT_PASS` on the container, and a
+service template whose labels included
+`com.centurylinklabs.watchtower.enable=true`. Every one of those is now false,
+and the last is a label `make check` **rejects**.
 
-Focus areas:
+This repo has three authoritative sources and they are kept current:
 
-- Deterministic Docker Compose definitions (single file)
-- Operational safety (resource limits, healthchecks, restarts)
-- Idempotent config layout via environment variables
-- Low-friction onboarding & extension
+| Question                                                                    | Read                                                  |
+| --------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Conventions: Python, shell, compose rules, the env-var contract, exit codes | `AGENTS.md` — binding                                 |
+| Orientation, commands, the gotchas that have cost downtime                  | `CLAUDE.md`                                           |
+| Why a line exists and what broke without it                                 | `docs/decisions/` (35 ADRs, start at its `README.md`) |
+| Services, ports, URL map, the door per route, known gaps                    | `README.md`                                           |
 
-If unsure: prefer explicitness over cleverness.
+Task-shaped guidance lives in `.claude/skills/`: `nas-public-surface` (routes and
+the tinyauth door), `nas-runtime-vs-repo` (which gate an assertion belongs in),
+`verifying-by-effect` (what counts as proof here), `hunting-silent-failure`,
+`nas-cron-jobs`, `nas-music-pipeline`.
 
----
+The five things most likely to be got wrong by anyone working from memory:
 
-## 2. Tech & Conventions
+1. **One Compose project, many files** (`compose.yaml` + `compose/*.yaml` +
+   `webapps/*/compose.yaml`, wired with `include:`). Shared shape comes from
+   `extends` on `compose/_fragments.yaml`, not from copy-paste. ADR-0000.
+2. **Nothing auto-updates.** Watchtower is retired; `diun` notifies and a human
+   applies. Do not add a `com.centurylinklabs.watchtower.*` label. ADR-0025.
+3. **The proxy-conf publishes a subdomain, not the `swag=enable` label**, and a
+   conf edit is applied with `make swag-apply` — Docker binds each conf by
+   inode, so a `git checkout` detaches the mount and nginx serves the old file.
+   ADR-0022, ADR-0034.
+4. **Thirteen routes sit behind one tinyauth door**; `jellyfin`, `nextcloud` and
+   `ntfy` are excluded because their clients cannot follow a `302`. Never add
+   `auth_basic` beside the forward-auth include — it preempts it. ADR-0034.
+5. **A credential a container reads is a `0600` file mounted `:ro`**, never an
+   `environment:` entry. ADR-0011, ADR-0033.
 
-| Domain          | Convention                                                                                                                                                                                                                                                                                                                                                     |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Orchestration   | One Compose project split across `compose.yaml` (name/network/`include:` only), `compose/*.yaml` and `webapps/*/compose.yaml`. Shared service shape comes from `compose/_fragments.yaml` via `extends`; per-service exceptions stay local next to the comment explaining them. Run `make check` after any change. See `docs/decisions/0000-compose-layout.md`. |
-| Images          | Prefer `lscr.io/linuxserver/*` where already used. Pin with `:latest` unless security/compat requires digest (offer rationale if changing).                                                                                                                                                                                                                    |
-| Networking      | Single custom bridge network `nas-network`. New services join it unless host mode is strictly required (explain).                                                                                                                                                                                                                                              |
-| Healthchecks    | Always add a `HEALTHCHECK` using lightweight `curl -f` (or process probe). Interval 30–60s, retries 3, timeout ≤10s.                                                                                                                                                                                                                                           |
-| Logging         | Use `json-file` w/ size rotation if logs may grow. Keep consistent w/ existing pattern.                                                                                                                                                                                                                                                                        |
-| Volumes         | Use `${CONFIG_DIRECTORY}` for app configs; `${SHARE_DIRECTORY}` for media/data. Never hard‑code user home paths.                                                                                                                                                                                                                                               |
-| User Mapping    | Always include `PUID`, `PGID`, `TZ` where supported.                                                                                                                                                                                                                                                                                                           |
-| Restart Policy  | `unless-stopped` (or `always` when justified e.g. watchdog services).                                                                                                                                                                                                                                                                                          |
-| Labels          | `com.centurylinklabs.watchtower.enable=true` only for containers meant to auto‑update. Add `swag=enable` to expose via reverse proxy (if HTTP UI).                                                                                                                                                                                                             |
-| Resource Limits | Provide conservative `deploy.resources.limits` & `reservations` where useful. Avoid starving Jellyfin transcoding.                                                                                                                                                                                                                                             |
-
----
-
-## 3. Adding a New Service (Template)
-
-Minimal skeleton (adjust ports/paths):
-
-```yaml
-myservice:
-  image: vendor/myservice:latest
-  container_name: myservice
-  environment:
-    - PUID=${PUID}
-    - PGID=${PGID}
-    - TZ=${TZ}
-  volumes:
-    - ${CONFIG_DIRECTORY}/myservice:/config
-  ports:
-    - 1234:1234
-  networks:
-    - nas-network
-  restart: unless-stopped
-  labels:
-    - com.centurylinklabs.watchtower.enable=true
-    - swag=enable # remove if not externally proxied
-  healthcheck:
-    test: [CMD, curl, -f, 'http://localhost:1234/']
-    interval: 45s
-    timeout: 5s
-    retries: 3
-    start_period: 30s
-```
-
-Guidelines:
-
-- Use `depends_on` only for hard runtime ordering (DB before app). Avoid chaining everything.
-- Justify any `cap_add`, `privileged`, `network_mode: host` in a comment.
-- If hardware acceleration: comment blocks with enabling instructions (mirroring Jellyfin style).
-
----
-
-## 4. Environment Variables
-
-Primary vars (see README): `PUID`, `PGID`, `TZ`, `CONFIG_DIRECTORY`, `SHARE_DIRECTORY`, `PUBLIC_DOMAIN`, `ADMIN_EMAIL`, `CLOUDFLARE_API_TOKEN`, `JELLYFIN_PUBLISHED_URL`, `QBITTORRENT_USER`, `QBITTORRENT_PASS`, `WATCHTOWER_SCHEDULE`.
-
-Rules:
-
-- Never bake secrets into committed files.
-- If introducing a new required var: update README (+ example snippet) and reference it in new service section.
-- Provide safe defaults only when non-sensitive.
-
----
-
-## 5. Security & Hardening
-
-- Prefer dropping privileges (`no-new-privileges:true`, avoid `privileged`).
-- Only map the Docker socket through the existing `dockerproxy` (read-only). Never duplicate raw socket mounts.
-- Justify any additional capabilities with a comment.
-- Keep public endpoints TLS-terminated by SWAG; internal services should not self‑manage certs unless necessary.
-
----
-
-## 6. Reverse Proxy Exposure
-
-Add label `swag=enable` for SWAG auto-proxy. Do not expose random high ports publicly if proxying. For new subdomains ensure DNS wildcard covers it or instruct user to add record.
-
----
-
-## 7. Health & Self-Healing
-
-- Every user-facing service should define a healthcheck.
-- Use the lightest stable endpoint (avoid heavy database pages).
-- Autoheal relies on health state; keep intervals reasonable (avoid flapping).
-
----
-
-## 8. Updates Strategy
-
-- Watchtower updates only labeled services. If pinning to a digest or specific tag, explain why in a comment.
-- Avoid major version bumps without migration note in README or release notes.
-
----
-
-## 9. Rootpage (Frontend) Guidelines
-
-- Stack: Vite + vanilla JS + TailwindCSS.
-- Keep bundle minimal; do not introduce frameworks (React/Vue) without explicit request.
-- Use utility classes; custom CSS belongs in `rootpage/src/style.css` (group related animation blocks, annotate major sections).
-- All assets go under `rootpage/public/`.
-- Avoid large images; prefer SVG or CSS effects.
-- If adding JS modules, keep side-effect scripts in `src/` and import from `main.js`.
-
-### Accessibility / Performance
-
-- Ensure animations respect `prefers-reduced-motion` (extend existing pattern).
-- Avoid blocking main thread with long loops; use `requestAnimationFrame` where needed.
+Run `make check && make lint` after any compose change, and
+`make verify-runtime` when the claim is about the running system.
 
 ---
 
@@ -355,9 +273,13 @@ Before suggesting merge:
 
 ## 14. Performance Notes
 
-- Jellyfin: leave CPU unconstrained for bursts (only reservations). Avoid adding strict limit unless user requests.
+- **Pi-era resource limits were removed for the MS01 host** (`mem_limit`, `cpus`,
+  `blkio_config`, `ulimit`). Do not reintroduce them without a reason and an ADR —
+  ADR-0001. Where a `mem_limit` does exist, `memswap_limit` must equal it or it
+  balloons into host swap (ADR-0007).
 - Keep cache/temp on faster storage (`/tmp` tmpfs already used).
-- Avoid over-constraining I/O heavy apps simultaneously.
+- Measure before constraining. `make measure-qbittorrent-stop` is the pattern:
+  a number in the commit message, not an adjective.
 
 ---
 
@@ -380,13 +302,19 @@ Any new service or env var requires README update (short subsection with purpose
 
 ## 17. Common Mistakes to Avoid
 
-| Mistake                                   | Why Bad                              | Correct Approach                       |
-| ----------------------------------------- | ------------------------------------ | -------------------------------------- |
-| Mapping entire host `/` as volume         | Security & accidental overwrite risk | Map only required directories          |
-| Using `latest` plus digest simultaneously | Redundant / misleading               | Use one: tag OR digest                 |
-| Missing healthcheck on UI service         | Breaks autoheal & observability      | Add lightweight curl endpoint          |
-| Copying env vars into compose inline      | Duplication & drift                  | Reference `${VAR}` from `.env`         |
-| Adding multiple networks without reason   | Complexity                           | Stay on `nas-network` unless justified |
+| Mistake                                                             | Why Bad                                                                     | Correct Approach                          |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------- |
+| Mapping entire host `/` as volume                                   | Security & accidental overwrite risk                                        | Map only required directories             |
+| Using `latest` plus digest simultaneously                           | Redundant / misleading                                                      | Use one: tag OR digest                    |
+| Missing healthcheck on UI service                                   | Breaks autoheal & observability                                             | Add lightweight curl endpoint             |
+| Copying env vars into compose inline                                | Duplication & drift                                                         | Reference `${VAR}` from `.env`            |
+| Adding multiple networks without reason                             | Complexity                                                                  | Stay on `nas-network` unless justified    |
+| Adding a `com.centurylinklabs.watchtower.*` label                   | Watchtower is retired; `make check` rejects it                              | `diun` notifies, a human applies          |
+| `nginx -s reload` after editing a proxy-conf                        | Docker binds the conf by inode; a replaced file never reaches the container | `make swag-apply`                         |
+| `docker compose up -d` after editing a bind-mounted file's contents | Compose compares service config, not file contents — it is a no-op          | `docker compose restart <svc>`            |
+| `auth_basic` next to a forward-auth include                         | It preempts rather than stacks; every valid session is locked out           | Pick one; here it is the tinyauth include |
+| A credential in an `environment:` block                             | Leaks into `docker inspect`                                                 | A `0600` file mounted `:ro`               |
+| An unquoted `$` value in `.env`                                     | `.`-sourced under `set -u` it aborts the shell and skips every later check  | Single-quote it                           |
 
 ---
 
