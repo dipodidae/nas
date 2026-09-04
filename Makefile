@@ -23,7 +23,7 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 .PHONY: help check lint config diun-manifest bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
         submodules install-hooks verify-runtime backup-offsite \
-        notify-test notify-acl tinyauth-users swag-apply
+        notify-test notify-acl tinyauth-users tinyauth-unlock swag-apply
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -128,6 +128,40 @@ swag-apply: ## Apply a proxy-conf/auth-conf edit (recreate swag, then prove it t
 	@echo "==> is nginx serving what this repo says?"
 	@scripts/check-swag-conf-drift.sh
 	@docker exec swag nginx -t
+
+# What to run when the door refuses a password you are certain of.
+#
+# tinyauth locks an account after LOGINMAXRETRIES (3) failures within
+# LOGINTIMEOUT (300s), counted per identifier and held IN MEMORY -- and once
+# locked it returns 401 to the CORRECT password too, with nothing in the
+# response to say why. The only tell is `Account locked due to too many failed
+# login attempts` in its log. Measured 2026-09-04, when a stray wrong-password
+# probe was the fourth failure and locked the owner out.
+#
+# A restart clears the counter because it is in memory. Sessions live in SQLite
+# and survive, so nobody already logged in is disturbed; protected routes 500
+# for the few seconds tinyauth is down (that is the fail-closed design,
+# ADR-0034), while jellyfin/nextcloud/ntfy/the apex keep serving.
+tinyauth-unlock: ## Clear a tinyauth lockout (restart drops the in-memory retry counter)
+	@echo "==> why the door may be refusing a correct password:"
+	@docker logs --since 30m tinyauth 2>&1 \
+	  | sed -e 's/\x1b\[[0-9;]*m//g' \
+	  | grep -E "Account locked|invalid password|result=failure" | tail -5 \
+	  || echo "    no recent failures logged -- a lockout is NOT your problem"
+	@echo
+	@echo "==> sessions that will survive this (they are in SQLite, not memory)"
+	@.venv/bin/python -c "import sqlite3,os; \
+	  p=os.path.join('$(CONFIG_DIRECTORY)','tinyauth','tinyauth.db'); \
+	  print('   ', sqlite3.connect('file:%s?mode=ro' % p, uri=True) \
+	    .execute('select count(*) from sessions').fetchone()[0], 'session(s)')" 2>/dev/null \
+	  || echo "    (could not read the session DB)"
+	@echo
+	@echo "==> restarting tinyauth (protected routes 500 for a few seconds)"
+	@docker compose restart tinyauth
+	@$(MAKE) --no-print-directory wait-healthy SVC=tinyauth
+	@echo
+	@echo "Lockout cleared. Do NOT test with a deliberate wrong password --"
+	@echo "that is what causes this; three of them lock the account again."
 
 up: ## Start the whole stack (see the ongehoord caveat in its compose file)
 	@docker compose up -d

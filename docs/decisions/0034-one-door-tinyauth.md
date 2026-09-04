@@ -249,6 +249,41 @@ not. A real restart fixed it immediately.
 The rotation script's happy path was never affected, because it stops the
 container before starting it. Only the rollback used a bare `up -d`.
 
+## The lockout returns 401, and says so only in its log
+
+`TINYAUTH_AUTH_LOGINMAXRETRIES` (3) and `TINYAUTH_AUTH_LOGINTIMEOUT` (300 s) keep
+their upstream defaults. What is not obvious, and cost real access on
+2026-09-04: once the count is exceeded, tinyauth returns **`401` to the correct
+password too**, with nothing in the response distinguishing "wrong password"
+from "locked". The only tell is in its own log:
+
+```
+WRN Account locked due to too many failed login attempts failedAttempts=4 identifier=tom
+```
+
+So the symptom is "I am certain this is the right password and it says no",
+which reads like a broken credential and is not one. Three consequences:
+
+- **The counter is in memory** — there is no lockout table in
+  `tinyauth.db` (only `schema_migrations`, `sessions`, `oidc_sessions`). A
+  restart clears it. Sessions are in SQLite and survive, so nobody already
+  logged in is disturbed. That is `make tinyauth-unlock`, which prints the
+  recent failures first so a _real_ wrong password is not mistaken for a
+  lockout.
+- **The attempt that trips the lock also returns `401`, not `429`.** Reading a
+  `401` as "the limiter is clear" is wrong — that was the actual mistake here:
+  a probe fired to check whether an earlier lockout had expired was itself the
+  fourth failure.
+- **Never probe the live door with a deliberately wrong password.** The rotation
+  script originally did exactly that as part of its verification, which meant
+  two runs plus one human typo would lock the account. It no longer does: the
+  throwaway instance in step 4 already proves that _this exact hash_ rejects a
+  wrong password on the same binary, so repeating it against the live door
+  tested nothing and cost a retry slot.
+
+`LOGINMAXRETRIES` stays at 3. The fix was to stop wasting attempts, not to
+loosen the protection.
+
 ## Logging out has to reach the browser cache too
 
 Logout **is** server-side and immediate — verified against a throwaway instance:

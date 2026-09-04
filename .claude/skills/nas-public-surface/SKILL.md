@@ -123,6 +123,29 @@ means the door really is open. It runs inside `make verify-runtime` at `nas-crit
 swag starting into a window where every protected door is 500. It is not what keeps the
 unprotected routes up; the variable upstream is.
 
+## "The password is definitely right and it still says no"
+
+That is the **lockout**, not the credential. `LOGINMAXRETRIES=3` within
+`LOGINTIMEOUT=300s`, per identifier, and once tripped tinyauth returns **`401` to
+the correct password too** with nothing in the response to say why. The only tell
+is `Account locked due to too many failed login attempts failedAttempts=N` in
+`docker logs tinyauth`.
+
+```bash
+make tinyauth-unlock     # prints the recent failures, then restarts to clear it
+```
+
+The counter is **in memory** (there is no lockout table in `tinyauth.db`), so a
+restart clears it; sessions are in SQLite and survive, so nobody already logged
+in is disturbed. Protected routes 500 for the few seconds it is down.
+
+**Never probe the live door with a deliberately wrong password** — not to "check
+whether the limiter is clear", because the attempt that trips the lock also
+returns `401`, so a `401` is not evidence the limiter is clear. It is how this
+lockout was caused. Test wrong-password rejection against a throwaway instance
+with the same hash instead; `scripts/tinyauth_set_password.sh` does exactly that
+and deliberately makes no wrong-password attempt against the live door.
+
 ## Logging out and the browser cache
 
 Logout is server-side and immediate: the session row is deleted and the same

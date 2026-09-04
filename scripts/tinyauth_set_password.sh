@@ -19,8 +19,10 @@
 #   6. `make tinyauth-users`, revoke sessions, stop + `up -d` (a RESTART is
 #      required: tinyauth parses the users file only at start, and `up -d`
 #      alone is a no-op because compose compares config, not file contents)
-#   7. verifies through SWAG over HTTPS: new password 200, wrong password 401,
-#      and a protected route still 302s to the login page anonymously
+#   7. verifies through SWAG over HTTPS: new password 200, and a protected route
+#      still 302s to the login page anonymously. NO wrong-password probe here --
+#      it would consume one of tinyauth's three retry slots and can lock the
+#      account; the throwaway in step 4 already proved a wrong one is rejected
 #   8. rolls .env back and restarts if step 7 fails, rather than leaving you
 #      locked out of every protected route
 #
@@ -348,8 +350,25 @@ echo "    tinyauth: healthy"
 # --------------------------------------------------- verify through the door
 
 echo "==> verifying through SWAG over HTTPS"
+# DELIBERATELY only the CORRECT password here, and no wrong-password probe.
+#
+# tinyauth's brute-force protection is LOGINMAXRETRIES=3 within LOGINTIMEOUT
+# (300s), counted per identifier and held IN MEMORY. A wrong-password check
+# against the live door consumes one of those three slots -- so two runs of this
+# script plus one human typo locks the account, and the lockout then refuses the
+# CORRECT password too. That happened on 2026-09-04: an ad-hoc wrong-password
+# probe was the fourth failure, tinyauth logged `Account locked due to too many
+# failed login attempts failedAttempts=4 identifier=tom`, and the owner was
+# locked out while certain the password was right.
+#
+# Nothing is lost by dropping it: the throwaway probe above already proved that
+# THIS EXACT HASH returns 401 for a wrong password, on the same binary. Repeating
+# it against the live door tested nothing new and cost a retry slot.
+#
+# If a lockout does happen: `docker compose restart tinyauth` clears it
+# immediately (the counter is in memory; sessions live in SQLite and survive),
+# or wait out LOGINTIMEOUT.
 GOOD="$(login_code "https://auth.$DOMAIN" "$PW")"
-BAD="$(login_code "https://auth.$DOMAIN" "definitely-not-the-password-$$")"
 GATE="$(curl -s -o /dev/null -m 15 -w '%{http_code}' "https://sonarr.$DOMAIN/")"
 
 # Test hook. The rollback path is the whole reason this script is safe to run on
@@ -361,10 +380,9 @@ if [ -n "${TINYAUTH_ROTATE_FORCE_VERIFY_FAIL:-}" ]; then
   GOOD="000"
 fi
 echo "    new password  -> $GOOD   (want 200)"
-echo "    wrong one     -> $BAD   (want 401)"
 echo "    sonarr anon   -> $GATE   (want 302: the door is still shut)"
 
-if [ "$GOOD" != "200" ] || [ "$BAD" != "401" ]; then
+if [ "$GOOD" != "200" ]; then
   rollback
   die "the live door did not accept the new password; rolled back to $BACKUP"
 fi
