@@ -171,3 +171,23 @@ def test_main_failed_search_left_unstamped_for_retry(monkeypatch):
   assert drip.main(["--batch", "3", "--search-delay", "5", "--threshold", "40"]) == 1
   assert "1" in saved and "3" in saved
   assert "2" not in saved
+
+
+# --- the cooldown map must survive a crash mid-write ---
+
+
+def test_state_write_is_atomic_and_leaves_no_temp_file(tmp_path):
+    """An empty cooldown map means every album is searchable again, and repeated
+    searches are what Soulseek answers with a 30-minute ban."""
+    state = tmp_path / "drip.json"
+    drip.save_state(state, {"a": 1.0, "b": 2.0})
+    assert [f.name for f in tmp_path.iterdir()] == ["drip.json"]
+    assert drip.load_state(state) == {"a": 1.0, "b": 2.0}
+
+
+def test_a_truncated_state_file_still_reads_as_empty(tmp_path):
+    """Documented, not fixed: load_state fails open. The atomic write is what
+    stops us manufacturing this case ourselves."""
+    state = tmp_path / "drip.json"
+    state.write_text('{"a": 1.')
+    assert drip.load_state(state) == {}

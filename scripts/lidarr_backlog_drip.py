@@ -204,13 +204,32 @@ def load_state(path: Path | None) -> dict[str, float]:
 
 
 def save_state(path: Path | None, state: dict[str, float]) -> None:
+  """Write the cooldown map atomically: temp file, fsync, then `os.replace`.
+
+  `load_state` returns `{}` on unreadable JSON, which for this script means
+  "every album's cooldown has expired" -- so a half-written file does not just
+  lose state, it re-opens the whole backlog to searching. That is the one domain
+  on this box where the failure is externally punitive: repeated searches are
+  what Soulseek reads as "quickly repeat a search" and answers with a 30-minute
+  ban (2026-06-17). `--batch 20` and the in-flight gate bound the damage today,
+  but that is a bound that holds only until someone tunes it.
+
+  `os.replace` is atomic on POSIX, so a reader sees the old map or the new one
+  and never the truncated file that produces the empty-map fallback.
+  """
   if path is None:
     return
+  tmp = path.with_name(path.name + ".tmp")
   try:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state))
+    with tmp.open("w", encoding="utf-8") as handle:
+      json.dump(state, handle)
+      handle.flush()
+      os.fsync(handle.fileno())
+    os.replace(tmp, path)
   except OSError as exc:
     print(f"WARNING: could not write state file {path}: {exc}", file=sys.stderr)
+    tmp.unlink(missing_ok=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

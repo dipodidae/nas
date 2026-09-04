@@ -253,6 +253,20 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> Lidarr's root folder is one the Jellyfin bridge translates (ADR-0003)"; \
 	.venv/bin/python scripts/check-lidarr-bridge-root.py \
 	  || { rc=1; note "Lidarr's root folder is not covered by lidarr_jellyfin_bridge.py -- imports will not reach Jellyfin (ADR-0003)"; }; \
+	echo "==> Lidarr's Jellyfin connection still lacks mapFrom/mapTo (Lidarr#5646)"; \
+	.venv/bin/python scripts/check-lidarr-jellyfin-notification.py \
+	  || { rc=1; note "Lidarr notification 6 changed: either mapFrom/mapTo appeared (retire the bridge) or a delete toggle drifted on"; }; \
+	echo "==> Jellyfin's live logging.json matches the repo pin"; \
+	set -a; . ./.env; set +a; \
+	if [ ! -f "$$CONFIG_DIRECTORY/jellyfin/logging.json" ]; then \
+	  echo "    !!! not installed -- run: make jellyfin-logging"; rc=1; \
+	  note "Jellyfin logging.json is not installed; the LibraryMonitor level is unpinned"; \
+	elif cmp -s jellyfin/logging.json "$$CONFIG_DIRECTORY/jellyfin/logging.json"; then \
+	  echo "    ok: live logging.json matches jellyfin/logging.json"; \
+	else \
+	  echo "    !!! live logging.json differs from the repo copy"; rc=1; \
+	  note "Jellyfin logging.json drifted from jellyfin/logging.json"; \
+	fi; \
 	echo "==> slskd's EFFECTIVE config still matches its pins"; \
 	.venv/bin/python scripts/check-slskd-effective-config.py \
 	  || { rc=1; note "slskd effective config drifted -- the stuck-reaper baseline assumes transfers.download.retry, which nobody configured"; }; \
@@ -277,6 +291,18 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	    --message "$$msg" --dedup-key "verify-runtime:$$lane" || true; \
 	fi; \
 	exit $$rc
+
+jellyfin-logging: ## Install jellyfin/logging.json into Jellyfin's config (needs ONE restart)
+	@set -a; . ./.env; set +a; \
+	dest="$$CONFIG_DIRECTORY/jellyfin/logging.json"; \
+	if cmp -s jellyfin/logging.json "$$dest" 2>/dev/null; then \
+	  echo "==> already installed and identical: $$dest"; \
+	else \
+	  cp jellyfin/logging.json "$$dest"; \
+	  echo "==> installed $$dest"; \
+	  echo "    Jellyfin hot-reloads this file ONLY if it existed at the last start."; \
+	  echo "    If it did not, restart once:  docker compose restart jellyfin"; \
+	fi
 
 backup-offsite: ## Push the newest local config backup off this box (restic)
 	@scripts/offsite_backup.sh --apply

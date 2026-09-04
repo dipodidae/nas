@@ -1,0 +1,62 @@
+{
+    "_comment": [
+        "Pins Jellyfin's log levels. Copy to ${CONFIG_DIRECTORY}/jellyfin/config/logging.json",
+        "with `make jellyfin-logging` and restart Jellyfin once.",
+        "",
+        "This is NOT here to raise verbosity. On 10.11.11 the line that makes stage 4",
+        "of the music pipeline observable --",
+        "    [INF] Emby.Server.Implementations.IO.LibraryMonitor: \"X\" (\"/path\") will be refreshed.",
+        "-- is already Information level and already logged. docs/music-pipeline-integration.md",
+        "sec 8.3 claimed it was a Debug line and that verification was impossible; that was",
+        "wrong, and acting on it would have meant a pointless restart plus global debug noise.",
+        "",
+        "What this file buys is that a future Jellyfin upgrade cannot silently move that",
+        "category to Debug and take the pipeline's only observability with it. The override",
+        "below pins it at Information explicitly rather than inheriting Default.",
+        "",
+        "Everything else is upstream's logging.default.json verbatim (10.11.11). Keep it that",
+        "way: the WriteTo block controls log rotation and a mistake here loses logs.",
+        "",
+        "Jellyfin hot-reloads this file ONLY if it existed at the last server start. Creating",
+        "it fresh needs exactly one restart -- once, ever. `make check` asserts the repo copy",
+        "exists so a fresh deploy cannot rediscover that."
+    ],
+    "Serilog": {
+        "MinimumLevel": {
+            "Default": "Information",
+            "Override": {
+                "Microsoft": "Warning",
+                "System": "Warning",
+                "Emby.Server.Implementations.IO.LibraryMonitor": "Information",
+                "Emby.Server.Implementations.Library.LibraryManager": "Information"
+            }
+        },
+        "WriteTo": [
+            {
+                "Name": "Console",
+                "Args": {
+                    "outputTemplate": "[{Timestamp:HH:mm:ss}] [{Level:u3}] [{ThreadId}] {SourceContext}: {Message:lj}{NewLine}{Exception}"
+                }
+            },
+            {
+                "Name": "Async",
+                "Args": {
+                    "configure": [
+                        {
+                            "Name": "File",
+                            "Args": {
+                                "path": "%JELLYFIN_LOG_DIR%//log_.log",
+                                "rollingInterval": "Day",
+                                "retainedFileCountLimit": 3,
+                                "rollOnFileSizeLimit": true,
+                                "fileSizeLimitBytes": 100000000,
+                                "outputTemplate": "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz}] [{Level:u3}] [{ThreadId}] {SourceContext}: {Message}{NewLine}{Exception}"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "Enrich": [ "FromLogContext", "WithThreadId" ]
+    }
+}

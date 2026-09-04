@@ -1384,6 +1384,38 @@ GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", 
 if not sys.stdout.isatty():
     GREEN = RED = YELLOW = DIM = RESET = ""
 
+# ==========================================================================
+# Jellyfin's log-level pin exists in the repo
+# ==========================================================================
+# Stage 4 of the music pipeline is observable only through one line:
+#   [INF] Emby.Server.Implementations.IO.LibraryMonitor: "X" ("/p") will be refreshed.
+# On 10.11.11 that is already Information level -- docs/music-pipeline-integration.md
+# sec 8.3 claimed it was Debug and unverifiable, which was wrong. jellyfin/logging.json
+# pins the category explicitly so a future upgrade cannot move it to Debug and take
+# the pipeline's only observability with it.
+#
+# Jellyfin hot-reloads logging.json ONLY if it existed at the last server start, so a
+# deploy that lacks the file needs one restart to adopt it. Asserting the repo copy
+# exists is what stops a fresh deploy rediscovering that the hard way.
+_jf_logging = "jellyfin/logging.json"
+if not os.path.exists(_jf_logging):
+    fail("jellyfin-logging", "ADR-0008",
+         f"{_jf_logging} is missing -- Jellyfin's log levels are unpinned and the "
+         "LibraryMonitor line that makes the music bridge verifiable can vanish on upgrade")
+else:
+    try:
+        _jf_cfg = json.load(open(_jf_logging))
+        _ovr = _jf_cfg["Serilog"]["MinimumLevel"]["Override"]
+        _need = "Emby.Server.Implementations.IO.LibraryMonitor"
+        if _ovr.get(_need) != "Information":
+            fail("jellyfin-logging", "ADR-0008",
+                 f"{_jf_logging} does not pin {_need} at Information "
+                 f"(found {_ovr.get(_need)!r})")
+        else:
+            ok("jellyfin-logging", "LibraryMonitor pinned at Information")
+    except (ValueError, KeyError) as exc:
+        fail("jellyfin-logging", "ADR-0008", f"{_jf_logging} is not valid: {exc}")
+
 if verbose:
     for check, msg in passes:
         print(f"{GREEN}  ok{RESET}   {check:22} {DIM}{msg}{RESET}")
