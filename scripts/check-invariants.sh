@@ -1874,18 +1874,28 @@ else:
 # Commented-out lines are fine and deliberately ignored: SWAG's upstream
 # samples ship `#auth_basic "Restricted";` in every proxy-conf, and rewriting
 # 17 files to delete a comment would be churn that hides the real signal.
+#
+# Scoped to the confs this repo TRACKS, found via git rather than by walking a
+# hardcoded list of directories -- the auth used to live in three places
+# (swag/proxy-confs/, the apex conf under webapps/4eva-rootpage/, and
+# playlist-generator's app.conf) and a fourth would otherwise be invisible
+# here. Submodule contents are excluded by construction: `git ls-files` does
+# not descend into them.
 _authbasic = []
-for _root, _dirs, _files in os.walk("swag"):
-    for _f in sorted(_files):
-        if not _f.endswith(".conf"):
+_repo_confs = sorted(
+    _p for _p in subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.conf"],
+        capture_output=True, text=True,
+    ).stdout.split()
+    if os.path.isfile(_p)
+)
+for _p in _repo_confs:
+    for _i, _ln in enumerate(
+            open(_p, encoding="utf-8", errors="replace"), start=1):
+        if _ln.lstrip().startswith("#"):
             continue
-        _p = os.path.join(_root, _f)
-        for _i, _ln in enumerate(
-                open(_p, encoding="utf-8", errors="replace"), start=1):
-            if _ln.lstrip().startswith("#"):
-                continue
-            if re.search(r"\bauth_basic(_user_file)?\b", _ln):
-                _authbasic.append(f"{_p}:{_i}")
+        if re.search(r"\bauth_basic(_user_file)?\b", _ln):
+            _authbasic.append(f"{_p}:{_i}")
 if _authbasic:
     fail("no-auth-basic", "ADR-0034",
          f"{_authbasic} carry a live auth_basic directive. It does not stack "
@@ -1893,7 +1903,7 @@ if _authbasic:
          "basic auth alone with the tinyauth login page as its 401 handler, "
          "and a valid session can never get in.")
 else:
-    ok("no-auth-basic", "no live auth_basic in any tracked conf")
+    ok("no-auth-basic", f"no live auth_basic in {len(_repo_confs)} confs")
 
 # ==========================================================================
 # 35. Nothing under secrets/ is tracked by git

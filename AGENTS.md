@@ -265,7 +265,6 @@ Required in `.env`:
 - `API_KEY_CLEANUPARR` - Cleanuparr API key (`X-Api-Key` header on `http://127.0.0.1:11011/api/...`).
   Read from the `admin` user row in `${CONFIG_DIRECTORY}/cleanuparr/users.db`; regenerate in the UI
   under Account, or via `POST /api/account/api-key/regenerate`. See `docs/cleanuparr-configuration.md`.
-- `PLAYLIST_GENERATOR_USERNAME`, `PLAYLIST_GENERATOR_PASSWORD` - basic-auth login for the playlist-generator app
 - `PLAYLIST_GENERATOR_DB_PASSWORD` - Postgres/pgvector password for playlist-generator-db
 - `LASTFM_API_KEY` - Last.fm API key for playlist-generator enrichment (read-only; `LASTFM_API_SECRET` optional)
 - `OPENAI_API_KEY`, `DISCOGS_TOKEN` - optional API keys for playlist-generator (app degrades gracefully without them)

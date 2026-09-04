@@ -256,13 +256,13 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 All four are excluded from update notification **by derivation**: a locally-built
 image has no registry to watch, so `diun`'s manifest emitter skips them.
 
-| Service                 | Source                                            | Ports            | Notes                                                  |
-| ----------------------- | ------------------------------------------------- | ---------------- | ------------------------------------------------------ |
-| `4eva-rootpage`         | `webapps/4eva-rootpage`                           | `127.0.0.1:8088` | Apex landing page + `/ops.html` dashboard              |
-| `lidarr-bulk`           | `webapps/lidarr-bulk`                             | `127.0.0.1:3000` | Bulk Lidarr ops; AI/Spotify tabs hide when unset       |
-| `ongehoord`             | `webapps/ongehoord` (+ nested submodule)          | —                | Nuxt preview, basic auth at the proxy. **buildx only** |
-| `playlist-generator`    | `webapps/jellyfin-playlist-generator` (submodule) | —                | Nuxt + FastAPI + nginx                                 |
-| `playlist-generator-db` | pgvector/pgvector:pg16                            | —                | Never auto-updated: no engine bump under live data     |
+| Service                 | Source                                            | Ports            | Notes                                                   |
+| ----------------------- | ------------------------------------------------- | ---------------- | ------------------------------------------------------- |
+| `4eva-rootpage`         | `webapps/4eva-rootpage`                           | `127.0.0.1:8088` | Apex landing page + `/ops.html` dashboard               |
+| `lidarr-bulk`           | `webapps/lidarr-bulk`                             | `127.0.0.1:3000` | Bulk Lidarr ops; AI/Spotify tabs hide when unset        |
+| `ongehoord`             | `webapps/ongehoord` (+ nested submodule)          | —                | Nuxt preview, behind the tinyauth door. **buildx only** |
+| `playlist-generator`    | `webapps/jellyfin-playlist-generator` (submodule) | —                | Nuxt + FastAPI + nginx                                  |
+| `playlist-generator-db` | pgvector/pgvector:pg16                            | —                | Never auto-updated: no engine bump under live data      |
 
 ### Startup order
 
