@@ -114,6 +114,26 @@ asymmetry is the design.** `swag` additionally gets
 swag starting into a window where every protected door is `502`; it is not what keeps
 the unprotected ones up.
 
+**The redirect: tinyauth's header, with SWAG's computed URL as a fallback.**
+nginx's `auth_request` cannot follow a `302` itself, so something has to issue
+one. Both mechanisms exist here — SWAG's sample builds
+`https://tinyauth.$domain/login?redirect_uri=…` in a `@tinyauth_login` named
+location, and tinyauth returns `X-Tinyauth-Location` on the 401 with the same
+URL derived from `TINYAUTH_APPURL` plus `login_for=app`. The tracked conf
+**prefers the header** (one source of truth for the login URL) and keeps the
+computed URL as a fallback with `auth.` substituted for `tinyauth.`, because an
+empty `$tinyauth_login_url` would make `return 302` emit a header with no URL —
+a broken door that still answers `302`. `make check` asserts the fallback's
+hostname label and `TINYAUTH_APPURL` name the same host, since two places
+naming the login page is how a redirect loop happens.
+
+**Identity headers are unspoofable by construction.** The four
+`proxy_set_header Remote-*` lines are unconditional: `proxy_set_header`
+_replaces_ whatever the client sent, and nginx omits a header whose value is
+empty, so a request arriving with `Remote-User: admin` reaches the app with no
+`Remote-User` at all. `make check` asserts all four are present and that the
+conf contains no `if`.
+
 **Deliberately NOT set: `TINYAUTH_AUTH_TRUSTEDPROXIES`.** It exists only to make
 IP-based ACLs work, and there are none. Container IPs on `nas-network` are not
 static, and trusting `172.30.0.0/24` means trusting every container on the bridge.

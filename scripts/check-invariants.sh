@@ -1576,6 +1576,105 @@ else:
         ok("tinyauth-pinned", f"{_tag}, MANUAL_UPDATE_ONLY")
 
 # ==========================================================================
+# 34b. The two forward-auth confs are tracked here and mounted :ro
+# ==========================================================================
+# These are /config/nginx/*.conf, not proxy-confs/*, so ADR-0022's mount and
+# its conf<->label reconciliation never covered them -- and the copy that was
+# live in this container was the 2025/06/08 sample, five revisions behind the
+# 2025/12/17 one in the image and missing the identity headers entirely. A
+# protected route whose auth conf lives only inside the container is a route
+# that silently unprotects itself on the next recreate. ADR-0022, ADR-0034.
+_AUTH_CONFS = ("tinyauth-server.conf", "tinyauth-location.conf")
+_swag_all_mounts = {
+    str(v.get("target", "")): v
+    for v in (services.get("swag", {}).get("volumes") or [])
+}
+_conf_problems = []
+for _name in _AUTH_CONFS:
+    _repo = f"swag/{_name}"
+    _target = f"/config/nginx/{_name}"
+    if not os.path.isfile(_repo):
+        _conf_problems.append(f"{_repo} is not in the repo")
+        continue
+    _m = _swag_all_mounts.get(_target)
+    if _m is None:
+        _conf_problems.append(f"{_repo} exists but nothing mounts it at {_target}")
+    elif os.path.basename(str(_m.get("source", ""))) != _name:
+        _conf_problems.append(
+            f"{_target} is mounted from {_m.get('source')!r}, not from {_repo}")
+    elif not _m.get("read_only"):
+        _conf_problems.append(f"{_target} is mounted read-WRITE; add :ro")
+if _conf_problems:
+    fail("auth-confs-are-tracked", "ADR-0022",
+         "; ".join(_conf_problems) + ". The conf IS the mechanism: an auth conf "
+         "that only exists inside the container is a door that opens itself on "
+         "the next `docker compose up -d swag`.")
+else:
+    ok("auth-confs-are-tracked", f"{len(_AUTH_CONFS)} confs tracked and :ro")
+
+# ... and the identity headers in the tracked location conf are set
+# UNCONDITIONALLY. proxy_set_header REPLACES whatever the client sent, and nginx
+# omits a header whose value is empty -- so a request arriving with
+# `Remote-User: admin` reaches the app with no Remote-User at all. Wrapping any
+# of these in an `if`, or dropping one because "nothing reads it", reopens that
+# hole for whichever app starts trusting the header later. ADR-0034 §2.7.
+_IDENTITY_HEADERS = ("Remote-Email", "Remote-Groups", "Remote-Name", "Remote-User")
+_loc = "swag/tinyauth-location.conf"
+if not os.path.isfile(_loc):
+    pass  # already failed above
+else:
+    _txt = open(_loc, encoding="utf-8", errors="replace").read()
+    # Strip comments so a header named in prose does not count as a directive.
+    _live = "\n".join(ln for ln in _txt.splitlines()
+                      if not ln.lstrip().startswith("#"))
+    _missing_hdr = [h for h in _IDENTITY_HEADERS
+                    if not re.search(rf"^\s*proxy_set_header\s+{h}\s+\$\S+;",
+                                     _live, re.M)]
+    _conditional = "if " in _live or re.search(r"^\s*if\s*\(", _live, re.M)
+    if _missing_hdr:
+        fail("auth-identity-headers", "ADR-0034",
+             f"{_loc} does not unconditionally set {_missing_hdr}. Without a "
+             "proxy_set_header for a header an app might trust, a client can "
+             "supply it itself and the auth subrequest never gets a say.")
+    elif _conditional:
+        fail("auth-identity-headers", "ADR-0034",
+             f"{_loc} contains an `if`. Every proxy_set_header here must be "
+             "unconditional -- a conditional one leaves a path on which the "
+             "client's own header survives.")
+    elif not re.search(r"^\s*auth_request\s+/tinyauth;", _live, re.M):
+        fail("auth-identity-headers", "ADR-0034",
+             f"{_loc} sets identity headers but issues no `auth_request`, so "
+             "the headers are whatever the previous subrequest left behind.")
+    else:
+        ok("auth-identity-headers", "4 headers, unconditional, after auth_request")
+
+# ... and the login URL is named in exactly one place. The conf computes
+# `https://auth.$domain` as its fallback and TINYAUTH_APPURL is what tinyauth
+# puts in its own X-Tinyauth-Location header; two places naming the login page
+# is how a redirect loop happens.
+_appurl = env_of("tinyauth").get("TINYAUTH_APPURL", "") if "tinyauth" in services else ""
+_srv = "swag/tinyauth-server.conf"
+if _appurl and os.path.isfile(_srv):
+    _srv_txt = open(_srv, encoding="utf-8", errors="replace").read()
+    _m = re.search(r"^\s*set\s+\$signin_url\s+https://([A-Za-z0-9-]+)\.\$domain",
+                   _srv_txt, re.M)
+    _conf_host = _m.group(1) if _m else None
+    _url_host = re.sub(r"^https?://", "", _appurl).split("/")[0]
+    _url_label = _url_host.split(".", 1)[0]
+    if _conf_host is None:
+        fail("auth-login-url-agrees", "ADR-0034",
+             f"{_srv} has no `set $signin_url https://<label>.$domain` fallback, "
+             "so a 401 with no X-Tinyauth-Location header would redirect to "
+             "nowhere -- a broken door that still answers 302.")
+    elif _conf_host != _url_label:
+        fail("auth-login-url-agrees", "ADR-0034",
+             f"{_srv} redirects to '{_conf_host}.<domain>' but TINYAUTH_APPURL is "
+             f"'{_appurl}' ('{_url_label}.'). They must name the same host or an "
+             "expired session bounces between two of them.")
+    else:
+        ok("auth-login-url-agrees", f"{_conf_host}. == TINYAUTH_APPURL")
+
+# ==========================================================================
 # 35. Nothing under secrets/ is tracked by git
 # ==========================================================================
 # secrets/ is gitignored, which is necessary and not sufficient: `git add -f`

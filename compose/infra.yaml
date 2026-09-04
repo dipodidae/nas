@@ -53,6 +53,15 @@ services:
       # Mounted file-by-file rather than as a directory ON PURPOSE: SWAG writes
       # 372 *.conf.sample files into /config/nginx/proxy-confs at every start, so
       # a read-only mount over the whole directory breaks its startup.
+      # The two halves of the forward-auth plumbing. These are
+      # /config/nginx/*.conf, NOT proxy-confs/*, so ADR-0022's mount and its
+      # conf<->label reconciliation did not cover them -- and the live
+      # tinyauth-location.conf in this container was five revisions behind the
+      # image's own sample, missing the identity headers entirely. A protected
+      # route whose auth conf exists only inside the container silently
+      # unprotects itself on the next recreate. ADR-0034.
+      - ../swag/tinyauth-server.conf:/config/nginx/tinyauth-server.conf:ro
+      - ../swag/tinyauth-location.conf:/config/nginx/tinyauth-location.conf:ro
       - ../swag/proxy-confs/auth.subdomain.conf:/config/nginx/proxy-confs/auth.subdomain.conf:ro
       - ../swag/proxy-confs/bazarr.subdomain.conf:/config/nginx/proxy-confs/bazarr.subdomain.conf:ro
       - ../swag/proxy-confs/cleanuparr.subdomain.conf:/config/nginx/proxy-confs/cleanuparr.subdomain.conf:ro
