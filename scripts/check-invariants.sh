@@ -1936,13 +1936,28 @@ else:
 # here. Submodule contents are excluded by construction: `git ls-files` does
 # not descend into them.
 _authbasic = []
+# Submodule confs are not reachable via `git ls-files` -- the outer repo sees a
+# submodule as a single gitlink, not as files -- so the one that matters is
+# named explicitly. playlist-generator's nginx conf lives in
+# dipodidae/jellyfin-playlist-generator and is baked into its image at build
+# time, which makes it exactly as load-bearing as a tracked conf: a reinstated
+# auth_basic there would silently preempt the forward auth on that route. It is
+# on disk in the working tree, so it can be read even though it is not tracked
+# here. Grow this list only with an ADR.
+_SUBMODULE_CONFS = ("webapps/jellyfin-playlist-generator/nginx/app.conf",)
 _repo_confs = sorted(
     _p for _p in subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.conf"],
         capture_output=True, text=True,
-    ).stdout.split()
+    ).stdout.split() + list(_SUBMODULE_CONFS)
     if os.path.isfile(_p)
 )
+_missing_sub = [_p for _p in _SUBMODULE_CONFS if not os.path.isfile(_p)]
+if _missing_sub:
+    warn("no-auth-basic", "ADR-0034",
+         f"{_missing_sub} not on disk (an uninitialised submodule -- expected in "
+         "CI), so the conf baked into playlist-generator's image was not "
+         "checked. `git submodule update --init` covers it.")
 for _p in _repo_confs:
     for _i, _ln in enumerate(
             open(_p, encoding="utf-8", errors="replace"), start=1):

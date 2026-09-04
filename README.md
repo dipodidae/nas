@@ -756,27 +756,33 @@ The pre-split `docker-compose.yml` is recoverable:
 
 Honest list of things that are wrong or unfinished, all tracked:
 
-- **`playlist-generator`'s container still writes an unreferenced htpasswd.**
-  The auth in front of it is retired (ADR-0034) by bind-mounting
-  `webapps/playlist-generator/app.conf` — the submodule's nginx conf minus its
-  `auth_basic` lines — but the submodule's own `docker-entrypoint.sh` still runs
-  `htpasswd -cb /etc/nginx/.htpasswd` and, with `AUTH_USER`/`AUTH_PASS` now
-  unset, takes its `admin`/`admin` fallback branch. Verified: 44 bytes, user
-  `admin`, **referenced by nothing**, and re-referencing it would fail
-  `make check`'s `no-auth-basic`. Removing the branch is a change to
-  `dipodidae/jellyfin-playlist-generator`, a separate repo, so it was not made
-  here.
-- **"the torrent list updates live in `qui`" is INFERRED, not observed.** qui's
-  own user lives in its own database and no password for it was available, so
-  the SSE endpoints could only be shown to _reach_ qui through the door (`403`
-  from qui itself with a tinyauth session, `302` without). The transport itself
-  is proven: a raw WebSocket upgrade on slskd's SignalR hub through the same
-  door returns `101 Switching Protocols` with a session and `302` without.
-- **`API_KEY_BAZARR` is unset in `.env`** while Bazarr has a real API key in its
-  own config. Nothing in `scripts/` uses it today, so nothing is broken; it was
-  found by an API probe that `401`ed on an empty key. Either populate it from
-  `${CONFIG_DIRECTORY}/bazarr/config/config.yaml` or drop it from the env
-  contract.
+- ~~**`playlist-generator`'s container still writes an unreferenced
+  htpasswd.**~~ **Closed 2026-09-04, upstream.** The auth is gone from the
+  submodule itself (`dipodidae/jellyfin-playlist-generator@4c4e272`): the
+  `auth_basic` lines, the entrypoint's `htpasswd` generation _and its
+  `admin`/`admin` fallback branch_, `apache2-utils` from the Dockerfile, and the
+  `nuxt-auth-utils` module that had no call sites anywhere in the frontend. The
+  bind-mounted override this repo briefly carried is therefore **deleted** — no
+  second source of truth for that conf. `make check` still asserts the
+  submodule's own `nginx/app.conf` carries no live `auth_basic`, reading it from
+  the working tree since the outer repo sees a submodule as a gitlink.
+- ~~**"the torrent list updates live in `qui`" is INFERRED, not observed.**~~
+  **Observed 2026-09-04.** qui's cookie name (`qui_user_session`, found in its
+  own binary) plus an existing unexpired session from its own SQLite let this be
+  checked without changing anyone's password: `/api/auth/me` →
+  `{"auth_method":"password","id":1,"username":"tom"}`, the torrent list → 60
+  torrents with live states, and three polls 4 s apart through the door showed
+  `up_total` climbing `238694527533 → 238694643248 → 238694705507`. The SSE
+  stream (`/api/logs/stream`) delivers `data:` frames 3–4 ms apart rather than as
+  one buffered blob, so nginx is not holding them.
+- ~~**`API_KEY_BAZARR` is unset in `.env`.**~~ **Not a gap — this entry was
+  wrong.** `.env.example` already lists it under "REMOVED from `.env`
+  (2026-09-02) … so their absence is a decision, not an oversight", because a
+  `git grep` proved nothing reads it: `enable_bazarr_plex.py` edits
+  `${CONFIG_DIRECTORY}/bazarr/config/config.yaml` on disk and never speaks to
+  Bazarr's HTTP API. The `401` that prompted this was an API probe using an
+  empty variable, which the same `401` on Bazarr's loopback port should have
+  settled at the time. Nothing to populate and nothing to drop.
 - **Tier-3 items from the auth migration, deliberately not built:** audit-stream
   alerting on failed-login bursts, TOTP on the single account, and tinyauth as
   an OIDC provider so Nextcloud and Jellyfin could share the credential

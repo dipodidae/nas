@@ -196,11 +196,11 @@ tags this repo publishes.
 
 Three hand-rolled gates came out, in three different shapes:
 
-| App                  | What it was                                                                                                                                                                                                                                             | How it was removed                                                                                                                                                                                                                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ongehoord`          | SWAG `auth_basic` + `/config/nginx/.htpasswd-ongehoord`, creds in `webapps/ongehoord/.env`                                                                                                                                                              | the two conf lines, the htpasswd file (backed up outside the repo first), the `BASIC_AUTH_*` variables, and the duplicate `ongehoord.subdomain.conf.sample` that still shipped them                                                                                              |
-| `playlist-generator` | `auth_basic` inside its **own** container's nginx, htpasswd generated from `AUTH_USER`/`AUTH_PASS` at entrypoint                                                                                                                                        | its nginx conf is now tracked here as `webapps/playlist-generator/app.conf`, minus the auth lines, bind-mounted `:ro` over `/etc/nginx/sites-available/default` — the same move ADR-0022 makes for SWAG's confs, and it avoids editing a foreign repo or bumping a submodule pin |
-| `lidarr-bulk`        | a real Nuxt session login: `nuxt-auth-utils`, `/login`, `/api/login`, `/api/logout`, `/api/me`, a global route middleware, a server `/api/*` gate, a bearer-token gate, an account menu, and a session signing key generated into `/config/session.key` | all of it, plus the dependency, the `runtimeConfig` keys, the env schema fields, the entrypoint's key bootstrap and the orphaned key file                                                                                                                                        |
+| App                  | What it was                                                                                                                                                                                                                                                                      | How it was removed                                                                                                                                                                                                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ongehoord`          | SWAG `auth_basic` + `/config/nginx/.htpasswd-ongehoord`, creds in `webapps/ongehoord/.env`                                                                                                                                                                                       | the two conf lines, the htpasswd file (backed up outside the repo first), the `BASIC_AUTH_*` variables, and the duplicate `ongehoord.subdomain.conf.sample` that still shipped them                                                                                                                  |
+| `playlist-generator` | `auth_basic` inside its **own** container's nginx, htpasswd generated from `AUTH_USER`/`AUTH_PASS` at entrypoint — with an `else` branch writing **admin/admin** whenever either was unset — plus a `nuxt-auth-utils` module with no login page, no middleware and no call sites | removed **upstream** in `dipodidae/jellyfin-playlist-generator@4c4e272`: the conf lines, the entrypoint block, `apache2-utils` from the Dockerfile, and the dead Nuxt module. Pin bumped here; the bind-mounted override this repo briefly carried is deleted, so there is no second source of truth |
+| `lidarr-bulk`        | a real Nuxt session login: `nuxt-auth-utils`, `/login`, `/api/login`, `/api/logout`, `/api/me`, a global route middleware, a server `/api/*` gate, a bearer-token gate, an account menu, and a session signing key generated into `/config/session.key`                          | all of it, plus the dependency, the `runtimeConfig` keys, the env schema fields, the entrypoint's key bootstrap and the orphaned key file                                                                                                                                                            |
 
 The assertion that makes this stick is an **explicit retired-variable list**, not
 a pattern. qui, slskd, nextcloud, ntfy and jellyfin all still hold their own
@@ -211,13 +211,20 @@ credentials" claims is narrower and checkable: the three gates _this repo_
 hand-rolled are gone, in the compose model, in every tracked `.env.example`, in
 `.env`, and as a mounted htpasswd.
 
-**One residue, stated rather than glossed:** the playlist-generator submodule's
-`docker-entrypoint.sh` still runs `htpasswd -cb /etc/nginx/.htpasswd` and, with
-`AUTH_USER`/`AUTH_PASS` unset, takes its `admin`/`admin` fallback branch. That
-file is referenced by nothing once the tracked conf is mounted, and
-re-referencing it would fail `make check`'s `no-auth-basic`. Removing the branch
-is a change to `dipodidae/jellyfin-playlist-generator`, which is outside this
-repo.
+**No residue.** The first pass at `playlist-generator` bind-mounted a de-authed
+copy of the submodule's nginx conf from this repo, which left the entrypoint
+still writing an `admin`/`admin` htpasswd that nothing read. That was fixed at
+the source instead: the auth is gone from the submodule and the override here is
+deleted. Verified in the running container — `/etc/nginx/.htpasswd` does not
+exist, `command -v htpasswd` finds nothing because `apache2-utils` is no longer
+installed, and the live conf has zero `auth_basic` directives.
+
+The assertion had to follow it. `no-auth-basic` discovers confs with
+`git ls-files`, which cannot see inside a submodule, so
+`webapps/jellyfin-playlist-generator/nginx/app.conf` is named explicitly and read
+from the working tree — that conf is baked into the image at build time, which
+makes it exactly as load-bearing as a tracked one. Proven by reinstating an
+`auth_basic` there and watching the check fail.
 
 ## A third: the credential broke every shell that sources `.env`
 

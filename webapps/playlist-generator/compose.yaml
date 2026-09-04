@@ -9,12 +9,14 @@
 # it -- the same shape webapps/ongehoord already uses for its nested submodule.
 # `include` resolves that relative context against THIS directory. ADR-0000.
 #
-# The app used to do its OWN basic auth (AUTH_USER/AUTH_PASS -> htpasswd). That
-# is retired: the public route sits behind the single tinyauth door at SWAG
-# (ADR-0034), and a second credential here only meant two prompts for one page.
-# ./app.conf is the submodule's nginx conf minus the auth_basic lines, tracked
-# here and bind-mounted read-only -- the same move ADR-0022 makes for SWAG's
-# proxy-confs. The library starts EMPTY -- index it in-container with
+# The app used to do its OWN basic auth (AUTH_USER/AUTH_PASS -> htpasswd, plus
+# an `else` branch that wrote admin/admin). That is retired UPSTREAM as of
+# 2026-09-04: the auth is gone from the submodule's nginx/app.conf,
+# docker-entrypoint.sh and Dockerfile, so there is no bind-mounted override
+# here and no second source of truth for that conf. The public route sits
+# behind the single tinyauth door at SWAG (ADR-0034). `make check` still
+# asserts the submodule's own conf carries no live auth_basic. The library
+# starts EMPTY -- index it in-container with
 # `docker exec playlist-generator python -m app.cli_v3 <step>`.
 #
 # Refresh the source with `make submodules`, then rebuild.
@@ -123,11 +125,6 @@ services:
       - LOCAL_PATH_PREFIX=/music
       - JELLYFIN_PATH_PREFIX=/data/movies/music
     volumes:
-      # INVARIANT: the app's nginx conf is TRACKED HERE and mounted read-only,
-      # with no auth_basic in it. The submodule ships one that has auth_basic;
-      # this is what retires it without editing a foreign repo. ADR-0022,
-      # ADR-0034.
-      - ./app.conf:/etc/nginx/sites-available/default:ro
       # RW (was :ro) so the in-app "Fix Jellyfin release dates" button can
       # write durable album.nfo sidecars (year + <lockdata>) into album
       # folders. Only the date-fixer writes here. NOTE: this is the
