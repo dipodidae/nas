@@ -226,6 +226,70 @@ from the working tree — that conf is baked into the image at build time, which
 makes it exactly as load-bearing as a tracked one. Proven by reinstating an
 `auth_basic` there and watching the check fail.
 
+## A fourth: `docker compose up -d` does not apply a new password
+
+Compose decides whether to recreate a container by comparing the **service
+configuration**, not the contents of a bind-mounted file. `secrets/tinyauth-users`
+is a bind mount, and tinyauth parses it **only at start**. So
+`make tinyauth-users && docker compose up -d tinyauth` on a _running_ container
+is a no-op: the file changes, compose prints nothing, exit status is `0`, and
+the door keeps authenticating against the old password.
+
+That advice was printed by `make tinyauth-users`, written in `.env.example`, and
+given verbatim in this session. It was wrong. The correct command is
+**`docker compose restart tinyauth`**.
+
+Found by testing the rotation script's rollback path rather than by reasoning:
+the rollback restored `.env`, re-rendered the file, ran `up -d`, reported
+success — and the live door still accepted the password it had just rolled
+_back from_. `docker exec tinyauth cat /secrets/users` showed bytes identical to
+disk, which is exactly why it is deceptive: the file is right, the process is
+not. A real restart fixed it immediately.
+
+The rotation script's happy path was never affected, because it stops the
+container before starting it. Only the rollback used a bare `up -d`.
+
+## Rotating the password
+
+`scripts/tinyauth_set_password.sh` does every step and proves each one:
+
+1. reads the pinned image from the **compose model**, so the hash is minted by
+   the version that will verify it;
+2. prompts twice (or `--stdin`) and never echoes the password;
+3. mints the bcrypt hash with the vendored `tinyauth user create`;
+4. **proves the hash against a throwaway tinyauth on a random loopback port
+   before touching anything** — the new password must return `200` and a wrong
+   one `401`;
+5. backs up `.env`, rewrites it atomically with the hash single-quoted, renders
+   the `0600` file;
+6. revokes existing sessions (see below) while the container is stopped, then
+   starts it and waits for healthy;
+7. verifies through SWAG over HTTPS: new password `200`, wrong password `401`,
+   and a protected route still `302`s anonymously;
+8. **rolls `.env` back and restarts** if step 7 fails, rather than leaving you
+   locked out of thirteen routes.
+
+`TINYAUTH_ROTATE_FORCE_VERIFY_FAIL=1` forces step 7 to fail, so the rollback
+path can be re-proven whenever the script changes. It is an environment
+variable rather than a flag because a flag invites accidental use.
+
+**Sessions are revoked by default, and that is not cosmetic.** tinyauth's
+sessions live in `${CONFIG_DIRECTORY}/tinyauth/tinyauth.db` keyed by uuid, with
+no reference to the password — verified: columns `(uuid, username, email, name,
+provider, totp_pending, oauth_groups, expiry)`. A password change **alone**
+leaves every existing session valid until it expires (24 h default), which is
+precisely wrong if you are rotating because the old password leaked.
+`--keep-sessions` opts out.
+
+**Accepted exposure, stated rather than hidden:** `tinyauth user create` takes
+`--password` as an argument and its `--interactive` form needs a real TTY
+(`bubbletea: could not open TTY`), so it cannot be piped. The password is
+visible in `ps` on this host for about a second. That is accepted because
+anyone who can read `/proc` here can already read `.env` and
+`secrets/tinyauth-users`, and no bcrypt library is installed to hash it
+in-process — adding one to `scripts/requirements.txt` for this alone is not
+worth the CI surface.
+
 ## A third: the credential broke every shell that sources `.env`
 
 Putting `TINYAUTH_PASSWORD_HASH` in `.env` unquoted is not a cosmetic mistake.

@@ -109,8 +109,12 @@ tinyauth-users: ## Render secrets/tinyauth-users (0600) from TINYAUTH_* in .env
 	printf '%s:%s\n' "$$u" "$$h" > secrets/tinyauth-users; \
 	chmod 0600 secrets/tinyauth-users; \
 	echo "wrote secrets/tinyauth-users ($$(stat -c '%a %U:%G' secrets/tinyauth-users)) for user $$u"
-	@echo "tinyauth reads it at start only -- restart to apply:"
-	@echo "  docker compose up -d tinyauth"
+	@echo "tinyauth parses this file only at START, and compose compares service"
+	@echo "CONFIG rather than bind-mounted file CONTENTS -- so \`up -d\` on a running"
+	@echo "container is a NO-OP and the new password silently does not apply."
+	@echo "Apply it with a real restart:"
+	@echo "  docker compose restart tinyauth"
+	@echo "or let scripts/tinyauth_set_password.sh do the whole rotation and prove it."
 
 # A conf edit IS a deploy (ADR-0022), and the correct way to apply one is a
 # RECREATE, not `nginx -s reload`. Docker binds each conf by INODE, so anything

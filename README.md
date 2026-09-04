@@ -328,7 +328,13 @@ conf's sha256 against what the container holds and escalates a mismatch to
 
 **One door, one credential.** Thirteen of those routes sit behind
 `tinyauth` at `auth.4eva.me`; `TINYAUTH_USER` / `TINYAUTH_PASSWORD_HASH` in
-`.env` is the only login for all of them. The three `never` rows are excluded
+`.env` is the only login for all of them. Rotate it with
+**`scripts/tinyauth_set_password.sh`**, which proves the new hash against a
+throwaway tinyauth _before_ writing it, revokes existing sessions, and rolls
+`.env` back if the live door does not accept it. Do not apply a hand-edit with
+`docker compose up -d` — compose compares service config, not bind-mounted file
+contents, so that is a **no-op** and the old password keeps working; it is
+`docker compose restart tinyauth`. The three `never` rows are excluded
 because they have clients that cannot follow a `302`. Both directions are
 asserted — a `protect` route losing its door and a `never` route gaining one
 are both `make check` failures, and `make verify-runtime` re-checks the live
