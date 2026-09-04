@@ -1416,6 +1416,24 @@ else:
     except (ValueError, KeyError) as exc:
         fail("jellyfin-logging", "ADR-0008", f"{_jf_logging} is not valid: {exc}")
 
+# ==========================================================================
+# The cron-fleet tables in the pipeline doc are generated, not hand-written
+# ==========================================================================
+# They pointed at the wrong script twice -- section 5 had complete_sweep and
+# cleanup swapped, section 9 listed one daily library scan where there are three
+# weekly ones and four flock holders where there are five. Both times the
+# docstrings were right. A table describing 29 jobs will drift again; this is
+# what notices.
+_gen = subprocess.run([sys.executable, "scripts/gen_pipeline_tables.py", "--check"],
+                      capture_output=True, text=True)
+if _gen.returncode == 0:
+    ok("pipeline-tables", "cron-fleet tables match cron/crontab")
+else:
+    fail("pipeline-tables", "ADR-0003",
+         (_gen.stderr or _gen.stdout).strip().replace("\n", " ")[:200]
+         or "docs/music-pipeline-integration.md cron tables are stale; "
+            "run scripts/gen_pipeline_tables.py --write")
+
 if verbose:
     for check, msg in passes:
         print(f"{GREEN}  ok{RESET}   {check:22} {DIM}{msg}{RESET}")
