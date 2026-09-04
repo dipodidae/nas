@@ -172,9 +172,7 @@ DOOR = {
 # Routes whose door has not been hung yet. This list SHRINKS to empty as the
 # migration lands, one commit per tier, and an empty list is the proof that
 # every `protect` route above actually has its door. Never add to it.
-DOOR_PENDING = {
-    "cleanuparr", "lidarr-bulk", "playlist-generator", "jellyseerr",
-}
+DOOR_PENDING: set[str] = set()
 
 # The one service whose public name is not its service name. tinyauth answers
 # on auth.${PUBLIC_DOMAIN} because "auth" is what the door is called; the conf
