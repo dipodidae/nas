@@ -135,8 +135,11 @@ PATH_FIELDS = ("importedPath", "path", "sourcePath")
 # This box does hundreds of Lidarr imports a day and one album alone produces
 # ~25 history records, so a single page is NOT reliably enough between runs
 # during a backlog drain — fetch_history pages back until it passes the cursor.
-# MAX_HISTORY_PAGES bounds the work if the cursor is very old (e.g. the state
-# file was lost); anything older than that is left to the weekly library scan.
+# MAX_HISTORY_PAGES bounds the work if the cursor is very old. Running past it
+# used to be deferred "to the scheduled library scan"; that rationale was wrong
+# twice over — the Music scan is WEEKLY (Sun 05:05), not daily, and a library
+# scan never replays trackFileDeleted — so exceeding the cap is now fatal
+# instead of deferred. Raise this number rather than letting the cursor jump.
 HISTORY_PAGE_SIZE = 200
 MAX_HISTORY_PAGES = 10
 DEFAULT_FIRST_RUN_MINUTES = 30
@@ -163,7 +166,57 @@ class HistoryExhausted(RuntimeError):
   saw success and everything older was skipped forever. Demonstrated 2026-09-04
   with a cursor of 2026-07-01: 2000 records fetched, two months silently
   dropped, exit 0. It is now fatal with the cursor held.
+
+  Holding forever is only the right failure mode if the alert says what to do,
+  so this carries the numbers the remedy needs rather than making the operator
+  go and find them.
   """
+
+  def __init__(self, cursor: Cursor, newest_id: int | None, oldest_fetched: str) -> None:
+    self.cursor = cursor
+    self.newest_id = newest_id
+    self.oldest_fetched = oldest_fetched
+    super().__init__("history is deeper than the page cap")
+
+  def backlog(self) -> int | None:
+    """Roughly how many records sit behind the cursor. Ids are ~1 per record."""
+    if self.newest_id is None or self.cursor.high_water_id is None:
+      return None
+    return self.newest_id - self.cursor.high_water_id
+
+  def age_hours(self) -> float | None:
+    try:
+      then = datetime.strptime(self.cursor.date, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except (ValueError, TypeError):
+      return None
+    return (datetime.now(UTC) - then).total_seconds() / 3600
+
+  def remedy(self, state_path: Path | None) -> str:
+    """The alert has to be actionable or it gets muted, which is failure #3 again."""
+    age = self.age_hours()
+    backlog = self.backlog()
+    cap = MAX_HISTORY_PAGES * HISTORY_PAGE_SIZE
+    lines = [
+      f"ERROR: more than {cap} history records are newer than the cursor "
+      f"({self.cursor}). Dispatching only the newest of them would advance the "
+      "cursor past the rest and lose them, so nothing was sent.",
+      f"  cursor date     : {self.cursor.date}"
+      + (f"  ({age:.1f} h old)" if age is not None else ""),
+      f"  records behind  : {backlog if backlog is not None else 'unknown'}"
+      f"   (page cap covers {cap})",
+      f"  oldest fetched  : {self.oldest_fetched}",
+      "",
+      "  This will not clear on its own. Pick one:",
+      f"   1. raise MAX_HISTORY_PAGES in {Path(__file__).name} above "
+      f"{(backlog // HISTORY_PAGE_SIZE + 1) if backlog else MAX_HISTORY_PAGES * 2} "
+      "and let the next run drain it;",
+      "   2. or accept the gap and re-base deliberately:",
+      "        python scripts/lidarr_jellyfin_bridge.py --since-min 60"
+      + (f" --state {state_path}" if state_path is not None else ""),
+      "      then run the Music library scan to pick up what was skipped:",
+      "        python scripts/jellyfin_library_scan.py --library Music",
+    ]
+    return "\n".join(lines)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -242,11 +295,9 @@ def fetch_history(host: str, api_key: str, cursor: Cursor) -> list[dict] | None:
     collected.extend(records)
     if any(not cursor.is_new(record) for record in records):
       return collected
-  raise HistoryExhausted(
-    f"more than {MAX_HISTORY_PAGES * HISTORY_PAGE_SIZE} history records are newer "
-    f"than the cursor (id={cursor.high_water_id}, date={cursor.date}). Dispatching "
-    "only the newest of them would advance the cursor past the rest and lose them."
-  )
+  newest = collected[0].get("id") if collected else None
+  oldest = str(collected[-1].get("date", "?")) if collected else "?"
+  raise HistoryExhausted(cursor, newest if isinstance(newest, int) else None, oldest)
 
 
 def changed_folders(records: list[dict], cursor: Cursor) -> tuple[list[str], Cursor]:
@@ -507,12 +558,7 @@ def main(argv: list[str] | None = None) -> int:
   try:
     records = fetch_history(os.getenv("LIDARR_HOST", DEFAULT_LIDARR_HOST), lidarr_key, cursor)
   except HistoryExhausted as exc:
-    print(f"ERROR: {exc}", file=sys.stderr)
-    print(
-      "  Cursor held. Raise MAX_HISTORY_PAGES, or bootstrap deliberately once the "
-      "backlog is understood -- do not let it advance past unprocessed records.",
-      file=sys.stderr,
-    )
+    print(exc.remedy(args.state), file=sys.stderr)
     return 2
   if records is None:
     print("ERROR: could not read Lidarr history", file=sys.stderr)

@@ -385,6 +385,32 @@ def test_reaching_the_cursor_inside_the_cap_returns_normally(monkeypatch):
     assert len(got) == 2 * bridge.HISTORY_PAGE_SIZE
 
 
+def test_exhaustion_alert_states_the_backlog_age_and_the_remedy(tmp_path):
+    """An alert that repeats with no remedy in it gets muted, which is failure #3."""
+    exc = bridge.HistoryExhausted(
+        bridge.Cursor(800000, "2026-07-01T00:00:00Z"), 848483, "2026-09-01T11:56:37Z"
+    )
+    assert exc.backlog() == 48483
+    assert exc.age_hours() > 1000
+    text = exc.remedy(tmp_path / "s.json")
+    assert "records behind  : 48483" in text
+    assert "--since-min" in text and str(tmp_path / "s.json") in text
+    assert "jellyfin_library_scan.py --library Music" in text
+
+
+def test_exhaustion_alert_degrades_gracefully_without_an_id():
+    """A v0 cursor has no id, so the backlog cannot be counted -- say so."""
+    exc = bridge.HistoryExhausted(bridge.Cursor(None, "2026-07-01T00:00:00Z"), None, "?")
+    assert exc.backlog() is None
+    assert "unknown" in exc.remedy(None)
+
+
+def test_exhaustion_alert_survives_an_unparseable_cursor_date():
+    exc = bridge.HistoryExhausted(bridge.Cursor(1, "not-a-date"), 5, "?")
+    assert exc.age_hours() is None
+    assert "This will not clear on its own" in exc.remedy(None)
+
+
 def test_a_mid_run_lidarr_failure_is_not_a_partial_success(monkeypatch):
     """Returning what was collected so far is the same silent truncation."""
 

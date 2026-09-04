@@ -253,6 +253,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> Lidarr's root folder is one the Jellyfin bridge translates (ADR-0003)"; \
 	.venv/bin/python scripts/check-lidarr-bridge-root.py \
 	  || { rc=1; note "Lidarr's root folder is not covered by lidarr_jellyfin_bridge.py -- imports will not reach Jellyfin (ADR-0003)"; }; \
+	echo "==> slskd's EFFECTIVE config still matches its pins"; \
+	.venv/bin/python scripts/check-slskd-effective-config.py \
+	  || { rc=1; note "slskd effective config drifted -- the stuck-reaper baseline assumes transfers.download.retry, which nobody configured"; }; \
 	echo "==> the ntfy grants still match ADR-0033"; \
 	scripts/check-ntfy-acls.py \
 	  || { rc=1; crit=1; note "ntfy ACLs have drifted -- nas-arr may be able to reach nas-critical (ADR-0033)"; }; \
