@@ -1812,6 +1812,48 @@ if _appurl and os.path.isfile(_srv):
     else:
         ok("auth-login-url-agrees", f"{_conf_host}. == TINYAUTH_APPURL")
 
+# --------------------------------------------------------------------------
+# The /tinyauth subrequest must not carry a second auth module's headers
+# --------------------------------------------------------------------------
+# Both of these took every protected route to 500 on 2026-09-10, with tinyauth
+# HEALTHY, its login page serving 200 and `nginx -t` passing -- only the
+# subrequest failed, and nginx turns any non-2xx/401/403 subrequest into a
+# client 500. Measured against the live endpoint:
+#     X-Forwarded-* only               -> 401   <- what auth_request needs
+#     X-Forwarded-* + X-Original-URL   -> 400   -> nginx 500 -> door shut
+#
+#   * `include proxy.conf` sets X-Original-URL/-Method as well as the
+#     X-Forwarded-* family. tinyauth >= v5.2.0 denies two modules' header sets
+#     as a spoofing attempt. Clearing them beside the include does NOT work.
+#   * `Content-Length ""` emits a malformed valueless header that tinyauth's Go
+#     server rejects with 400 before any auth logic runs.
+#
+# This is asserted because SWAG's own tinyauth-server.conf.sample STILL ships
+# `include /config/nginx/proxy.conf;`, so a sample refresh or a copy-paste from
+# upstream reintroduces it -- and nothing else in this repo would notice.
+# ADR-0036.
+if os.path.isfile(_srv):
+    _srv_all = open(_srv, encoding="utf-8", errors="replace").read()
+    # Directives only: these strings appear in the file's own comments.
+    _srv_live = "\n".join(l for l in _srv_all.splitlines()
+                          if not l.lstrip().startswith("#"))
+    _sub_faults = []
+    if re.search(r"^\s*include\s+\S*proxy\.conf\s*;", _srv_live, re.M):
+        _sub_faults.append(
+            "it includes proxy.conf, which adds X-Original-URL/-Method on top "
+            "of the X-Forwarded-* family")
+    if re.search(r"^\s*proxy_set_header\s+Content-Length\s", _srv_live, re.M):
+        _sub_faults.append(
+            "it sets Content-Length, which emits a malformed valueless header")
+    if _sub_faults:
+        fail("auth-subrequest-headers", "ADR-0036",
+             f"{_srv}: " + "; and ".join(_sub_faults) + ". tinyauth answers 400, "
+             "nginx converts that to a 500, and EVERY protected route is down "
+             "while tinyauth stays healthy and its login page serves fine.")
+    else:
+        ok("auth-subrequest-headers",
+           "/tinyauth sends one auth module's headers only")
+
 # ==========================================================================
 # 34f. The login page's stylesheet is mounted AND linked
 # ==========================================================================
