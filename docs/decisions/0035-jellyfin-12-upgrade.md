@@ -150,19 +150,19 @@ decode for H264, HEVC Main/Main10/Main12, VP9 0–3, VP8, MPEG2, VC1 and **AV1
 Profile0**; encode for H264, HEVC, VP9, MPEG2 — **AV1 decode-only** (`VLD`, no
 `EncSlice`).
 
-| setting                            | stock     | here                  | why                                                                                                                                                                 |
-| ---------------------------------- | --------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HardwareAccelerationType`         | `none`    | `qsv`                 | QSV device init verified OK; Intel-native, and the only path that gives working tone mapping                                                                        |
-| `QsvDevice`                        | `''`      | `/dev/dri/renderD128` | `/dev/dri` also holds `card1`; naming the render node removes the ambiguity                                                                                         |
-| `HardwareDecodingCodecs`           | h264, vc1 | all 7                 | each one confirmed `VAEntrypointVLD` in `vainfo`                                                                                                                    |
-| `AllowHevcEncoding`                | false     | **true**              | `HEVCMain`/`Main10` `EncSlice` present                                                                                                                              |
-| `AllowAv1Encoding`                 | false     | false (stock)         | AV1 is `VLD`-only — enabling it would silently drop to a _software_ AV1 encode                                                                                      |
-| `EnableIntelLowPowerH264HwEncoder` | false     | **true**              | H264 `EncSliceLP` present (Gen12 VDEnc)                                                                                                                             |
-| `EnableIntelLowPowerHevcHwEncoder` | false     | **true**              | `HEVCMain` `EncSliceLP` present                                                                                                                                     |
-| `EnableVppTonemapping`             | false     | **true**              | the only tone-map path that works here                                                                                                                              |
-| `EnableTonemapping` (OpenCL)       | false     | false (stock)         | **measured**: OpenCL init fails, `Failed to get number of OpenCL platforms: -1001`. This is the trap — it is the better-quality option and it would have broken HDR |
-| `EnableThrottling`                 | false     | **true**              | bounds a runaway transcode on the box whose Jellyfin memory growth is ADR-0008                                                                                      |
-| `EnableSegmentDeletion`            | false     | **true**              | the HLS temp dir lives on the root LV, at 78% used                                                                                                                  |
+| setting                            | stock     | here                  | why                                                                                                                                                                                                                                                    |
+| ---------------------------------- | --------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `HardwareAccelerationType`         | `none`    | `qsv`                 | QSV device init verified OK; Intel-native, and the only path that gives working tone mapping                                                                                                                                                           |
+| `QsvDevice`                        | `''`      | `/dev/dri/renderD128` | `/dev/dri` also holds `card1`; naming the render node removes the ambiguity                                                                                                                                                                            |
+| `HardwareDecodingCodecs`           | h264, vc1 | all 7                 | each one confirmed `VAEntrypointVLD` in `vainfo`                                                                                                                                                                                                       |
+| `AllowHevcEncoding`                | false     | **true**              | `HEVCMain`/`Main10` `EncSlice` present                                                                                                                                                                                                                 |
+| `AllowAv1Encoding`                 | false     | false (stock)         | AV1 is `VLD`-only — enabling it would silently drop to a _software_ AV1 encode                                                                                                                                                                         |
+| `EnableIntelLowPowerH264HwEncoder` | false     | **true**              | H264 `EncSliceLP` present (Gen12 VDEnc)                                                                                                                                                                                                                |
+| `EnableIntelLowPowerHevcHwEncoder` | false     | **true**              | `HEVCMain` `EncSliceLP` present                                                                                                                                                                                                                        |
+| `EnableVppTonemapping`             | false     | **true**              | the only tone-map path that works here                                                                                                                                                                                                                 |
+| `EnableTonemapping` (OpenCL)       | false     | false (stock)         | **measured**: OpenCL init fails, `Failed to get number of OpenCL platforms: -1001`. This is the trap — it is the better-quality option and it would have broken HDR. See the note below for _why_, so nobody re-tests it hoping for a different answer |
+| `EnableThrottling`                 | false     | **true**              | bounds a runaway transcode on the box whose Jellyfin memory growth is ADR-0008                                                                                                                                                                         |
+| `EnableSegmentDeletion`            | false     | **true**              | the HLS temp dir lives on the root LV, at 78% used                                                                                                                                                                                                     |
 
 Everything else is stock on purpose. `EnableDecodingColorDepth10HevcRext`,
 `DeinterlaceMethod: bwdif` and `EnableAudioVbr` were tried and **reverted** —
@@ -181,6 +181,41 @@ Verified by effect rather than by a `204`, with a forced 640×360 transcode of a
 ```
 
 699 fps, 27.8× realtime, no software fallback and no errors in the ffmpeg log.
+
+### Why OpenCL tone mapping cannot work here, and why that is not worth fixing
+
+The `-1001` above is **not** a hardware limitation — it is a packaging fact about
+the LSIO image, and stating it precisely matters because otherwise it invites a
+re-test. Verified inside the container:
+
+```
+/etc/OpenCL/vendors/   ->  nvidia.icd ONLY
+libigdrcl.so           ->  absent from the whole filesystem
+dpkg                   ->  ocl-icd-libopencl1 (the generic ICD *loader*) but
+                           NOT intel-opencl-icd (the Intel runtime)
+```
+
+So `-1001` means "no OpenCL platform is registered", not "this GPU cannot". It is
+fixable with an LSIO `universal-package-install` mod, and it is **deliberately not
+fixed**: that adds a network-dependent package install to every Jellyfin start, and
+the entire benefit would apply to **2 files out of 1214** in this library — one of
+which is Dolby Vision Profile 7, where Jellyfin discards the enhancement layer and
+tone maps the HDR10 base layer anyway.
+
+For the same reason `HardwareAccelerationType` stays `qsv` rather than moving to
+`vaapi`, even though this box _can_ do Vulkan/libplacebo tone mapping (Jellyfin logs
+`supports Vulkan DRM interop`, `libplacebo` is in its filter list, and
+`-init_hw_device vulkan=vk` initialises): that path is reachable only under the VAAPI
+backend, so taking it would re-litigate a proven QSV chain — which also serves 352
+PGS subtitle burn-ins through `overlay_qsv` — for 0.16% of the library.
+
+One lever that IS left on the table, recorded rather than taken: `EncoderPreset:
+auto` resolves to `-preset veryfast` for QSV (TargetUsage 7, the fastest and lowest
+quality point), which is what the measured transcode above actually ran. `slow`
+(≈TU3) would trade some of the 27.8× headroom for quality — but in `-low_power 1`
+VDEnc mode TargetUsage has reduced effect and the extended-lookahead and B-pyramid
+tools are unavailable, so the gain may be nil. Measure fps and picture on a 1080p
+HEVC transcode before keeping it; do not change it on faith.
 
 ## Plugins
 
