@@ -19,7 +19,7 @@ services:
     # deliberately with `make pull-jellyfin`, which waits for healthy.
     # Consequence, accepted: pinned + unlabelled means Watchtower will never
     # report a Jellyfin update. ADR-0006, ADR-0020.
-    image: lscr.io/linuxserver/jellyfin:10.11.11ubu2604-ls47
+    image: lscr.io/linuxserver/jellyfin:12.0ubu2604-ls48
     container_name: jellyfin
     environment:
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
@@ -32,6 +32,15 @@ services:
       # hardening tradeoff, accepted here: LAN-only media server behind SWAG
       # that executes no untrusted code. Revert: delete this line. ADR-0008.
       - DOTNET_EnableWriteXorExecute=0
+    cap_add:
+      # INVARIANT: KILL is required, for the same reason qbittorrent needs it
+      # (ADR-0004) and both nginx services do (ADR-0021). s6-overlay runs as
+      # root and must signal `jellyfin`, which runs as abc (uid 1000); without
+      # CAP_KILL every SIGTERM is refused with EPERM and Docker SIGKILLs at the
+      # end of stop_grace_period -- measured 10.5s and exit 137, with no
+      # shutdown line in jellyfin's own log and a 4.2MB un-checkpointed SQLite
+      # WAL left behind on every single stop. ADR-0035.
+      - KILL
     devices:
       - /dev/dri:/dev/dri
     group_add:

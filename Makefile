@@ -317,6 +317,26 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	        || { echo "    !!! EPERM signalling nginx worker -- reload and graceful stop are broken"; exit 1; }; \
 	      break;; esac; done' \
 	  || { rc=1; crit=1; note "swag nginx cannot signal its workers (ADR-0021)"; }; \
+	echo "==> jellyfin holds CAP_KILL at runtime (ADR-0035)"; \
+	docker exec jellyfin sh -c 'grep -E "^Cap(Prm|Eff|Bnd)" /proc/1/status' \
+	  | gawk '{ v=strtonum("0x" $$2); if (!and(v, 32)) { printf "    !!! %s lacks KILL\n", $$1; bad=1 } } \
+	          END { if (bad) { print "        every stop SIGKILLs jellyfin and orphans an un-checkpointed SQLite WAL" ; exit 1 } \
+	                print "    ok: KILL in Prm/Eff/Bnd" }' \
+	  || { rc=1; crit=1; note "jellyfin lost CAP_KILL (ADR-0035)"; }; \
+	echo "==> jellyfin still accepts the *arr/jellyseerr auth scheme (ADR-0035)"; \
+	jf=$$(curl -s -o /dev/null -w '%{http_code}' -H "X-Emby-Token: $$API_KEY_JELLYFIN" http://localhost:8096/Users || true); \
+	if [ "$$jf" = "200" ]; then echo "    ok: EnableLegacyAuthorization on"; \
+	else echo "    !!! X-Emby-Token -> HTTP $$jf. Sonarr/Radarr library updates and jellyseerr sync 401 silently;"; \
+	  echo "        the flag lives in system.xml, outside this repo, and 12.0's migration turns it off."; rc=1; crit=1; \
+	  note "jellyfin EnableLegacyAuthorization is off -- *arr library updates and jellyseerr sync are broken (ADR-0035)"; fi; \
+	echo "==> jellyfin is transcoding on the iGPU, not the CPU (ADR-0035)"; \
+	hw=$$(curl -s -H "Authorization: MediaBrowser Token=\"$$API_KEY_JELLYFIN\"" \
+	  http://localhost:8096/System/Configuration/encoding \
+	  | sed -n 's/.*"HardwareAccelerationType":"\([^"]*\)".*/\1/p'); \
+	if [ "$$hw" = "qsv" ]; then echo "    ok: HardwareAccelerationType=qsv"; \
+	else echo "    !!! HardwareAccelerationType=$$hw -- one invalid value in encoding.xml makes 12.0"; \
+	  echo "        discard the WHOLE file and persist defaults over it. Software transcoding now."; rc=1; \
+	  note "jellyfin hardware transcoding is off (HardwareAccelerationType=$$hw) (ADR-0035)"; fi; \
 	echo "==> every SWAG conf tracked in this repo is what nginx is serving (ADR-0022)"; \
 	scripts/check-swag-conf-drift.sh \
 	  || { rc=1; crit=1; note "a tracked SWAG conf differs from the one nginx is serving -- a route may have lost its auth door while git looks clean (ADR-0022, ADR-0034)"; }; \

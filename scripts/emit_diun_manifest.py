@@ -92,11 +92,17 @@ POLICIES: dict[str, Policy] = {
         note="floor >= 5.2.2 per ADR-0005; LSIO release tags only",
     ),
     "lscr.io/linuxserver/jellyfin": Policy(
-        # e.g. 10.11.11ubu2604-ls47. semver sorting puts the newest first, so a
-        # major bump surfaces at the top of the same list as a point release --
-        # see ADR-0024 for why this is one entry and not two.
-        include=[r"^\d+\.\d+\.\d+ubu\d+-ls\d+$"],
-        note="release tags only; a 10.11.z point release and a major both surface",
+        # e.g. 12.0ubu2604-ls48 or 10.11.11ubu2604-ls47. semver sorting puts the
+        # newest first, so a major bump surfaces at the top of the same list as
+        # a point release -- see ADR-0024 for why this is one entry and not two.
+        #
+        # INVARIANT: the patch component is OPTIONAL. Jellyfin dropped the
+        # leading "10." at 12.0, so what would have been 10.12.0 ships as a
+        # two-component "12.0". A `\d+\.\d+\.\d+` filter matches no 12.x tag at
+        # all, which does not fail -- diun just silently reports no updates for
+        # jellyfin forever. ADR-0035.
+        include=[r"^\d+\.\d+(\.\d+)?ubu\d+-ls\d+$"],
+        note="release tags only; a 12.0 major, a 12.0.z point release and a legacy 10.11.z all surface",
     ),
     "ghcr.io/analogj/scrutiny": Policy(
         include=[r"^v\d+\.\d+\.\d+-omnibus$"],

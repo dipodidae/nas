@@ -80,8 +80,14 @@ export function pickBestMatch(track: SpotifyTrack, candidates: JellyfinAudioItem
   return bestId
 }
 
+// Jellyfin 12.0 deprecated `X-Emby-Token`; it answers 401 unless the server has
+// `EnableLegacyAuthorization` on. This is the non-deprecated scheme, so this
+// client keeps working when that flag is eventually turned off. ADR-0035.
 function authHeaders(env: Env): Record<string, string> {
-  return { 'X-Emby-Token': env.JELLYFIN_API_KEY, 'Accept': 'application/json' }
+  return {
+    Authorization: `MediaBrowser Token="${env.JELLYFIN_API_KEY}"`,
+    'Accept': 'application/json',
+  }
 }
 
 async function jf(env: Env, path: string, init?: RequestInit): Promise<Response> {

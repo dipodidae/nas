@@ -836,6 +836,30 @@ for _svc in NGINX_SERVICES:
     else:
         ok("nginx-cap-kill", f"{_svc} holds KILL")
 
+# --------------------------------------------------------------------------
+# jellyfin needs KILL for the same reason, and its stakes are a database
+# --------------------------------------------------------------------------
+# Third service with the s6-signals-across-a-uid-boundary shape (ADR-0004,
+# ADR-0021): s6-overlay runs as root, `jellyfin` runs as abc (uid 1000).
+# Measured on 2026-09-09, without KILL: every stop took the full grace period
+# and ended in exit 137, jellyfin's own log contained NO shutdown line, and a
+# 4.2MB SQLite WAL was left un-checkpointed -- so a backup that copied
+# jellyfin.db alone was silently stale, every time. With KILL: 3.66s, exit 0,
+# `Disposing "CoreAppHost"`, and the -wal/-shm files removed. ADR-0035.
+_jf = services.get("jellyfin")
+if _jf:
+    _drop = [str(c).upper() for c in (_jf.get("cap_drop") or [])]
+    _add = [str(c).upper().removeprefix("CAP_") for c in (_jf.get("cap_add") or [])]
+    if "ALL" in _drop and "KILL" not in _add:
+        fail("jellyfin-cap-kill", "ADR-0035",
+             "jellyfin drops ALL capabilities and does not add KILL, but s6 "
+             "runs as root and must signal `jellyfin` running as abc (uid "
+             "1000). kill() across that boundary needs CAP_KILL; root alone is "
+             "refused with EPERM. Every stop becomes a grace-period SIGKILL "
+             "that orphans an un-checkpointed SQLite WAL.")
+    elif "ALL" in _drop:
+        ok("jellyfin-cap-kill", "jellyfin holds KILL")
+
 # ==========================================================================
 # 18. Every swag=enable service has a proxy-conf
 # ==========================================================================

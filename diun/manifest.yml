@@ -112,15 +112,15 @@
   watch_repo: false
 
 # jellyfin
-#   release tags only; a 10.11.z point release and a major both surface
-- name: lscr.io/linuxserver/jellyfin:10.11.11ubu2604-ls47
+#   release tags only; a 12.0 major, a 12.0.z point release and a legacy 10.11.z all surface
+- name: lscr.io/linuxserver/jellyfin:12.0ubu2604-ls48
   metadata:
     service: jellyfin
   watch_repo: true
   sort_tags: semver
   max_tags: 5
   include_tags:
-    - '^\d+\.\d+\.\d+ubu\d+-ls\d+$'
+    - '^\d+\.\d+(\.\d+)?ubu\d+-ls\d+$'
   exclude_tags:
     - '^latest$'
     - '^nightly$'
