@@ -128,7 +128,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: ghcr.io/tinyauthapp/tinyauth:v5.1.3
+    image: ghcr.io/tinyauthapp/tinyauth:v5.2.0
     container_name: tinyauth
     # Not a linuxserver image and no root init to chown its state dir. The
     # image's own `tinyauth` user is uid/gid 1000, so this matches upstream's
@@ -513,7 +513,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: henrygd/beszel:0.18.8
+    image: henrygd/beszel:0.19.0
     container_name: beszel
     # INVARIANT: no LSIO root init; ${CONFIG_DIRECTORY}/beszel must already be
     # ${PUID}:${PGID}. `make bootstrap`. ADR-0014.
@@ -556,7 +556,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: henrygd/beszel-agent:0.18.8
+    image: henrygd/beszel-agent:0.19.0
     container_name: beszel-agent
     user: '${PUID:-1000}:${PGID:-1000}'
     environment:
