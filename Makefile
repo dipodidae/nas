@@ -101,7 +101,7 @@ tinyauth-users: ## Render secrets/tinyauth-users (0600) from TINYAUTH_* in .env
 	if [ -z "$$u" ] || [ -z "$$h" ]; then \
 	  echo "!!! TINYAUTH_USER and TINYAUTH_PASSWORD_HASH must both be set in $(ENV_FILE)." >&2; \
 	  echo "    Mint a hash with:" >&2; \
-	  echo "      docker run --rm -it ghcr.io/tinyauthapp/tinyauth:v5.1.3 user create --interactive" >&2; \
+	  echo "      docker run --rm -it ghcr.io/tinyauthapp/tinyauth:v5.2.0 user create --interactive" >&2; \
 	  exit 2; \
 	fi; \
 	mkdir -p secrets; \
