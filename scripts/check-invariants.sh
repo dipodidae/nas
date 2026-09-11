@@ -1842,17 +1842,35 @@ if os.path.isfile(_srv):
         _sub_faults.append(
             "it includes proxy.conf, which adds X-Original-URL/-Method on top "
             "of the X-Forwarded-* family")
-    if re.search(r"^\s*proxy_set_header\s+Content-Length\s", _srv_live, re.M):
+    # Content-Length is required, but ONLY in the "0" form. Banning the
+    # directive outright (which this check did until 2026-09-11) bans the fix
+    # along with the bug: without it nginx keeps the parent's Content-Length on
+    # a subrequest it sends no body for, waits to write a body it never sends,
+    # and never reads tinyauth's reply -- so every request WITH A BODY hangs
+    # 60s and 500s while every GET stays green. See the conf's own comment.
+    _cl = re.search(r"^\s*proxy_set_header\s+Content-Length\s+(\S+?)\s*;",
+                    _srv_live, re.M)
+    if _cl is None:
         _sub_faults.append(
-            "it sets Content-Length, which emits a malformed valueless header")
+            'it does not set `proxy_set_header Content-Length "0";`, so the '
+            "subrequest inherits the parent's Content-Length and nginx blocks "
+            "waiting to send a body `proxy_pass_request_body off` suppresses")
+    elif _cl.group(1).strip('"\'') != "0":
+        _sub_faults.append(
+            f"it sets Content-Length to {_cl.group(1)}, not \"0\" -- an empty "
+            "value emits a malformed valueless header that tinyauth rejects "
+            "with 400")
     if _sub_faults:
         fail("auth-subrequest-headers", "ADR-0036",
-             f"{_srv}: " + "; and ".join(_sub_faults) + ". tinyauth answers 400, "
-             "nginx converts that to a 500, and EVERY protected route is down "
-             "while tinyauth stays healthy and its login page serves fine.")
+             f"{_srv}: " + "; and ".join(_sub_faults) + ". Every one of these "
+             "breaks protected routes while tinyauth stays healthy, its login "
+             "page serves 200 and `nginx -t` passes: a 400 from tinyauth "
+             "becomes a 500 on EVERY protected route, and a stale "
+             "Content-Length hangs only the requests that carry a body -- so "
+             "the app loads perfectly and every submit fails.")
     else:
         ok("auth-subrequest-headers",
-           "/tinyauth sends one auth module's headers only")
+           '/tinyauth sends one auth module\'s headers, Content-Length "0"')
 
 # ==========================================================================
 # 34f. The login page's stylesheet is mounted AND linked
