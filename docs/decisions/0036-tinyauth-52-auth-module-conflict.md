@@ -1,9 +1,12 @@
 # ADR-0036 — tinyauth v5.2.0 rejects SWAG's own `proxy.conf`, and its DB upgrade is one-way
 
-**Date:** 2026-09-10
+**Date:** 2026-09-10 (sequel: 2026-09-11)
 **Status:** accepted
 **Incident:** every protected route served 500 for ~7 minutes on 2026-09-10 during a
-routine `v5.1.3 → v5.2.0` bump
+routine `v5.1.3 → v5.2.0` bump; then, 2026-09-11, every request _carrying a body_
+to those same routes hung 60 s and 500'd for ~21 hours (see the sequel at the end
+— the fix below for fault #1 was half a fix, and `make check` froze the other
+half in place)
 **Related:** ADR-0034 (the one door), ADR-0022 (confs are tracked)
 
 ## What happened
@@ -34,9 +37,14 @@ printf 'GET /api/auth/nginx HTTP/1.1\r\nHost: tinyauth\r\n...\r\nContent-Length:
   -> HTTP/1.1 400 Bad Request
 ```
 
-v5.1.3 tolerated it; v5.2.0's updated dependencies do not. `proxy_pass_request_body
-off` already drops both the body and the header, so the line was never needed.
-SWAG's current sample sets neither.
+v5.1.3 tolerated it; v5.2.0's updated dependencies do not.
+
+> **Corrected 2026-09-11.** This section originally continued: _"`proxy_pass_request_body
+off` already drops both the body and the header, so the line was never needed."_
+> The second half is false. `proxy_pass_request_body off` drops the **body**; it
+> does **not** drop or rewrite the inherited `Content-Length`. Deleting the line
+> outright is what caused the 21-hour body-hang in the sequel below. The line is
+> required — with the value `"0"`, not `""`.
 
 ### 2. `include proxy.conf` sends **two auth modules'** headers → 400
 
@@ -120,3 +128,103 @@ All seven protected subdomains plus `/ops.html` answer `302` to
 `https://auth.4eva.me/login?login_for=app&redirect_uri=…` — the redirect coming
 from tinyauth's own `X-Tinyauth-Location` header, so the identity-header path
 works too. The apex stays `200`, and jellyfin/nextcloud/ntfy remain ungated.
+
+---
+
+## Sequel, 2026-09-11: the third fault — the fix for #1 was half a fix
+
+**Incident:** for ~21 hours, every request carrying a **body** to any of the 13
+protected routes hung for 60 s and then returned `500`, while every `GET` stayed
+perfectly green.
+
+Fault #1 above removed `proxy_set_header Content-Length "";` because the empty
+value emitted a malformed header. That was correct. The conclusion drawn from it
+— _"`proxy_pass_request_body off` already drops both the body and the header, so
+the line was never needed"_ — was **wrong**, and `make check` then froze the
+error in place by asserting that the directive must not appear at all.
+
+`proxy_pass_request_body off` suppresses the **body**. It does not rewrite the
+`Content-Length` the subrequest inherits from the parent request. So on any
+request with a body, nginx announced a body it had already decided never to send,
+sat in "sending request" state waiting to write it, and **never read the reply
+tinyauth had already sent in microseconds**. Sixty seconds later — the _default_
+`proxy_read_timeout`, because proxy.conf's `240` is deliberately not included
+here — nginx gave up and converted the timeout into a client `500`.
+
+### Why it hid for a day
+
+The failure is **body-dependent and method-independent**, which is the opposite
+of what anyone looks for:
+
+| request                     | result               |
+| --------------------------- | -------------------- |
+| `GET`, no body              | `302` in 0.006 s     |
+| `POST`, `Content-Length: 0` | `302` in 0.006 s     |
+| `DELETE`, no body           | `302` in 0.006 s     |
+| **`POST`, 1-byte body**     | **hangs 60 s → 500** |
+| **`GET`, 1-byte body**      | **hangs 60 s → 500** |
+| **`PUT`, 1-byte body**      | **hangs 60 s → 500** |
+
+So every page load, every asset, every poll and every healthcheck succeeded. The
+apps looked completely healthy right up until you submitted something. It
+surfaced as "lidarr-bulk can't fetch artists any more", but it was never
+lidarr-bulk: the same 60 s hang was sitting on a radarr login `POST` seven hours
+earlier in the same log.
+
+And the two halves lied in opposite directions. tinyauth's log showed the
+subrequest answered `200`/`401` in **38 µs**; nginx's log showed
+`upstream timed out ... while reading response header from upstream,
+subrequest: "/tinyauth"` for the very same request. Both were telling the truth.
+
+### The tell
+
+`/config/log/nginx/error.log` again, and specifically the pairing of these two
+lines for a request whose upstream answered instantly:
+
+```
+[error] upstream timed out (110: Operation timed out) while reading response header
+        from upstream, request: "POST /api/parse HTTP/2.0", subrequest: "/tinyauth",
+        upstream: "http://172.30.0.26:3000/api/auth/nginx"
+[error] auth request unexpected status: 504 while sending to client
+```
+
+`auth request unexpected status: **504**` is this fault. `unexpected status: 400`
+is fault #1 or #2. The number discriminates them.
+
+### The fix
+
+The two lines are a **pair**, and the value is `"0"`, never `""`:
+
+```nginx
+proxy_pass_request_body off;
+proxy_set_header Content-Length "0";
+```
+
+`""` emits the malformed valueless header of fault #1 (tinyauth → `400` → nginx
+`500`, every route, every method). `"0"` is a valid header that agrees with the
+empty body actually sent. Measured on a raw socket from inside swag — tinyauth
+answers `401` to all three shapes, so **tinyauth was never the one failing**:
+
+| subrequest carries            | tinyauth | nginx                           |
+| ----------------------------- | -------- | ------------------------------- |
+| no `Content-Length`           | `401`    | fine (no-body requests)         |
+| `Content-Length: 0`           | `401`    | fine                            |
+| `Content-Length: 34`, no body | `401`    | **never reads it → 60 s → 500** |
+
+Bisected in a throwaway server block on `127.0.0.1:8099` inside swag, one
+variable changed between two otherwise identical `auth_request` locations.
+
+`make check` now asserts the directive is **present and `"0"`** rather than
+absent. Both the presence and the value are load-bearing in opposite directions,
+which is exactly why the assertion has to check the value and not just the name.
+
+### The rule this adds
+
+5. An invariant written from one incident can encode that incident's wrong
+   conclusion. This check was added on 2026-09-10 to ban a directive whose
+   _value_ was the bug, and it then prevented the correct value from ever being
+   set. When an assertion bans something outright, say why the thing itself is
+   wrong — not merely that one spelling of it once broke.
+6. Prove an auth conf with a request that has a **body**. Every check in this
+   repo before today — `check-door-live.sh`, `verify-runtime`, every healthcheck
+   — used `GET`, and all of them passed throughout the outage.
