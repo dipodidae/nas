@@ -9,12 +9,20 @@
 # an nginx that reloaded a conf it could not see. Every one of those leaves the
 # repo, the linter and the invariant checker agreeing that the door is hung.
 #
-# Three assertions, and the second and third matter as much as the first:
+# Four assertions, and the second and third matter as much as the first:
 #   * every `protect` route answers 3xx to an anonymous request, and the
 #     redirect points at the login page -- a 200 means the door is OPEN;
 #   * every `never` route does NOT redirect to the login page -- ntfy above
 #     all, because the alert channel behind a broken door is a SILENT one;
-#   * the apex is public and /ops.html is not.
+#   * the apex is public and /ops.html is not;
+#   * every `protect` route answers a request WITH A BODY the same way and
+#     just as fast. Added 2026-09-11 after a 21-hour outage in which each of
+#     the three probes above passed continuously: the subrequest kept the
+#     parent's Content-Length while sending no body, so nginx waited 60s to
+#     write a body it never sends and 500'd -- but ONLY for requests that
+#     carried one. Every GET stayed green, so the apps loaded perfectly and
+#     only *submits* failed. A door proven with GET alone is not proven.
+#     ADR-0036 (sequel).
 #
 # The classification here mirrors DOOR in check-invariants.sh. It is duplicated
 # rather than shared because that file is a Python heredoc inside a shell
@@ -46,6 +54,16 @@ PROTECT="sonarr radarr lidarr bazarr prowlarr lingarr qui slskd cleanuparr
 NEVER="jellyfin nextcloud ntfy auth"
 
 probe() { curl -s -o /dev/null -m 10 -w '%{http_code} %{redirect_url}' "$1" 2>/dev/null; }
+
+# Same probe, but carrying a one-byte body -- the case the GET probes cannot
+# see. The timeout is deliberately SHORT: the failure mode this catches is a
+# 60s stall (nginx's default proxy_read_timeout), so anything that does not
+# answer well inside that window has already failed. A healthy route answers
+# in ~6ms.
+probe_body() {
+  curl -s -o /dev/null -m 15 -w '%{http_code} %{redirect_url}' \
+    -X POST --data-binary 'x' "$1" 2>/dev/null
+}
 
 if [ -z "$(probe "https://${DOMAIN}/")" ]; then
   echo "    !!! SWAG did not answer at https://${DOMAIN}/ -- nothing proven" >&2
@@ -83,6 +101,41 @@ for h in $PROTECT; do
   esac
 done
 
+# Every protected route, again, with a body. See the header comment.
+for h in $PROTECT; do
+  read -r code target <<<"$(probe_body "https://${h}.${DOMAIN}/")"
+  case "$code" in
+    30[12378])
+      case "$target" in
+        https://${LOGIN_HOST}/*) ;;
+        *) echo "    !!! ${h}: body request redirected to '${target}', not ${LOGIN_HOST}" >&2; rc=1 ;;
+      esac ;;
+    000|"")
+      # curl reports 000 for "no HTTP response at all", which for this probe
+      # means the 60s stall -- NOT an open door. Keep this branch ahead of the
+      # catch-all: a stall misreported as "THE DOOR IS OPEN" sends the reader
+      # looking for a security hole instead of a hung subrequest.
+      echo "    !!! ${h}: a request WITH A BODY got no response, while the same" >&2
+      echo "        route answers a GET fine. That asymmetry is the /tinyauth" >&2
+      echo "        subrequest stalling on an inherited Content-Length: nginx" >&2
+      echo "        announces a body it never sends and never reads tinyauth's" >&2
+      echo "        reply. Check that swag/tinyauth-server.conf still pairs" >&2
+      echo "        proxy_pass_request_body off with Content-Length \"0\"." >&2
+      echo "        Symptom: apps load, every submit fails. ADR-0036" >&2
+      rc=1 ;;
+    5*)
+      echo "    !!! ${h}: a request WITH A BODY got ${code}, while a GET is fine." >&2
+      echo "        Read /config/log/nginx/error.log: 'auth request unexpected" >&2
+      echo "        status: 504' is the Content-Length stall (ADR-0036 sequel)," >&2
+      echo "        '400' is the proxy.conf / empty-Content-Length fault." >&2
+      rc=1 ;;
+    *)
+      echo "    !!! ${h}: a request WITH A BODY got ${code}, not a redirect to" >&2
+      echo "        the login page. THE DOOR IS OPEN to anything carrying a" >&2
+      echo "        body. (ADR-0034)" >&2; rc=1 ;;
+  esac
+done
+
 for h in $NEVER; do
   read -r code target <<<"$(probe "https://${h}.${DOMAIN}/")"
   case "$target" in
@@ -105,6 +158,6 @@ esac
 
 if [ $rc -eq 0 ]; then
   n=0; for h in $PROTECT; do n=$((n + 1)); done
-  echo "    ok: ${n} doors closed, apex public, /ops.html gated"
+  echo "    ok: ${n} doors closed (GET and with a body), apex public, /ops.html gated"
 fi
 exit $rc
