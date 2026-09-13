@@ -337,6 +337,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	else echo "    !!! HardwareAccelerationType=$$hw -- one invalid value in encoding.xml makes 12.0"; \
 	  echo "        discard the WHOLE file and persist defaults over it. Software transcoding now."; rc=1; \
 	  note "jellyfin hardware transcoding is off (HardwareAccelerationType=$$hw) (ADR-0035)"; fi; \
+	echo "==> jellyfin trickplay can actually write its tiles (ADR-0039)"; \
+	scripts/check_jellyfin_trickplay.py \
+	  || { rc=1; note "jellyfin trickplay is misconfigured or producing nothing -- with SaveTrickplayWithMedia on against the read-only media mount it burns the iGPU forever and never writes a tile (ADR-0039)"; }; \
 	echo "==> every SWAG conf tracked in this repo is what nginx is serving (ADR-0022)"; \
 	scripts/check-swag-conf-drift.sh \
 	  || { rc=1; crit=1; note "a tracked SWAG conf differs from the one nginx is serving -- a route may have lost its auth door while git looks clean (ADR-0022, ADR-0034)"; }; \
