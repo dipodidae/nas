@@ -358,6 +358,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	     note "qui and qbittorrent see /downloads on different devices (ADR-0027)"; fi; \
 	echo "==> scrutiny's collector has reported within 24h (ADR-0023)"; \
 	scripts/check-smart-freshness.py || { rc=1; note "scrutiny has not reported SMART in 24h (ADR-0023)"; }; \
+	echo "==> the newest config archive actually holds the databases (ADR-0037)"; \
+	.venv/bin/python scripts/check_backup_contents.py \
+	  || { rc=1; crit=1; note "the nightly config archive is missing state that cannot be rebuilt (ADR-0037)"; }; \
 	echo "==> Lidarr's root folder is one the Jellyfin bridge translates (ADR-0003)"; \
 	.venv/bin/python scripts/check-lidarr-bridge-root.py \
 	  || { rc=1; note "Lidarr's root folder is not covered by lidarr_jellyfin_bridge.py -- imports will not reach Jellyfin (ADR-0003)"; }; \

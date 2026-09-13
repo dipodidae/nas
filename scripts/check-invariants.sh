@@ -46,6 +46,7 @@ fi
 
 COMPOSE_EXTRA="${COMPOSE_EXTRA:-}" VERBOSE=$VERBOSE python3 - <<'PY'
 import json, os, re, subprocess, sys
+from pathlib import Path
 
 try:
     _extra = os.environ.get("COMPOSE_EXTRA", "").split()
@@ -2216,6 +2217,40 @@ else:
 # weekly ones and four flock holders where there are five. Both times the
 # docstrings were right. A table describing 29 jobs will drift again; this is
 # what notices.
+# --- The nightly config archive covers every service, and proves it ------------
+# ADR-0037. The hard-coded DEFAULT_SERVICES list this replaced named 9 of the 28
+# directories under CONFIG_DIRECTORY, still listed the retired lazylibrarian --
+# which made the job exit 1 every night, invisible under the default
+# --ok-codes 0,1 -- and omitted lidarr, tinyauth, slskd and cleanuparr. Worse,
+# --fast's 25 MB per-file cap was silently dropping sonarr.db, prowlarr.db and
+# jellyfin.db out of every archive. Two assertions here (the set is discovered,
+# and nothing re-pins it), one in `make verify-runtime` (the archive on disk
+# actually contains the databases) because only that one can see the effect.
+_backup_src = Path("scripts/config_backup.py").read_text(encoding="utf-8")
+if "DEFAULT_SERVICES" in _backup_src:
+    fail("backup-discovery", "ADR-0037",
+         "scripts/config_backup.py has a hard-coded service list again; the set "
+         "must be discovered from CONFIG_DIRECTORY so a new service is protected "
+         "the day it is created")
+else:
+    ok("backup-discovery", "config_backup.py discovers its service set")
+
+_crontab = Path("cron/crontab").read_text(encoding="utf-8")
+_backup_lines = [ln for ln in _crontab.splitlines()
+                 if "--name config-backup" in ln and not ln.lstrip().startswith("#")]
+if not _backup_lines:
+    fail("backup-cron", "ADR-0037", "no config-backup line in cron/crontab")
+elif "--services" in _backup_lines[0]:
+    fail("backup-cron", "ADR-0037",
+         "the config-backup cron line pins --services; that is how it came to hold "
+         "9 of 28 service directories. Let it discover them.")
+elif "--ok-codes 0" not in _backup_lines[0]:
+    fail("backup-cron", "ADR-0037",
+         "the config-backup cron line must pass --ok-codes 0: with discovery there "
+         "is no benign exit 1 left, and the 0,1 default is what hid a nightly partial")
+else:
+    ok("backup-cron", "config-backup discovers services and alerts on exit 1")
+
 _gen = subprocess.run([sys.executable, "scripts/gen_pipeline_tables.py", "--check"],
                       capture_output=True, text=True)
 if _gen.returncode == 0:
