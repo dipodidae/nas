@@ -652,22 +652,25 @@ if not _share or not _conf:
          "SHARE_DIRECTORY / CONFIG_DIRECTORY unreadable, so the mount SOURCES "
          "cannot be verified; checking targets only.")
     got = {(t, r) for _s, t, r in got}
-    want = {("/config", False), ("/data/movies", True)}
+    want = {("/config", False), ("/data/movies", False)}
 else:
     want = {(os.path.join(_conf, "jellyfin"), "/config", False),
-            (_share, "/data/movies", True)}
+            (_share, "/data/movies", False)}
 if got != want:
     fail("jellyfin-mounts-frozen", "ADR-0016",
          "Jellyfin's volume mappings changed and must not.\n"
          f"       expected: {sorted(want)}\n"
          f"       actual:   {sorted(got)}\n"
-         "       /data/movies must stay a READ-ONLY mount of the WHOLE share, "
-         "from ${SHARE_DIRECTORY} and nowhere else. Three systems are "
-         "calibrated to it: Jellyfin's library paths, the *arr mapFrom/mapTo "
-         "mappings, and playlist-generator's LOCAL_PATH_PREFIX/"
-         "JELLYFIN_PATH_PREFIX pair.")
+         "       /data/movies must stay a mount of the WHOLE share, from "
+         "${SHARE_DIRECTORY} and nowhere else. Three systems are calibrated to "
+         "it: Jellyfin's library paths, the *arr mapFrom/mapTo mappings, and "
+         "playlist-generator's LOCAL_PATH_PREFIX/JELLYFIN_PATH_PREFIX pair.\n"
+         "       It is READ-WRITE on purpose since 2026-09-13 (ADR-0039): "
+         "trickplay tiles are stored next to the media, and :ro made every "
+         "generation extract for ~2 min and then fail on the write, silently, "
+         "4582 times. Re-adding :ro breaks trickplay, it does not harden it.")
 else:
-    ok("jellyfin-mounts-frozen", "/config rw + ${SHARE_DIRECTORY}:/data/movies ro")
+    ok("jellyfin-mounts-frozen", "/config rw + ${SHARE_DIRECTORY}:/data/movies rw")
 
 # ==========================================================================
 # 14. qBittorrent's disk-IO settings are what ADR-0007 actually depends on
