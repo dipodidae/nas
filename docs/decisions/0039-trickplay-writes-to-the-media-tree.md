@@ -101,11 +101,20 @@ against South Park Specials (1080p WEB-DL, same codec, adjacent files):
 nearest keyframe, which for these GOPs is within a couple of seconds — invisible on a
 scrub bar.
 
-This matters beyond tidiness. Extrapolating the measured per-item numbers over 1816
-videos: full decode is well over a day of continuous GPU work, which does not fit between
-nightly 03:00 runs and so never converges; keyframe-only brings the episode bulk to
-roughly 8 h. Both are estimates from a small sample — the measured facts are the
-per-episode numbers above.
+Per-item cost varies a lot by **source**, not just by runtime — measured on the backfill:
+
+| item | source | keyframe-only |
+| --- | --- | --- |
+| South Park Specials, 45–50 min | WEB-DL | 14–18 s |
+| Avatar S01E01, 24 min | Bluray | 43 s |
+| 12 Angry Men, 96 min | Bluray Remux | 8 min 40 s (fell back to full decode) |
+
+So do not plan against a single average. Extrapolating over 1816 videos, full decode is
+well over a day of continuous GPU work — which does not fit between nightly 03:00 runs
+and so never converges. Keyframe-only puts the episode bulk somewhere in the 8–20 h band
+depending on how much of the library is Bluray-sourced, plus the Remuxes in Movies at
+several minutes each. It resumes rather than restarts (items with a `TrickplayInfos` row
+are skipped), so it converges across a few nights even at the pessimistic end.
 
 ### It does not work on every file, and that is handled
 
