@@ -46,9 +46,11 @@ What it checks
    immediately; this catches the other half — a job whose cron line is broken
    and which therefore produces nothing at all to notice.
 9. Prowlarr indexers that have stayed failed past a threshold — *not* ones that
-   flapped. Public trackers flap all day and that is their normal condition;
-   treating each cycle as an incident produced 103 ntfy messages in 48 hours
-   describing two actually-dead indexers.
+   flapped, and *not* ones deliberately disabled. Public trackers flap all day
+   and that is their normal condition; treating each cycle as an incident
+   produced 103 ntfy messages in 48 hours describing two actually-dead
+   indexers. Prowlarr keeps the `/indexerstatus` row of an indexer you untick,
+   so ignoring `enable: false` meant a dead site could not be silenced at all.
 10. Every other *arr health warning (Prowlarr/Sonarr/Radarr/Lidarr `/health`),
    deduped per app and repeated daily. Together, 9 and 10 let the three apps'
    own `onHealthIssue` + `onHealthRestored` Ntfy connections be switched OFF
@@ -708,19 +710,30 @@ def fetch_indexer_failures(base: str = "http://localhost:9696", api_key: str = "
   `/indexerstatus` returns a row ONLY for an indexer Prowlarr currently
   considers failing, so an empty list genuinely means "all fine" — that is the
   authority this check is built on, rather than on notification traffic.
+
+  A **disabled** indexer is filtered out. Prowlarr keeps its `/indexerstatus`
+  row after you untick it, so without this filter there is no way to silence a
+  site that has genuinely died: 1337x answered 403 for 17 straight days and
+  pushed a `nas-attention` alert every five minutes, and disabling it in
+  Prowlarr — the correct response — would not have stopped a single one. An
+  indexer someone switched off is a decision, not an outage.
   """
   status = _arr_get(base, api_key, "/api/v1/indexerstatus")
   if not isinstance(status, list):
     return None
   names: dict[int, str] = {}
+  disabled: set[int] = set()
   indexers = _arr_get(base, api_key, "/api/v1/indexer")
   if isinstance(indexers, list):
     names = {int(i["id"]): str(i.get("name", i["id"])) for i in indexers if "id" in i}
+    disabled = {int(i["id"]) for i in indexers if "id" in i and i.get("enable") is False}
   rows = []
   for row in status:
     if not isinstance(row, dict) or "indexerId" not in row:
       continue
     idx = int(row["indexerId"])
+    if idx in disabled:
+      continue
     rows.append({
       "name": names.get(idx, f"id {idx}"),
       "initial_failure": row.get("initialFailure"),

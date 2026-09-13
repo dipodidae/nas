@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Log size pruner / compressor.
 
-Scans one or more root paths (default: CONFIG_DIRECTORY) for *.log files that:
+Scans one or more root paths (default: CONFIG_DIRECTORY) for log files that:
   • exceed a size threshold (LOG_PRUNE_MAX_MB, default 25 MB)
   • are older than a minimum age (LOG_PRUNE_MIN_AGE_DAYS, default 1)
+
+"Log file" means ``*.log``, plus ``*.txt`` and ``*.jsonl`` **inside a directory
+called log/logs**. The `.txt` half is not a nicety: until 2026-09-13 this only
+globbed ``*.log`` and every *arr writes ``sonarr.debug.21.txt``, so the weekly
+run reported "processed 0 file(s)" for its entire life while Prowlarr held 99
+MB, Lidarr 105 MB and Sonarr 80 MB of logs. Requiring the log/logs parent keeps
+``*.txt`` from sweeping up subtitles and config that happen to be large.
 
 Actions:
   • If LOG_PRUNE_COMPRESS=true (default) compress oversize logs to log.<ts>.gz and truncate original
@@ -35,7 +42,7 @@ import os
 import shutil
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Attempt to load .env automatically so running via package.json (which does not
@@ -56,6 +63,13 @@ def parse_args() -> argparse.Namespace:
     "--roots", nargs="*", default=[], help="Root directories to scan (default: CONFIG_DIRECTORY)"
   )
   p.add_argument(
+    "--extra-roots",
+    nargs="*",
+    default=[],
+    help="Additional roots to scan alongside the default CONFIG_DIRECTORY "
+    "(use this rather than --roots when you only want to ADD one)",
+  )
+  p.add_argument(
     "--max-mb",
     type=int,
     default=int(os.getenv("LOG_PRUNE_MAX_MB", "25")),
@@ -74,6 +88,27 @@ def parse_args() -> argparse.Namespace:
   return p.parse_args()
 
 
+LOG_SUFFIXES = (".log",)
+# Suffixes only treated as logs when they sit under a log/logs directory.
+SCOPED_LOG_SUFFIXES = (".txt", ".jsonl")
+LOG_DIR_NAMES = {"log", "logs"}
+
+
+def is_log_file(path: Path) -> bool:
+  """True if this file is a log this pruner owns. Pure.
+
+  ``*.log`` anywhere; ``*.txt``/``*.jsonl`` only inside a log/logs directory,
+  so an *arr's ``sonarr.debug.21.txt`` is caught while a subtitle or a config
+  dump of the same extension is not.
+  """
+  suffix = path.suffix.lower()
+  if suffix in LOG_SUFFIXES:
+    return True
+  if suffix not in SCOPED_LOG_SUFFIXES:
+    return False
+  return any(part.lower() in LOG_DIR_NAMES for part in path.parent.parts)
+
+
 def gather_roots(args) -> list[Path]:
   roots: list[Path] = []
   if not args.roots:
@@ -81,7 +116,15 @@ def gather_roots(args) -> list[Path]:
       roots.append(Path(cfg))
   else:
     roots.extend(Path(r) for r in args.roots)
-  return [r for r in roots if r.exists()]
+  roots.extend(Path(r) for r in getattr(args, "extra_roots", []) or [])
+  seen: set[Path] = set()
+  unique: list[Path] = []
+  for root in roots:
+    resolved = root.resolve()
+    if resolved not in seen and root.exists():
+      seen.add(resolved)
+      unique.append(root)
+  return unique
 
 
 def should_process(path: Path, max_size: int, min_age_days: int, now: float) -> bool:
@@ -96,7 +139,7 @@ def should_process(path: Path, max_size: int, min_age_days: int, now: float) -> 
 
 
 def compress_and_truncate(path: Path, dry_run: bool) -> tuple[bool, str]:
-  ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+  ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
   backup = path.with_suffix(path.suffix + f".{ts}.gz")
   if shutil.which("gzip") is None:
     return truncate(path, dry_run)
@@ -116,7 +159,7 @@ def compress_and_truncate(path: Path, dry_run: bool) -> tuple[bool, str]:
 
 
 def truncate(path: Path, dry_run: bool) -> tuple[bool, str]:
-  ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+  ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
   try:
     if not dry_run:
       with path.open("w", encoding="utf-8") as f:
@@ -161,7 +204,9 @@ def main() -> int:
   processed = 0
   failures = 0
   for root in roots:
-    for path in root.rglob("*.log"):
+    for path in root.rglob("*"):
+      if not path.is_file() or not is_log_file(path):
+        continue
       if should_process(path, max_size_bytes, args.min_age, now):
         if do_compress:
           ok, action = compress_and_truncate(path, args.dry_run)

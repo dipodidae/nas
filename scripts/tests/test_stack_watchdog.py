@@ -864,3 +864,54 @@ def test_the_slow_exemption_does_not_cover_absent_or_exited():
     """Busy is an excuse for unhealthy. It is not an excuse for not existing."""
     assert wd.lane_for(_alert("container:playlist-generator:missing")) == "critical"
     assert wd.lane_for(_alert("container:playlist-generator:down"), active_min=99.0) == "attention"
+
+
+# --- a disabled indexer is a decision, not an outage -------------------------
+# Prowlarr keeps the /indexerstatus row of an indexer you untick, so without
+# this filter there was no way to silence a dead site: 1337x answered 403 for
+# 17 days and pushed a nas-attention alert every five minutes, and disabling it
+# -- the correct response -- would not have stopped one of them.
+
+
+def _indexer_api(status, indexers):
+    def fake(base, api_key, path):
+        return status if path.endswith("indexerstatus") else indexers
+    return fake
+
+
+def test_disabled_indexer_is_not_reported(monkeypatch):
+    monkeypatch.setattr(
+        wd,
+        "_arr_get",
+        _indexer_api(
+            [{"indexerId": 10, "initialFailure": "2026-08-27T07:11:44Z"}],
+            [{"id": 10, "name": "1337x", "enable": False}],
+        ),
+    )
+    assert wd.fetch_indexer_failures() == []
+
+
+def test_enabled_indexer_is_still_reported(monkeypatch):
+    monkeypatch.setattr(
+        wd,
+        "_arr_get",
+        _indexer_api(
+            [{"indexerId": 10, "initialFailure": "2026-08-27T07:11:44Z"}],
+            [{"id": 10, "name": "1337x", "enable": True}],
+        ),
+    )
+    rows = wd.fetch_indexer_failures()
+    assert [r["name"] for r in rows] == ["1337x"]
+
+
+def test_indexer_missing_enable_field_is_reported(monkeypatch):
+    """An older Prowlarr, or a trimmed payload, must not silence everything."""
+    monkeypatch.setattr(
+        wd,
+        "_arr_get",
+        _indexer_api(
+            [{"indexerId": 7, "initialFailure": "2026-08-27T07:11:44Z"}],
+            [{"id": 7, "name": "Torrent Downloads"}],
+        ),
+    )
+    assert [r["name"] for r in wd.fetch_indexer_failures()] == ["Torrent Downloads"]
