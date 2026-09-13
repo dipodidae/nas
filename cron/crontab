@@ -17,8 +17,17 @@
 # prevent overlapping runs.
 
 # --- daily ---
-# 01:00 — config archive to the 9.1T HDD (/mnt/drive/backups/nas-configs), keeps the 5 most recent
-0 1 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name config-backup --max-age-min 1560 --fail-lane critical -- python scripts/config_backup.py --backup-dir /mnt/drive/backups/nas-configs --fast --no-checksum --retain 5 --exclude 'lidarr/MediaCover/**' --exclude 'jellyfin/data/metadata/**' >> logs/config_backup.log 2>&1"
+# 01:00 — config archive to the 9.1T HDD (/mnt/drive/backups/nas-configs), keeps the 5 most recent.
+# The service set is DISCOVERED from CONFIG_DIRECTORY, so do not reintroduce
+# --services: the hard-coded list it replaced held 9 of 28 directories, still
+# named the retired lazylibrarian (hence exit 1 every night, invisible under the
+# default --ok-codes 0,1), and omitted lidarr, tinyauth, slskd and cleanuparr.
+# The heavy excludes are defaults now, not flags. --ok-codes 0 because with
+# discovery there is no benign exit 1 left, so any 1 is worth a human.
+# Proof is scripts/check_backup_contents.py in `make verify-runtime`: a 25 MB
+# --fast size cap had been dropping sonarr.db, prowlarr.db and jellyfin.db out
+# of every archive while the job reported success.
+0 1 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name config-backup --max-age-min 1560 --fail-lane critical --ok-codes 0 -- python scripts/config_backup.py --backup-dir /mnt/drive/backups/nas-configs --fast --no-checksum --retain 5 >> logs/config_backup.log 2>&1"
 # 03:30 — force slskd to re-advertise the shared library to Soulseek peers
 30 3 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name slskd-rescan --max-age-min 1560 -- python scripts/slskd_rescan.py --wait >> logs/slskd_rescan.log 2>&1"
 # 04:30 — daily stack-health assertion. Kept its slot from when Watchtower fired
@@ -26,9 +35,26 @@
 # update on a schedule any more, so this is now a standalone daily verifier.
 30 4 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name post-update-verifier --max-age-min 1560 -- python scripts/post_update_verifier.py >> logs/post_update_verifier.log 2>&1"
 
+# 05:40 — collect SMART. scrutiny's omnibus image has its own cron (05:45 in
+# /etc/cron.d/scrutiny) and it does NOT fire: a `* * * * *` probe dropped in
+# beside it never ran in 150s while `cron -f -L 15` sat there as PID 96. Every
+# datapoint since 2026-09-05 came from the boot-time collector-once service, so
+# the NVMe went unmonitored for 8 days behind a healthy container and a green
+# dashboard, and `make verify-runtime` failed on ADR-0023 nine nights running.
+# Running it from here also puts it inside the alerting contract.
+40 5 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name scrutiny-collect --max-age-min 1560 --ok-codes 0 -- docker exec scrutiny /opt/scrutiny/bin/scrutiny-collector-metrics run >> logs/scrutiny_collect.log 2>&1"
+
 # --- weekly ---
-# Sunday 02:00 — compress / truncate oversize log files inside CONFIG_DIRECTORY
-0 2 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name log-pruner --max-age-min 10380 -- python scripts/log_pruner.py >> logs/log_pruner.log 2>&1"
+# Sunday 02:00 — compress / truncate oversize log files. Three corrections, all
+# from 2026-09-13, each of which had made this job a no-op in a different way:
+#   --extra-roots adds this repo's own logs/, which nothing was pruning (154 MB,
+#     process_soulseek_imports.log alone 90 MB);
+#   --min-age 0 because the default of 1 day exempted every log still being
+#     written to, which is all of the big ones;
+#   and the script itself only globbed *.log while every *arr writes
+#     sonarr.debug.21.txt, so it had reported "processed 0 file(s)" for its
+#     entire life. Truncation is safe for an O_APPEND writer.
+0 2 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name log-pruner --max-age-min 10380 -- python scripts/log_pruner.py --extra-roots /home/tom/nas/logs --min-age 0 >> logs/log_pruner.log 2>&1"
 
 # Sunday 03:00 — reclaim Docker disk: drop build cache unused for 7d and any
 # dangling images left by rebuilds. Build cache hit 62GB / 99 dangling images
@@ -90,12 +116,26 @@
 # :42 hourly -- release dates, bounded by max_albums.
 42 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-release-dates --lock /tmp/nas-playlist-stage.lock --max-age-min 300 -- python scripts/playlist_sync_stage.py --stage release-dates --limit 300 >> logs/playlist_sync.log 2>&1"
 */5 * * * * cd /home/tom/nas && .venv/bin/python scripts/cron_job.py --name media-ops-status --max-age-min 30 -- .venv/bin/python scripts/media_ops_status.py --json-out /home/tom/nas/.docker-config/ops-status/ops-status.json >> logs/media_ops_status.log 2>&1  # media-ops dashboard
+# Sunday 03:50 — backfill missing ARTIST images (folder.jpg in the artist dir)
+# from Deezer. Nothing filled these before 2026-09-13: sacad is an album-cover
+# tool, and Lidarr's metadata server has image URLs for only 956 of its 3,519
+# artists, so 1,970 of 2,717 artist directories had no image and Jellyfin showed
+# 49% of artists blank. Source coverage was measured before choosing Deezer:
+# Deezer 83%, fanart.tv 7.5%, Wikidata P18 3% on the same sample of the gap.
+# A candidate must share an album title with the folder on disk before its
+# picture is written -- a wrong artist image looks correct forever. Measured
+# 31/40 written, 0 failures, 2 rejected by that gate on the first batch.
+50 3 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name artist-art --lock /tmp/nas-artist-art.lock --max-age-min 10380 -- python scripts/artist_art.py --apply --limit 400 >> logs/artist_art.log 2>&1"
 # Sunday 04:45 — backfill missing folder.jpg album covers (sacad, incremental: skips albums that already have one). After 04:30 post-update verifier, clear of the heavy hourly Tubifarry/slskd hygiene jobs.
 45 4 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name album-art --lock /tmp/nas-album-art.lock --max-age-min 10380 -- python scripts/album_art.py --apply --overwrite-once --limit 300 >> logs/album_art.log 2>&1"
 
 # --- Jellyfin OOM investigation (docs/jellyfin-playback-audit.md) ---
-# Every minute — sample jellyfin container memory (cgroup memory.current + docker stats) for leak diagnosis. Self-rotating log, ~10MB cap.
-* * * * * /usr/bin/env bash -c "cd /home/tom/nas && /usr/bin/python3 scripts/jellyfin_mem_sample.py" >> /home/tom/nas/logs/jellyfin_mem_sample.err 2>&1
+# Every 5 min — sample jellyfin memory. Was every minute and was the ONE job in
+# this file not wrapped in cron_job.py, so a broken sampler would have been
+# invisible. Downgraded 2026-09-13: the investigation it was opened for has gone
+# quiet -- 0 OOM kills in 30 days, 0 container restarts, anon flat at 1.58 GB --
+# and */5 still resolves any ffprobe fan-out during a library scan.
+*/5 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-mem-sample --max-age-min 30 --ok-codes 0 -- /usr/bin/python3 scripts/jellyfin_mem_sample.py >> logs/jellyfin_mem_sample.err 2>&1"
 
 
 # --- the daily digest (ADR-0033) ---
@@ -138,10 +178,12 @@
 5 5 * * 5 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-movies --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library Movies >> logs/jellyfin_library_scan.log 2>&1"
 # Sat 05:05 — TV Shows.
 5 5 * * 6 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-tv --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library 'TV Shows' >> logs/jellyfin_library_scan.log 2>&1"
-# Sun 05:05 — Music. Deliberately *after* the 04:45 album_art.py cover backfill:
+# Sun 05:20 — Music. Deliberately *after* BOTH art jobs: artist_art.py at 03:50
+# and album_art.py at 04:45, which measured 21.6 min and so was still running at
+# the old 05:05 slot -- the last covers it wrote waited a week to be seen.
 # sacad writes folder.jpg straight to disk, which Lidarr never sees and therefore
 # never reports, so this scan is what actually gets new cover art into Jellyfin.
-5 5 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-music --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library Music >> logs/jellyfin_library_scan.log 2>&1"
+20 5 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-music --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library Music >> logs/jellyfin_library_scan.log 2>&1"
 
 # --- whole-library sweep: the only check that sees "on disk and nowhere else" ---
 # Sun 06:05 -- after the 05:05 Music library scan, so the scan has had an hour to
@@ -150,6 +192,15 @@
 # ghosts on dead paths. A one-directional sweep cannot see the other fault.
 # --ok-codes 0 deliberately: any discrepancy is worth a human, and the wrapper's
 # 0,1 default would swallow one. The script has no exit 1 for the same reason.
+# Sun 05:45 — ask Jellyfin's own providers for images no file on disk supplies.
+# Complements, does not replace, artist_art.py/album_art.py: those write to disk
+# where every consumer sees them, this one covers the tail. The Fanart, Cover
+# Art Archive and last.fm plugins were installed and Active with only TheAudioDB
+# ticked on the music library until 2026-09-13; all four are enabled now. It
+# reports by effect -- Jellyfin answers 204 to a refresh it has merely queued,
+# so the run re-reads the batch and says how many actually gained an image.
+45 5 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-image-backfill --lock /tmp/nas-jf-image-backfill.lock --max-age-min 10380 -- python scripts/jellyfin_image_backfill.py --apply --limit 300 >> logs/jellyfin_image_backfill.log 2>&1"
+
 5 6 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name music-library-sweep --lock /tmp/nas-music-sweep.lock --max-age-min 10380 --ok-codes 0 -- python scripts/music_library_sweep.py >> logs/music_library_sweep.log 2>&1"
 
 # --- Lidarr -> Jellyfin path-mapping bridge (docs/jellyfin-playback-audit.md) ---
