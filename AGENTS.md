@@ -313,12 +313,32 @@ Scripts in `scripts/` that run on-demand (not cron) against the live stack:
   out of `complete/manual/`). Acts by default; `--dry-run` to preview. Uses
   `QBITTORRENT_USER` / `QBITTORRENT_PASS` / `QBITTORRENT_HOST`.
 
-Cron-driven media maintenance scripts (`album_art.py`, `replaygain.py`) are the
-opposite default — **dry-run unless `--apply` is passed**. `album_art.py`
-backfills missing `folder.jpg` album covers via sacad's `sacad_r`; it reuses
-`SHARE_DIRECTORY` (music root = `$SHARE_DIRECTORY/music`) and adds no new `.env`
-key. Requires `sacad` in the venv (pinned in `scripts/requirements.txt`). Runs
-weekly (Sun 04:45, flock-guarded). See `scripts/README.md` for details.
+Cron-driven media maintenance scripts (`album_art.py`, `artist_art.py`,
+`replaygain.py`, `jellyfin_image_backfill.py`) are the opposite default —
+**dry-run unless `--apply` is passed**. They reuse `SHARE_DIRECTORY` (music root
+= `$SHARE_DIRECTORY/music`) and add no new `.env` key.
+
+- `album_art.py` — missing `folder.jpg` **album** covers via sacad's `sacad_r`.
+  Requires `sacad` in the venv (pinned in `scripts/requirements.txt`). Sun 04:45.
+- `artist_art.py` — missing `folder.jpg` **artist** images from Deezer. sacad
+  never enters an artist directory, which is why this exists; source coverage was
+  measured before choosing Deezer (83%, vs fanart.tv 7.5%). A candidate must share
+  an album title with the folder on disk before its picture is written — a wrong
+  artist image looks correct forever. Sun 03:50. ADR-0038.
+- `jellyfin_image_backfill.py` — asks Jellyfin's own providers for what no file
+  on disk supplies, and measures what the batch actually gained rather than
+  trusting the `204`. Uses `API_KEY_JELLYFIN_ARR`. Sun 05:45.
+
+All three run before/after the Sunday music library scan at **05:20**, in that
+order. See `scripts/README.md` for details.
+
+`config_backup.py` **discovers** its service set from `CONFIG_DIRECTORY` — never
+reintroduce a hard-coded list, and never pin `--services` in the cron line;
+`make check` rejects both. Its `--max-file-size` cap must never apply to a SQLite
+file, which is copied through the online backup API so a WAL database is captured
+consistently. Proof lives in `check_backup_contents.py` under
+`make verify-runtime`, because an exit code proved nothing here for months
+(ADR-0037).
 
 ## Exit Codes (Python Scripts)
 

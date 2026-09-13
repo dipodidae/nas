@@ -249,7 +249,16 @@ Creates timestamped `tar.gz` archives of service configuration directories (from
 
 Key features:
 
-- Curated list of default services (override with `--services`)
+- **Discovers** every directory under `CONFIG_DIRECTORY` (override with `--services`,
+  inspect with `--plan`). It used to carry a hard-coded list of nine names that held
+  8 of 28 directories and still listed the retired `lazylibrarian` — hence exit 1
+  every night, invisible under `cron_job.py`'s default `--ok-codes 0,1`. ADR-0037.
+- **Snapshots SQLite databases** through the online backup API instead of tarring the
+  file, so a WAL database is captured with its uncommitted-to-main rows folded in.
+  `--max-file-size` never applies to one: `--fast`'s 25 MB cap had been silently
+  dropping `sonarr.db`, `prowlarr.db` and `jellyfin.db` out of every archive.
+  Files that _are_ skipped for size are named in the summary, not counted.
+- Exclusion patterns understand a leading `!` as a gitignore-style re-include
 - Retention pruning (`--retain`, or `BACKUP_RETAIN` env)
 - Exclude patterns: `--exclude PATTERN`, `--exclude-from file`, `--default-excludes`
 - Fast mode (`--fast`): applies default excludes + adds log directory exclusion + size cap
@@ -267,7 +276,18 @@ python scripts/config_backup.py --restore configs-20250101-000000.tar.gz
 python scripts/config_backup.py --retain 14           # keep 14 most recent
 python scripts/config_backup.py --exclude jellyfin/cache/** --exclude-from excludes.txt
 python scripts/config_backup.py --fast --no-checksum  # quick lightweight backup
+python scripts/config_backup.py --plan --fast         # what WOULD be archived
 ```
+
+Verify by effect, never by exit code — a backup that exits 0 is exactly what this
+stack had while archiving no databases at all:
+
+```
+python scripts/check_backup_contents.py               # in `make verify-runtime`
+```
+
+It opens the newest archive and asserts thirteen required members are present and
+non-empty, and that it is under 36 h old.
 
 Fast mode defaults: excludes heavy cache/transcode/data/temp paths and `**/logs/**`, applies a 25MB file size cap (can override with `--max-file-size`).
 
@@ -298,11 +318,16 @@ Exit codes: 0 all healthy, 1 degraded, 2 fatal. Environment keys: `API_KEY_PROWL
 
 ### `log_pruner.py`
 
-Compresses or truncates oversized, older log files inside `CONFIG_DIRECTORY` (or specified roots).
+Compresses or truncates oversized, older log files inside `CONFIG_DIRECTORY` (or
+specified roots). Matches `*.log` anywhere plus `*.txt`/`*.jsonl` **inside a
+`log`/`logs` directory** — it globbed `*.log` only until 2026-09-13, and every \*arr
+writes `sonarr.debug.21.txt`, so the weekly run reported "processed 0 file(s)" for
+its entire life while Prowlarr held 99 MB and Lidarr 105 MB of logs.
 
 ```
 python scripts/log_pruner.py --max-mb 10 --min-age 0
 python scripts/log_pruner.py --roots /custom/logs --dry-run
+python scripts/log_pruner.py --extra-roots /home/tom/nas/logs   # ADD a root, keep the default
 ```
 
 Environment: `LOG_PRUNE_MAX_MB` (default 25), `LOG_PRUNE_MIN_AGE_DAYS` (1), `LOG_PRUNE_COMPRESS` (true/false).
@@ -697,6 +722,73 @@ Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited
 
 Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 300`.
 
+**Scope note:** this is an _album_ tool. `sacad_r` never enters an artist
+directory, which is why artist images needed their own script — see
+`artist_art.py` below and ADR-0038.
+
+### `artist_art.py`
+
+Backfills **missing artist images** (`folder.jpg` in the artist directory) from
+Deezer. The sibling `album_art.py` never had: on 2026-09-13, 96.3% of album
+folders had a cover while only 756 of 2,741 artist folders did, and Jellyfin was
+missing a primary image on **49% of artists**.
+
+Deezer was chosen by measurement, not preference. On random samples of the actual
+gap: **Deezer 25/30 (83%)**, fanart.tv 3/40 (7.5%), Wikidata P18 via a MusicBrainz
+relation 1/30 (3%). This library is deep-catalogue underground metal; the
+curation sites have barely touched it and a shop's catalogue has.
+
+**The album cross-check is the important part.** An artist folder named `33` or
+`Beware` matches _something_ on Deezer no matter what, and a wrong artist image
+looks correct forever. A candidate must share at least one album title with the
+folder on disk before its picture is written. On the first 400-artist run that
+gate rejected 41 name-matches — those are the ones that would have been wrong.
+`--no-verify` disables it; the report always separates "no exact name match",
+"name matched but no shared album" and "matched, but Deezer has no photo".
+
+**Dry-run is the default.** A state file benches each attempted artist for
+`--cooldown-days` (45) so an artist no source has is not re-queried weekly.
+
+```bash
+python scripts/artist_art.py                        # dry-run: plan only
+python scripts/artist_art.py --apply --limit 400    # the cron mode
+python scripts/artist_art.py --apply --artist 'Xasthur'   # one artist, ignores cooldown
+python scripts/artist_art.py --apply --no-verify    # name match only (not recommended)
+```
+
+Exit codes: `0` success / dry-run, `1` partial (some downloads failed), `2` fatal
+(music dir missing). Environment: `SHARE_DIRECTORY`. Cron: Sunday 03:50,
+flock-guarded, `--apply --limit 400` — before `album_art.py` so the 05:20 Jellyfin
+music scan sees both. Measured 310 images in 535 s, 0 failures.
+
+### `jellyfin_image_backfill.py`
+
+Asks **Jellyfin's own** image providers for artist/album images that no file on
+disk supplies. Complements `artist_art.py`/`album_art.py` rather than replacing
+them — those write to disk where every consumer sees the result; this covers the
+tail Jellyfin can reach and the filesystem cannot.
+
+The Fanart, Cover Art Archive and last.fm plugins were installed and Active on
+this server with **only TheAudioDB** ticked on the music library until 2026-09-13.
+All four are enabled now (ADR-0038). A library scan will not fetch these on its
+own: Jellyfin only queries image providers for an item it is actually refreshing,
+and a scan skips items whose files have not changed — so this walks the items
+that are missing an image and refreshes exactly those.
+
+**It reports by effect.** Jellyfin answers `204` to a refresh it has merely
+queued, so after the batch the run waits `--settle` seconds, re-reads the same
+items and prints how many actually gained an image.
+
+```bash
+python scripts/jellyfin_image_backfill.py --dry-run
+python scripts/jellyfin_image_backfill.py --apply --limit 300
+```
+
+Exit codes: `0` success, `1` partial (a refresh call failed), `2` fatal (no key,
+or Jellyfin unreachable). Environment: `API_KEY_JELLYFIN_ARR` (the
+arr-integrations key, **not** `API_KEY_JELLYFIN` which is Jellyseerr's),
+`JELLYFIN_URL`. Cron: Sunday 05:45, after the music library scan.
+
 ### `slskd_state.py`
 
 A library, not a script. Answers one question for the cron jobs that talk to slskd: **is it unreachable because it is broken, or because it is still coming up?**
@@ -781,7 +873,7 @@ python scripts/jellyfin_library_scan.py --library Movies --library Music
 python scripts/jellyfin_library_scan.py --all --dry-run
 ```
 
-Exit codes: `0` all accepted, `1` partial, `2` fatal. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_HOST`. Cron: Movies Fri 05:05, TV Shows Sat 05:05, Music Sun 05:05 (Music deliberately after the 04:45 `album_art.py` pass, because sacad writes `folder.jpg` straight to disk where no \*arr ever reports it).
+Exit codes: `0` all accepted, `1` partial, `2` fatal. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_HOST`. Cron: Movies Fri 05:05, TV Shows Sat 05:05, Music Sun **05:20** (Music deliberately after BOTH art passes — `artist_art.py` at 03:50 and `album_art.py` at 04:45, which measured 21.6 min and so was still running at the old 05:05 slot — because both write straight to disk where no \*arr ever reports it).
 
 ### `lidarr_jellyfin_bridge.py`
 

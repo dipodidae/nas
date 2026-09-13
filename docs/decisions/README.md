@@ -47,3 +47,5 @@ the ADR here. If you are about to change something and the YAML says
 | [0034](0034-one-door-tinyauth.md)                  | One tinyauth door for every browser-only surface; sync clients excluded       |
 | [0035](0035-jellyfin-12-upgrade.md)                | Jellyfin 12.0: `CAP_KILL`, the tag regex, legacy auth, and `encoding.xml`     |
 | [0036](0036-tinyauth-52-auth-module-conflict.md)   | tinyauth v5.2.0 denies SWAG's `proxy.conf` headers; its DB upgrade is one-way |
+| [0037](0037-backup-completeness.md)                | The nightly archive discovers its services and snapshots the WAL databases    |
+| [0038](0038-artist-art-and-image-providers.md)     | Artist images from Deezer, verified against the albums on disk                |
