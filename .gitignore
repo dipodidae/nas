@@ -51,3 +51,20 @@ compose.override.yml
 # under it is TRACKED -- gitignoring is necessary and not sufficient, and this
 # very file was staged once by a `git add -A` before the entry existed.
 secrets/
+
+# Third-party skills installed from the skills.sh registry by `npx skills add`.
+# `skills-lock.json` IS committed (it pins source + content hash, so
+# `npx skills experimental_install` reproduces them); the vendored copies are
+# not. The seven hand-written `nas-*`/`verifying-by-effect`/`hunting-silent-
+# failure` skills in the same directory ARE tracked -- they are repo docs
+# (CLAUDE.md lists them as authoritative), not dependencies. Listing the
+# registry ones individually rather than ignoring `.claude/skills/*/` is
+# deliberate: a blanket rule would silently swallow the next hand-written
+# skill, which is the exact failure shape `hunting-silent-failure` is about.
+# Add a line here whenever you `npx skills add` another one.
+.claude/skills/incident-runbook-templates/
+.claude/skills/postmortem-writing/
+# `npx skills experimental_install` (the restore-from-lock command) vendors into
+# `.agents/skills/` rather than `.claude/skills/`, so ignore that root too --
+# otherwise a restore leaves an untracked tree one `git add -A` from the history.
+.agents/

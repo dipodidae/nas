@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "incident-runbook-templates": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/incident-response/skills/incident-runbook-templates/SKILL.md",
+      "computedHash": "6b83f8e5f9ce1754b5148724f1fbec85d46f575415adba667f7e91564efca626"
+    },
+    "postmortem-writing": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/incident-response/skills/postmortem-writing/SKILL.md",
+      "computedHash": "c7da1f69ce847107944cae42c92c1939a05c51434c237388fadcb16386a2d628"
+    }
+  }
+}
