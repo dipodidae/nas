@@ -51,7 +51,7 @@ and it is worth naming precisely, because every single indicator was green:
 - `make check` was satisfied — the compose model was exactly what it asserted,
 - and the only trace was one `[ERR]` line per item in a log nobody tails.
 
-An HTTP 204 from the config API "confirmed" the setting every time. The setting *was*
+An HTTP 204 from the config API "confirmed" the setting every time. The setting _was_
 saved. It was simply impossible to honour.
 
 ## Decision
@@ -61,12 +61,12 @@ media.** The alternative — leaving `:ro` and storing tiles in Jellyfin's data 
 implemented first and then reversed on the owner's instruction. The owner's call is also
 the better one here:
 
-| | with media (chosen) | in `/config` |
-| --- | --- | --- |
-| lands on | `/mnt/drive`, **3.8 TB free** | `/`, **55 GB free at 76 % used** |
-| ~6 GB for this library | 0.16 % of the drive | 11 % of remaining root |
-| survives a Jellyfin config wipe | yes | no |
-| in the nightly config archive | no (not covered at all) | only because it is excluded |
+|                                 | with media (chosen)           | in `/config`                     |
+| ------------------------------- | ----------------------------- | -------------------------------- |
+| lands on                        | `/mnt/drive`, **3.8 TB free** | `/`, **55 GB free at 76 % used** |
+| ~6 GB for this library          | 0.16 % of the drive           | 11 % of remaining root           |
+| survives a Jellyfin config wipe | yes                           | no                               |
+| in the nightly config archive   | no (not covered at all)       | only because it is excluded      |
 
 ### What this costs, stated plainly
 
@@ -90,24 +90,24 @@ Jellyfin library path, the \*arr `mapFrom`/`mapTo` mappings, and playlist-genera
 `TrickplayOptions.EnableKeyFrameOnlyExtraction` was off. Turned on, measured on this host
 against South Park Specials (1080p WEB-DL, same codec, adjacent files):
 
-| | per 45–50 min episode |
-| --- | --- |
-| full decode (`fps` filter over every frame) | **112 s** |
-| keyframe-only (`-skip_frame nokey`) | **14–18 s** |
+|                                             | per 45–50 min episode |
+| ------------------------------------------- | --------------------- |
+| full decode (`fps` filter over every frame) | **112 s**             |
+| keyframe-only (`-skip_frame nokey`)         | **14–18 s**           |
 
 **~7×**, and the output is not degraded: still `320x180` thumbnails in `3200x1800`
 10×10 sheets, still ~14 KB per thumbnail, and `TrickplayInfos.ThumbnailCount` is still
-*exact* (279 for a 46.5-min episode at a 10 s interval = 2790 s / 10). Timing snaps to the
+_exact_ (279 for a 46.5-min episode at a 10 s interval = 2790 s / 10). Timing snaps to the
 nearest keyframe, which for these GOPs is within a couple of seconds — invisible on a
 scrub bar.
 
 Per-item cost varies a lot by **source**, not just by runtime — measured on the backfill:
 
-| item | source | keyframe-only |
-| --- | --- | --- |
-| South Park Specials, 45–50 min | WEB-DL | 14–18 s |
-| Avatar S01E01, 24 min | Bluray | 43 s |
-| 12 Angry Men, 96 min | Bluray Remux | 8 min 40 s (fell back to full decode) |
+| item                           | source       | keyframe-only                         |
+| ------------------------------ | ------------ | ------------------------------------- |
+| South Park Specials, 45–50 min | WEB-DL       | 14–18 s                               |
+| Avatar S01E01, 24 min          | Bluray       | 43 s                                  |
+| 12 Angry Men, 96 min           | Bluray Remux | 8 min 40 s (fell back to full decode) |
 
 So do not plan against a single average. Extrapolating over 1816 videos, full decode is
 well over a day of continuous GPU work — which does not fit between nightly 03:00 runs
@@ -134,7 +134,7 @@ intervention. The cost is a 20 s unresponsiveness timeout before the retry.
 So keyframe-only is not a gamble: it is ~7× on everything that supports it (the WEB-DL
 episodes that are the bulk of this library) and costs 20 s on the minority that does not.
 Do not turn it off because of a `[WRN]` line — that line is the safety net working. The
-setting to worry about would be one that made the fallback *not* happen.
+setting to worry about would be one that made the fallback _not_ happen.
 
 ## The rest of the config, and why it is left alone
 
