@@ -915,3 +915,41 @@ def test_indexer_missing_enable_field_is_reported(monkeypatch):
         ),
     )
     assert [r["name"] for r in wd.fetch_indexer_failures()] == ["Torrent Downloads"]
+
+
+# --- stuck in start_period: only a LIVE container can be stuck (2026-09-14) ---
+
+
+def _starting(service, status, started_min_ago):
+    began = _dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=started_min_ago)
+    return {
+        service: {
+            "Name": f"/{service}",
+            "State": {
+                "Status": status,
+                "StartedAt": began.isoformat().replace("+00:00", "Z"),
+                "Health": {"Status": "starting"},
+            },
+        }
+    }
+
+
+def test_running_container_stuck_in_start_period_alerts():
+    alerts = wd.check_stuck_starting(_starting("slskd", "running", 200), max_min=150)
+    assert [a.key for a in alerts] == ["container:slskd:stuck-starting"]
+
+
+def test_running_container_still_inside_the_window_is_quiet():
+    assert wd.check_stuck_starting(_starting("slskd", "running", 10), max_min=150) == []
+
+
+def test_exited_container_is_not_reported_as_stuck_starting():
+    """Docker freezes Health.Status at death, so an exited container reports
+    "starting" forever while StartedAt ages. jellyfin died on a failed port bind
+    and was still claiming "health=starting for 1286 min" 20 h later, escalating
+    to nas-critical alongside its own :down alert. :down owns a dead container."""
+    assert wd.check_stuck_starting(_starting("jellyfin", "exited", 1286), max_min=150) == []
+
+
+def test_created_but_never_started_is_not_reported_as_stuck_starting():
+    assert wd.check_stuck_starting(_starting("jellyfin", "created", 900), max_min=150) == []

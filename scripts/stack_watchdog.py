@@ -670,6 +670,17 @@ def check_stuck_starting(containers: dict[str, dict], max_min: float = 150.0) ->
     health = ((state.get("Health") or {}).get("Status") or "").lower()
     if health != "starting":
       continue
+    # INVARIANT: only a RUNNING container can be stuck starting. Docker freezes
+    # Health.Status at its last value when a container dies, so one that exited
+    # during start_period keeps reporting "starting" forever while StartedAt
+    # keeps aging -- emitting an ever-growing warning that escalates to
+    # nas-critical and competes with the `:down` alert for the same container,
+    # during exactly the incident this check should stay quiet for. Seen
+    # 2026-09-14: jellyfin, dead 20 h on a failed port bind, reported
+    # "health=starting for 1286 min". The `:down` check is what covers a dead
+    # container; this one covers a live-but-not-progressing one.
+    if (state.get("Status") or "").lower() != "running":
+      continue
     started = state.get("StartedAt") or ""
     try:
       began = _dt.datetime.fromisoformat(started.replace("Z", "+00:00"))
