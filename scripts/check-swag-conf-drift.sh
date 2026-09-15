@@ -40,13 +40,14 @@ n=0
 # its own (/ops.html, /ops-status.json), so it is exactly as load-bearing as a
 # proxy-conf -- and it arrives under a DIFFERENT name (site-confs/root.conf),
 # which is why the mapping below is explicit rather than derived. ADR-0034.
-for f in swag/proxy-confs/*.conf swag/*.conf \
+for f in swag/proxy-confs/*.conf swag/*.conf swag/site-confs/*.conf \
          webapps/4eva-rootpage/4eva-rootpage.root.conf; do
   [ -f "$f" ] || continue
   name="$(basename "$f")"
   case "$f" in
     swag/proxy-confs/*)                          target="/config/nginx/proxy-confs/$name" ;;
     webapps/4eva-rootpage/*.root.conf)           target="/config/nginx/site-confs/root.conf" ;;
+    swag/site-confs/*)                           target="/config/nginx/site-confs/$name" ;;
     *)                                           target="/config/nginx/$name" ;;
   esac
   want="$(sha256sum "$f" | cut -d' ' -f1)"

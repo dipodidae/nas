@@ -317,13 +317,25 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	done; [ $$rc -eq 0 ] && echo "    all present"; \
 	echo "==> adguardhome actually answers DNS (ADR-0043)"; \
 	if docker inspect adguardhome >/dev/null 2>&1; then \
-	  if curl -sf -o /dev/null -m 5 "http://127.0.0.1:3053/install.html"; then \
+	  if [ -n "$$(dig +short +time=3 +tries=1 "@$${ADGUARD_DNS_BIND_IP}" example.com 2>/dev/null)" ]; then \
+	    echo "    ok: $${ADGUARD_DNS_BIND_IP}:53 resolved example.com"; \
+	    port="$$(docker exec adguardhome grep -E "^  address: " /opt/adguardhome/conf/AdGuardHome.yaml 2>/dev/null | sed "s/.*://")"; \
+	    if [ "$$port" = "3000" ]; then echo "    ok: admin UI still on container port 3000"; \
+	    else \
+	      echo "    !!! AdGuard admin UI moved to port $$port. The setup wizard"; \
+	      echo "        offers this (it suggests 80) and accepting it 502s"; \
+	      echo "        adguardhome.$${PUBLIC_DOMAIN} -- the proxy-conf and the"; \
+	      echo "        healthcheck both target 3000. Worse, the failing healthcheck"; \
+	      echo "        plus autoheal=true is a restart loop a restart cannot fix."; \
+	      echo "        Set http.address back to 0.0.0.0:3000. ADR-0043"; \
+	      rc=1; crit=1; note "adguardhome admin UI moved off port 3000 (ADR-0043)"; \
+	    fi; \
+	  elif [ "$$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:3053/control/status)" = "302" ]; then \
 	    echo "    -- setup wizard not completed yet: AdGuard does not bind :53 until"; \
 	    echo "       it is, so there is no DNS to assert. Finish it at"; \
 	    echo "       https://adguardhome.$${PUBLIC_DOMAIN} and keep the admin port 3000."; \
-	  elif dig +short +time=3 +tries=1 "@$${ADGUARD_DNS_BIND_IP}" example.com >/dev/null 2>&1 \
-	       && [ -n "$$(dig +short +time=3 +tries=1 "@$${ADGUARD_DNS_BIND_IP}" example.com 2>/dev/null)" ]; then \
-	    echo "    ok: $${ADGUARD_DNS_BIND_IP}:53 resolved example.com"; \
+	    echo "       (/install.html answers 200 in BOTH states and cannot tell you"; \
+	    echo "        which one you are in; /control/status 302 vs 401 can.)"; \
 	  else \
 	    echo "    !!! setup IS complete but $${ADGUARD_DNS_BIND_IP}:53 did not resolve."; \
 	    echo "        Every device using this box for DNS is offline. The container"; \

@@ -93,8 +93,31 @@ for real. Same honesty as the `streamystats-jobs` `/proc/net/tcp` probe.
   container to start simply fails to bind, looking broken rather than conflicted
   (ADR-0023). `make check`'s `port-collision` caught this during the change. The
   **container** port stays 3000, which is what the proxy-conf and healthcheck target.
-- **Keep the admin port at 3000 inside the container.** The setup wizard offers to move it
-  (it suggests 80); accepting breaks both the proxy_pass and the healthcheck.
+- **Keep the admin port at 3000 inside the container — this happened, within the hour.**
+  The setup wizard offers to move the admin interface and its own suggestion is **80**.
+  Accepting it wrote `address: 0.0.0.0:80` into `AdGuardHome.yaml`, and
+  `adguardhome.4eva.me` began returning **502**:
+
+  ```
+  inside the container   :  LISTEN :53, LISTEN :80   (nothing on 3000)
+  swag -> adguardhome:3000 -> 000     swag -> adguardhome:80 -> 302
+  nginx error.log: connect() failed (111: Connection refused)
+                   while connecting to upstream, upstream: "http://172.30.0.35:3000/"
+  ```
+
+  Note the shape: a **502**, not a 500 — the tinyauth door worked fine and the _app_ was
+  unreachable behind it. The healthcheck did catch it honestly (`FailingStreak: 1` within a
+  minute), but a healthcheck that can never pass plus `autoheal=true` is a **restart loop a
+  restart cannot fix** — the ADR-0009/ADR-0026 slskd shape, reached through configuration
+  rather than through a login handshake.
+
+  The port must be **the same before and after setup**, because the wizard itself is meant
+  to be completed through SWAG behind the door, and AdGuard always serves the wizard on 3000. So 3000 is the only value that works in both states, and 80 is not a valid
+  alternative here even though it is upstream's post-setup default.
+
+  `make verify-runtime` now reads `http.address` out of the live container and fails,
+  naming this cause, if it is ever not 3000.
+
 - **The config dirs stay `root:root`.** AdGuard runs as root and is _not_ given a `user:`
   override, so Docker's default bind-mount creation is correct. It is deliberately absent
   from `make bootstrap`'s chown loop — the ADR-0023 `scrutiny` case. A `tom`-owned dir would

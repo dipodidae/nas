@@ -42,6 +42,12 @@ services:
       # Paths are relative to THIS file (compose/), hence the ../ -- see
       # docs/decisions/0000-compose-layout.md.
       - ../webapps/4eva-rootpage/4eva-rootpage.root.conf:/config/nginx/site-confs/root.conf:ro
+      # INVARIANT: tracked, because the bottom of this file is the
+      # `include proxy-confs/*.subdomain.conf` that publishes EVERY route, and
+      # its `server_name _` block is what answers an unrouted hostname -- 404
+      # by deliberate edit, where stock SWAG serves a 200 welcome page. It was
+      # untracked until 2026-09-15. ADR-0045.
+      - ../swag/site-confs/default.conf:/config/nginx/site-confs/default.conf:ro
       # INVARIANT: every enabled proxy-conf is TRACKED HERE and mounted read-only,
       # not left to live in gitignored ${CONFIG_DIRECTORY}/swag where the nightly
       # backup is the only thing keeping it. Six of these have no upstream sample
@@ -101,7 +107,14 @@ services:
       tinyauth:
         condition: service_healthy
     healthcheck:
-      test: [CMD, curl, -f, 'https://localhost:443', -k]
+      # INVARIANT: the Host header is required and is not decoration. Without
+      # it this request lands on the `server_name _` default vhost, which now
+      # answers 404 by design (ADR-0045) -- and `curl -f` turns a 404 into a
+      # non-zero exit, so the bare probe would report swag unhealthy forever
+      # while nginx served every real route perfectly. Addressing the apex
+      # also proves more: that a real vhost is being served, not just that
+      # something is listening on 443.
+      test: [CMD, curl, -f, -k, -H, 'Host: ${PUBLIC_DOMAIN}', 'https://localhost:443']
       interval: 60s
       timeout: 10s
       retries: 3

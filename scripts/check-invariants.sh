@@ -405,6 +405,26 @@ for svc, sv in sorted(services.items()):
                  "from the LAN or the internet.")
 
 # ==========================================================================
+# 5b. swag's healthcheck addresses a REAL vhost, not the default server
+# ==========================================================================
+# The default `server_name _` vhost answers 404 by deliberate edit (ADR-0045),
+# because a 200 welcome page on an unrouted hostname is indistinguishable from
+# a working route. `curl -f` turns that 404 into a non-zero exit, so a probe of
+# `https://localhost:443` with no Host header reports swag unhealthy forever
+# while nginx serves every real route perfectly -- and `make swag-apply` then
+# waits for a health state that can never arrive. Measured 2026-09-15.
+_hc = (services.get("swag", {}).get("healthcheck", {}) or {}).get("test") or []
+_hc_s = " ".join(str(x) for x in _hc)
+if "localhost:443" in _hc_s and "Host:" not in _hc_s:
+    fail("swag-healthcheck-host", "ADR-0045",
+         "swag's healthcheck probes https://localhost:443 with no Host header, "
+         "so it lands on the default vhost -- which returns 404 by design, and "
+         "`curl -f` makes that a failure. swag will report unhealthy forever "
+         "while serving every route correctly. Add -H 'Host: ${PUBLIC_DOMAIN}'.")
+else:
+    ok("swag-healthcheck-host", "swag healthcheck addresses a real vhost")
+
+# ==========================================================================
 # 6. cap_drop: ALL and no-new-privileges everywhere
 # ==========================================================================
 for svc, sv in sorted(services.items()):
