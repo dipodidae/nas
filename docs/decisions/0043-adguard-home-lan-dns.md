@@ -66,10 +66,49 @@ this repo.
 
 ### 3. This host does NOT resolve through AdGuard
 
-`/etc/resolv.conf` stays on systemd-resolved pointing upstream. If the host resolved
-through AdGuard, an AdGuard outage would leave `docker compose pull` unable to resolve the
-registry needed to fix it — a bootstrap deadlock whose only exit is a physical console.
-The filtering is for clients, not for the box that runs it.
+If the host resolved through AdGuard, an AdGuard outage would leave `docker compose pull`
+unable to resolve the registry needed to fix it — a bootstrap deadlock whose only exit is a
+physical console. The filtering is for clients, not for the box that runs it.
+
+**This does not hold by itself, and did not.** `enp88s0` is `dhcp4: true` with no override,
+so the box took whatever the router advertised — measured 2026-09-15, that was
+`192.168.2.32 8.8.8.8`, where `.32` is a decommissioned Pi-hole that no longer answers or
+even pings. The moment the router advertises `192.168.2.56`, this host would have received
+it too and the invariant would have been silently false.
+
+So the DHCP-supplied resolver list is ignored here, in
+**`/etc/netplan/99-nas-resolver-pin.yaml`**:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    enp88s0:
+      dhcp4-overrides: { use-dns: false }
+      dhcp6-overrides: { use-dns: false }
+      nameservers:
+        addresses: [1.1.1.1, 8.8.8.8]
+```
+
+Like the lockd pin of ADR-0040, this file lives **outside this repo**: a host rebuild must
+reapply it and `make check` cannot see it. Verify with `resolvectl status`, which must show
+`DNS Servers: 1.1.1.1 8.8.8.8` on the link and **never** `192.168.2.56`.
+
+### 3b. What the router should advertise, and the one field that matters
+
+Primary DNS `192.168.2.56`, **secondary empty**. A public secondary is not a fallback, it is
+a bypass: resolvers do not do strict ordered failover, so every query that lands on the
+secondary is unfiltered and ad-blocking becomes intermittent with no visible cause. The
+proof is already on this network — with `.32` dead, every client has been silently resolving
+through `8.8.8.8` for as long as it has been off.
+
+The cost, stated plainly: with only AdGuard listed, the NAS being down means no DNS for the
+house. That is the same trade the host itself refuses above, taken deliberately for clients
+because the alternative is a filter that silently does nothing.
+
+The router's **"use DNS proxy"** option stays **off**: with it on, AdGuard sees every query
+as coming from the router's own address, which destroys per-client statistics and per-client
+filtering rules.
 
 ### 4. The healthcheck probes the admin UI, and `autoheal` is why
 
