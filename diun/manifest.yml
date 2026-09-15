@@ -113,7 +113,7 @@
 
 # jellyfin
 #   release tags only; a 12.0 major, a 12.0.z point release and a legacy 10.11.z all surface
-- name: lscr.io/linuxserver/jellyfin:12.0ubu2604-ls48
+- name: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls49
   metadata:
     service: jellyfin
   watch_repo: true
@@ -179,7 +179,7 @@
 
 # qbittorrent
 #   floor >= 5.2.2 per ADR-0005; LSIO release tags only
-- name: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls475
+- name: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls476
   metadata:
     service: qbittorrent
   watch_repo: true
@@ -224,7 +224,7 @@
 
 # scrutiny
 #   omnibus variant only -- the split images are a different topology
-- name: ghcr.io/analogj/scrutiny:v0.9.3-omnibus
+- name: ghcr.io/analogj/scrutiny:v0.9.4-omnibus
   metadata:
     service: scrutiny
   watch_repo: true
@@ -260,7 +260,7 @@
 
 # streamystats
 #   keep in lockstep with the job server
-- name: ghcr.io/fredrikburmester/streamystats-nextjs:v2.18.1
+- name: ghcr.io/fredrikburmester/streamystats-nextjs:v2.20.0
   metadata:
     service: streamystats
   watch_repo: true
@@ -308,7 +308,7 @@
 
 # streamystats-jobs
 #   keep in lockstep with the UI
-- name: ghcr.io/fredrikburmester/streamystats-job-server:v2.18.1
+- name: ghcr.io/fredrikburmester/streamystats-job-server:v2.20.0
   metadata:
     service: streamystats-jobs
   watch_repo: true

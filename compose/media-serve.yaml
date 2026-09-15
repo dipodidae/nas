@@ -19,7 +19,7 @@ services:
     # deliberately with `make pull-jellyfin`, which waits for healthy.
     # Consequence, accepted: pinned + unlabelled means Watchtower will never
     # report a Jellyfin update. ADR-0006, ADR-0020.
-    image: lscr.io/linuxserver/jellyfin:12.0ubu2604-ls48
+    image: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls49
     container_name: jellyfin
     environment:
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
@@ -183,7 +183,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: ghcr.io/fredrikburmester/streamystats-job-server:v2.18.1
+    image: ghcr.io/fredrikburmester/streamystats-job-server:v2.20.0
     container_name: streamystats-jobs
     environment:
       - NODE_ENV=production
@@ -211,7 +211,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: ghcr.io/fredrikburmester/streamystats-nextjs:v2.18.1
+    image: ghcr.io/fredrikburmester/streamystats-nextjs:v2.20.0
     container_name: streamystats
     environment:
       - NODE_ENV=production

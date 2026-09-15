@@ -269,7 +269,7 @@ services:
     # INVARIANT: pinned. The omnibus image bundles InfluxDB, and an unattended
     # engine bump under a live TSDB is the failure playlist-generator-db is
     # opted out of for the same reason. ADR-0023.
-    image: ghcr.io/analogj/scrutiny:v0.9.3-omnibus
+    image: ghcr.io/analogj/scrutiny:v0.9.4-omnibus
     container_name: scrutiny
     cap_add:
       # INVARIANT: SYS_ADMIN and nothing else. Measured 2026-09-02, not copied
