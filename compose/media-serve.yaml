@@ -63,6 +63,16 @@ services:
       - '1900:1900/udp'
     networks:
       - nas-network
+    # INVARIANT: an explicit stop_grace_period, because CAP_KILL alone does NOT
+    # give Jellyfin a clean shutdown. With the cap present and no grace period
+    # set, Docker's DEFAULT of 10s applies: measured 2026-09-15, jellyfin logged
+    # `Sending shutdown notifications` at 14:01:06 and was SIGKILLed at 14:01:16
+    # -- exit 137, exactly 10s -- leaving a 6.3MB un-checkpointed WAL on a 1.4GB
+    # jellyfin.db. That is the same dirty-WAL outcome ADR-0021 was written to
+    # prevent, reached by a different route, and it silently staled every backup
+    # that copied the .db alone. CAP_KILL is necessary, not sufficient; the DB
+    # simply needs longer than 10s to close. ADR-0041.
+    stop_grace_period: 120s
     # INVARIANT: memswap_limit == mem_limit, so it cannot balloon into host
     # swap and thrash everything else before finally being killed. Scoped
     # exception to the no-mem_limit policy of ADR-0001; a stopgap containing a

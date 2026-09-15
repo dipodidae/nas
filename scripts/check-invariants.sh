@@ -864,6 +864,70 @@ if _jf:
     elif "ALL" in _drop:
         ok("jellyfin-cap-kill", "jellyfin holds KILL")
 
+# --------------------------------------------------------------------------
+# CAP_KILL is necessary for a clean stop, and it is NOT sufficient
+# --------------------------------------------------------------------------
+# ADR-0035 concluded that granting jellyfin CAP_KILL fixed its dirty-WAL stop.
+# It did not, on its own. With the cap present and no stop_grace_period set,
+# Docker's DEFAULT of 10s still applies, and the shutdown is truncated exactly
+# as before. Measured 2026-09-15 on jellyfin 12.0 with CAP_KILL held:
+#
+#   no stop_grace_period -> 10.5s, exit 137, 6.3MB WAL left on a 1.4GB db
+#   stop_grace_period 120s ->  3.7s, exit 0,  -wal/-shm removed, `Disposing
+#                              CoreAppHost` present in jellyfin's own log
+#
+# The cap lets s6 deliver the signal; the grace period is what lets the process
+# finish acting on it. A store that checkpoints on close needs both, and the
+# failure mode of having only the first is silent: the container reports a
+# normal stop, `make check` passes, and every backup that copies the .db alone
+# is stale. That is the ADR-0021 outcome reached by a different route.
+#
+# Scope: services holding KILL that own a database which must flush on close.
+# swag and playlist-generator hold KILL to retire nginx workers (ADR-0021) and
+# have no such store, so they warn rather than fail. ADR-0041.
+_DOCKER_DEFAULT_STOP = 10
+_STORE_KILL_SERVICES = ("jellyfin", "qbittorrent")
+for _svc in _STORE_KILL_SERVICES:
+    _s = services.get(_svc)
+    if not _s:
+        continue
+    _add = [str(c).upper().removeprefix("CAP_") for c in (_s.get("cap_add") or [])]
+    if "KILL" not in _add:
+        continue        # the per-service cap checks above own that case
+    _raw = _s.get("stop_grace_period")
+    _g = _secs(_raw) if _raw else None
+    if _g is None:
+        fail("cap-kill-needs-grace", "ADR-0041",
+             f"{_svc} holds CAP_KILL but sets no stop_grace_period, so Docker's "
+             f"{_DOCKER_DEFAULT_STOP}s default applies and SIGKILLs it mid-"
+             "shutdown anyway. CAP_KILL only delivers the signal; the grace "
+             "period is what lets the process act on it. Measured on jellyfin "
+             "2026-09-15: 10.5s/exit 137 with a 6.3MB un-checkpointed WAL, "
+             "versus 3.7s/exit 0 with 120s set. A backup copying the .db alone "
+             "is silently stale every time.")
+    elif _g <= _DOCKER_DEFAULT_STOP:
+        fail("cap-kill-needs-grace", "ADR-0041",
+             f"{_svc} sets stop_grace_period={_raw!r} ({_g}s), which is not "
+             f"more than Docker's {_DOCKER_DEFAULT_STOP}s default -- it buys no "
+             "headroom over setting nothing at all. Its store must checkpoint "
+             "on close.")
+    else:
+        ok("cap-kill-needs-grace", f"{_svc} {_g}s > {_DOCKER_DEFAULT_STOP}s default")
+
+for _svc in ("swag", "playlist-generator"):
+    _s = services.get(_svc)
+    if not _s:
+        continue
+    _add = [str(c).upper().removeprefix("CAP_") for c in (_s.get("cap_add") or [])]
+    if "KILL" in _add and not _s.get("stop_grace_period"):
+        warn("cap-kill-needs-grace", "ADR-0041",
+             f"{_svc} holds CAP_KILL for graceful worker retirement but leaves "
+             f"stop_grace_period unset ({_DOCKER_DEFAULT_STOP}s default). nginx "
+             "normally retires workers well inside that, and it owns no store "
+             "that checkpoints on close, so this is a known gap rather than a "
+             "violation -- but a long-draining connection is killed, not waited "
+             "for.")
+
 # ==========================================================================
 # 18. Every swag=enable service has a proxy-conf
 # ==========================================================================
