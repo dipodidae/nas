@@ -305,6 +305,45 @@ python scripts/permissions_auditor.py --fix --dry-run # show planned changes
 
 Environment: `PUID`, `PGID`, `CONFIG_DIRECTORY`, optional `SHARE_DIRECTORY` (use `--include-share`).
 
+### `stack_update.py`
+
+Runs the `nas-service-upgrades` workflow end to end: resolve what is behind,
+back the store up and **prove** the backup, apply one service at a time, wait
+for healthy, then run `make check` / `make lint` / `make verify-runtime`.
+
+It **applies by default**; `--dry-run` prints the plan and touches nothing, and
+`--check` reports what is behind and exits 1. On a failed verification it
+**halts** rather than continuing, publishes to `nas-critical`, and leaves the
+service running — it never rolls a tag back, because reverting into a store
+that already migrated one way is what made an incident worse on 2026-09-10.
+
+Three guards it exists for, each a real failure:
+
+- It does its **own** registry tag lookup rather than trusting `diun`, which
+  reported `qbittorrent:…-ls475` as newest for two days after `ls476` shipped.
+  Tags are ranked by every numeric run in them (`ls476 > ls475`, `2.20.0 >
+  2.9.0`) — neither a semver parser nor a string sort gets both right.
+- A **failed registry lookup is reported as UNKNOWN**, never as "up to date".
+- A SQLite service is **stopped** before it is copied and the `-wal`/`-shm`
+  files are asserted gone, because `docker compose stop` returns 0 on a
+  SIGKILL and a live copy of a WAL database reads back stale (ADR-0041).
+  A Postgres service is never tarred — PGDATA is `drwx------ 999:tom`, so a
+  host-side tar "succeeds" at 4.0K; it needs a `pg_dump`, run by hand.
+
+```
+python scripts/stack_update.py                     # check, apply, verify
+python scripts/stack_update.py --check             # what is behind? exit 1 if any
+python scripts/stack_update.py --dry-run           # print the plan only
+python scripts/stack_update.py --service jellyfin  # one service (repeatable)
+python scripts/stack_update.py --kind drift        # only floating-tag services
+make stack-check / make stack-update               # the same two, wrapped
+```
+
+Exit codes: 0 applied and verified, 1 partial (something skipped or behind),
+2 fatal (a verification failed, a backup could not be proved, or the compose
+model is unreadable). A failure is 2 and not 1 deliberately — `cron_job.py`
+treats 0 and 1 alike, so a partial exit cannot alert.
+
 ### `post_update_verifier.py`
 
 Verifies that core services are healthy after updates (e.g. Watchtower run). Checks Docker container state & HTTP endpoints.

@@ -178,6 +178,17 @@ pull: ## Pull newer images for every service that is not locally built
 # ------------------------------------------------- deliberate single-service
 # updates. Both of these are Watchtower-opt-out on purpose (ADR-0006).
 
+stack-check: ## What is behind? Reports only; exit 1 means updates ARE available
+	@. .venv/bin/activate; \
+	  rc=0; python scripts/stack_update.py --check || rc=$$?; \
+	  if [ $$rc -eq 1 ]; then \
+	    echo "(exit 1 == updates available, not a failure. \`make stack-update\` applies them.)"; \
+	  fi; \
+	  exit $$rc
+
+stack-update: ## Apply every available update: back up, apply, verify, halt on failure
+	@. .venv/bin/activate && python scripts/stack_update.py
+
 pull-jellyfin: ## Deliberately update Jellyfin, then wait for healthy
 	@docker compose pull jellyfin
 	@docker compose up -d jellyfin
