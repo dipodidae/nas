@@ -29,7 +29,7 @@ services:
     extends:
       file: ../../compose/_fragments.yaml
       service: svc-base
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg18
     container_name: playlist-generator-db
     # Measured 2026-09-02, not guessed: pid 1 already runs with
     # CapEff 0000000000000000 because the entrypoint gosu's down to uid 999, so
@@ -40,7 +40,9 @@ services:
     # `drwx------ 999 1000`, the entrypoint walks it with `find` as root, and
     # root's ability to ignore file modes IS CAP_DAC_OVERRIDE -- cap_drop: ALL
     # takes it away, and the container then loops on
-    # "find: '/var/lib/postgresql/data': Permission denied" and never starts.
+    # "find: '/var/lib/postgresql': Permission denied" and never starts. (That
+    # path was .../data before the pg18 layout change; the capability reason is
+    # unchanged.)
     # No KILL: postgres's postmaster and its backends all run as the SAME uid
     # (999), so signalling them crosses no uid boundary -- unlike nginx
     # (ADR-0021). Verified by listing every postgres pid's uid. ADR-0018.
@@ -57,7 +59,14 @@ services:
       - POSTGRES_PASSWORD=${PLAYLIST_GENERATOR_DB_PASSWORD}
       - POSTGRES_DB=playlist_generator
     volumes:
-      - ${CONFIG_DIRECTORY}/playlist-generator-db:/var/lib/postgresql/data
+      # INVARIANT: the mount is the PARENT, not .../data. Postgres 18's images
+      # keep the cluster under a major-versioned subdirectory
+      # (/var/lib/postgresql/18/docker) so `pg_upgrade --link` never crosses a
+      # mount boundary, and they REFUSE TO START with anything mounted at the
+      # old /var/lib/postgresql/data -- empty or not. docker-library/postgres
+      # #1259. Moved automatically by scripts/stack_update.py during the
+      # pg16 -> pg18 cut-over on 2026-09-15. ADR-0042.
+      - ${CONFIG_DIRECTORY}/playlist-generator-db:/var/lib/postgresql
     networks:
       - nas-network
     healthcheck:

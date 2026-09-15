@@ -375,3 +375,193 @@ def test_repo_of_round_trips_with_tag_of():
     tag = su.tag_of(image)
     rebuilt = su.repo_of(image) + (f":{tag}" if tag else "")
     assert rebuilt == image
+
+
+# ---------------------------------------------------------------------------
+# Postgres — credentials come from the model, and a major is not a restart
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+  "tag,major",
+  [("pg16", 16), ("pg17-v0.4.1", 17), ("pg18-v1.1.1", 18), ("18", 18),
+   ("18-alpine", 18), ("v2.20.0", None), ("latest", None), ("", None)],
+)
+def test_pg_major_parsing(tag, major):
+  assert su.pg_major(tag) == major
+
+
+def test_a_major_change_is_detected():
+  """pg16 -> pg18 needs dump+restore: the new binary refuses the old PGDATA."""
+  assert su.is_pg_major_change("pg16", "pg18-v1.1.1") is True
+  assert su.is_pg_major_change("pg17-v0.4.1", "pg18-v1.1.1") is True
+
+
+def test_a_point_release_on_the_same_major_is_not():
+  """Same major, new extension build — a plain restart, no cut-over."""
+  assert su.is_pg_major_change("pg17-v0.4.1", "pg17-v1.1.1") is False
+
+
+def test_a_non_postgres_tag_pair_is_never_a_major_change():
+  assert su.is_pg_major_change("v2.18.1", "v2.20.0") is False
+  assert su.is_pg_major_change("latest", "latest") is False
+
+
+def test_credentials_come_from_the_resolved_model():
+  """`docker compose config` substitutes .env, so refusing to read them and
+  demanding they be passed in was a missing feature, not a safety measure."""
+  svc = {"environment": {"POSTGRES_USER": "streamystats",
+                         "POSTGRES_PASSWORD": "s3cret",
+                         "POSTGRES_DB": "streamystats"}}
+  assert su.pg_env(svc) == ("streamystats", "s3cret", "streamystats")
+
+
+def test_list_form_environment_is_handled():
+  svc = {"environment": ["POSTGRES_USER=u", "POSTGRES_PASSWORD=p", "TZ=UTC"]}
+  user, pw, db = su.pg_env(svc)
+  assert (user, pw) == ("u", "p")
+  assert db == "u"  # POSTGRES_DB defaults to the user, as Postgres itself does
+
+
+def test_missing_environment_falls_back_to_postgres_defaults():
+  assert su.pg_env({}) == ("postgres", "", "postgres")
+
+
+def test_pgdata_is_read_from_the_bind_mount_not_a_convention():
+  svc = {"volumes": [
+    {"type": "bind", "source": "/etc/localtime", "target": "/etc/localtime"},
+    {"type": "bind", "source": "/c/streamystats-db",
+     "target": "/var/lib/postgresql/data"},
+  ]}
+  assert su.pgdata_path(svc) == Path("/c/streamystats-db")
+
+
+def test_no_pgdata_mount_is_reported_rather_than_guessed():
+  assert su.pgdata_path({"volumes": []}) is None
+  assert su.pgdata_path({}) is None
+
+
+# ---------------------------------------------------------------------------
+# bump_image_line — the step whose absence made every pinned bump a no-op
+# ---------------------------------------------------------------------------
+
+
+COMPOSE = """  streamystats-db:
+    # NOTE: pinned, see tensorchord/vchord-postgres:pg17-v0.4.1 upstream
+    image: tensorchord/vchord-postgres:pg17-v0.4.1
+    container_name: streamystats-db
+"""
+
+
+def test_the_image_line_is_rewritten():
+  out, n = su.bump_image_line(
+    COMPOSE, "tensorchord/vchord-postgres:pg17-v0.4.1",
+    "tensorchord/vchord-postgres:pg18-v1.1.1")
+  assert n == 1
+  assert "image: tensorchord/vchord-postgres:pg18-v1.1.1" in out
+
+
+def test_a_mention_in_a_comment_is_left_alone():
+  """A bare substring replace would rewrite prose and the diun manifest."""
+  out, _ = su.bump_image_line(
+    COMPOSE, "tensorchord/vchord-postgres:pg17-v0.4.1",
+    "tensorchord/vchord-postgres:pg18-v1.1.1")
+  assert "# NOTE: pinned, see tensorchord/vchord-postgres:pg17-v0.4.1 upstream" in out
+
+
+def test_indentation_is_preserved():
+  out, _ = su.bump_image_line(COMPOSE, "tensorchord/vchord-postgres:pg17-v0.4.1",
+                              "tensorchord/vchord-postgres:pg18-v1.1.1")
+  assert "\n    image: tensorchord/vchord-postgres:pg18-v1.1.1\n" in out
+
+
+def test_no_match_reports_zero_rather_than_silently_succeeding():
+  """0 hits must be a refusal: the pull would be real and the recreate a no-op."""
+  _, n = su.bump_image_line(COMPOSE, "lscr.io/linuxserver/sonarr:latest", "x:1")
+  assert n == 0
+
+
+def test_two_services_sharing_an_image_are_counted():
+  """beszel/beszel-agent shape: the caller refuses rather than moving both."""
+  text = "    image: a/b:1\n    image: a/b:1\n"
+  _, n = su.bump_image_line(text, "a/b:1", "a/b:2")
+  assert n == 2
+
+
+def test_a_tag_that_is_a_prefix_of_another_does_not_match_it():
+  text = "    image: a/b:1.2\n    image: a/b:1.20\n"
+  out, n = su.bump_image_line(text, "a/b:1.2", "a/b:9")
+  assert n == 1
+  assert "image: a/b:1.20" in out
+
+
+# ---------------------------------------------------------------------------
+# Postgres 18 moved the data layout — a tag bump alone crash-loops
+# ---------------------------------------------------------------------------
+
+
+def test_pg18_needs_the_mount_moved_to_the_parent():
+  """Measured: pg18 crash-looped with the tag bumped and the mount untouched."""
+  assert su.needs_parent_mount(18, "/var/lib/postgresql/data") is True
+  assert su.needs_parent_mount(19, "/var/lib/postgresql/data") is True
+
+
+def test_pg17_does_not():
+  assert su.needs_parent_mount(17, "/var/lib/postgresql/data") is False
+  assert su.needs_parent_mount(16, "/var/lib/postgresql/data") is False
+
+
+def test_an_already_moved_mount_is_not_moved_again():
+  assert su.needs_parent_mount(18, "/var/lib/postgresql") is False
+
+
+def test_an_unparseable_major_does_not_trigger_a_mount_change():
+  assert su.needs_parent_mount(None, "/var/lib/postgresql/data") is False
+
+
+VOLUMES = """    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${CONFIG_DIRECTORY}/streamystats-db:/var/lib/postgresql/data
+"""
+
+
+def test_the_mount_line_is_rewritten_in_raw_compose_text():
+  """The source is still `${CONFIG_DIRECTORY}/...` in the file; only the model
+  has it resolved, so the rewrite must match the unexpanded form."""
+  out, n = su.rewrite_pgdata_mount(VOLUMES, "streamystats-db")
+  assert n == 1
+  assert "${CONFIG_DIRECTORY}/streamystats-db:/var/lib/postgresql\n" in out
+  assert "/var/lib/postgresql/data" not in out
+
+
+def test_other_mounts_are_untouched():
+  out, _ = su.rewrite_pgdata_mount(VOLUMES, "streamystats-db")
+  assert "- /etc/localtime:/etc/localtime:ro" in out
+
+
+def test_a_different_service_does_not_match():
+  _, n = su.rewrite_pgdata_mount(VOLUMES, "playlist-generator-db")
+  assert n == 0
+
+
+def test_pgdata_path_accepts_both_layouts():
+  legacy = {"volumes": [{"type": "bind", "source": "/c/db",
+                         "target": "/var/lib/postgresql/data"}]}
+  parent = {"volumes": [{"type": "bind", "source": "/c/db",
+                         "target": "/var/lib/postgresql"}]}
+  assert su.pgdata_path(legacy) == Path("/c/db")
+  assert su.pgdata_path(parent) == Path("/c/db")
+
+
+def test_a_match_on_the_final_line_keeps_its_newline():
+  """`\\s*$` is greedy across newlines: it eats the terminator on a last-line
+  match and welds the rewritten line to whatever comes next."""
+  text = "    volumes:\n      - ${C}/db:/var/lib/postgresql/data\n"
+  out, n = su.rewrite_pgdata_mount(text, "db")
+  assert n == 1
+  assert out.endswith(":/var/lib/postgresql\n")
+
+  img = "    image: a/b:1\n"
+  out2, n2 = su.bump_image_line(img, "a/b:1", "a/b:2")
+  assert n2 == 1
+  assert out2 == "    image: a/b:2\n"

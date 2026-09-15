@@ -152,7 +152,7 @@ services:
       service: svc-hardened-tz
     # INVARIANT: pinned, and updated only by hand. This is a database engine
     # with live data under it -- the same rule as playlist-generator-db.
-    image: tensorchord/vchord-postgres:pg17-v0.4.1
+    image: tensorchord/vchord-postgres:pg18-v1.1.1
     container_name: streamystats-db
     cap_add:
       # Postgres' entrypoint runs as root to initdb and chown PGDATA, then drops
@@ -169,7 +169,15 @@ services:
       - POSTGRES_DB=streamystats
       - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
     volumes:
-      - ${CONFIG_DIRECTORY}/streamystats-db:/var/lib/postgresql/data
+      # INVARIANT: the mount is the PARENT, not .../data. Postgres 18's official
+      # images store the cluster under a major-versioned subdirectory
+      # (/var/lib/postgresql/18/docker) so that `pg_upgrade --link` can work
+      # across majors without crossing a mount boundary, and they REFUSE TO
+      # START when anything is mounted at the old /var/lib/postgresql/data --
+      # empty or not. Measured 2026-09-15: pg18 crash-looped on `Error: in 18+,
+      # these Docker images are configured to store database data in a format
+      # which is compatible with pg_ctlcluster`. docker-library/postgres#1259.
+      - ${CONFIG_DIRECTORY}/streamystats-db:/var/lib/postgresql
     networks:
       - nas-network
     healthcheck:

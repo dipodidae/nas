@@ -328,7 +328,15 @@ Three guards it exists for, each a real failure:
   files are asserted gone, because `docker compose stop` returns 0 on a
   SIGKILL and a live copy of a WAL database reads back stale (ADR-0041).
   A Postgres service is never tarred — PGDATA is `drwx------ 999:tom`, so a
-  host-side tar "succeeds" at 4.0K; it needs a `pg_dump`, run by hand.
+  host-side tar "succeeds" at 4.0K. It is `pg_dump`ed instead, with the newer
+  client, and the dump is proved with `pg_restore -l` before anything moves.
+- A **Postgres major** is a full cut-over, not a restart: the new binary
+  refuses a `PGDATA` whose `PG_VERSION` differs. Dump → stop dependants →
+  **rename** PGDATA aside (never delete; that rename is the whole rollback) →
+  move the bind mount to `/var/lib/postgresql` for pg18+, whose images hard-
+  error on the old `/data` path → initdb → restore **before** dependants come
+  back (`playlist-generator` writes its schema on startup) → verify the table
+  count. Any failure halts and prints the exact revert command.
 
 ```
 python scripts/stack_update.py                     # check, apply, verify

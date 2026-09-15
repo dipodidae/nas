@@ -16,13 +16,23 @@ guard in here now:
   covering something is the ADR-0024 failure shape, so this script does its
   own tag check (`rank_key`) and never trusts diun as the source of truth.
 * **A green healthcheck is not a working service.** Every failure in
-  ADR-0035, ADR-0036 and ADR-0039 was invisible to health. So `--verify`
-  probes by effect, and a service with a known silent-failure mode carries
-  an explicit probe rather than a port check.
+  ADR-0035, ADR-0036 and ADR-0039 was invisible to health, so nothing here
+  is judged by health alone: after `up -d` it asks the CONTAINER what tag it
+  is running, and a Postgres server what version it is. That check caught
+  this script's own worst bug -- it pulled the target image but never edited
+  the pinned tag in the compose file, so `up -d` recreated from the OLD tag
+  and it reported "applied" while changing nothing.
 * **CAP_KILL is not a clean stop (ADR-0041).** Jellyfin's WAL was still
   dirty after a "successful" stop, which silently staled every backup that
-  copied the `.db` alone. `backup_service` stops first and *asserts* the
+  copied the `.db` alone. `sqlite_backup` stops first and *asserts* the
   `-wal`/`-shm` files are gone before it calls the copy good.
+
+Postgres majors are handled in full: dump with the newer client, prove the
+dump, stop dependants, rename PGDATA aside (never delete -- that rename is
+what makes it revertible), move the bind mount up for pg18+, initdb, restore
+before dependants return, and verify. Credentials come from the resolved
+compose model; an earlier version refused the whole operation for want of
+credentials that were sitting in the model all along.
 
 Posture
 -------
@@ -58,6 +68,8 @@ Usage
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -134,6 +146,25 @@ STORES: dict[str, Store] = {
 # turning a protected-routes outage into a total one (ADR-0036).
 ONE_WAY = frozenset({"jellyfin", "tinyauth", "streamystats-db",
                      "playlist-generator-db"})
+
+# Postgres 18 moved where the official images keep the cluster: under a
+# major-versioned subdirectory (/var/lib/postgresql/18/docker) so that
+# `pg_upgrade --link` never crosses a mount boundary. The images REFUSE TO
+# START when anything is mounted at the old /var/lib/postgresql/data -- empty
+# or not. So a pg17 -> pg18 bump is a compose *volume* change as well as a tag
+# change. docker-library/postgres#1259; measured here 2026-09-15, where pg18
+# crash-looped for 15 minutes with the tag bumped and the mount untouched.
+PG_PARENT_MOUNT_MAJOR = 18
+PGDATA_LEGACY_TARGET = "/var/lib/postgresql/data"
+PGDATA_PARENT_TARGET = "/var/lib/postgresql"
+
+# Host cron jobs that write a service's store while an upgrade is in flight.
+# Holding the job's own flock is better than editing the crontab: the jobs skip
+# cleanly instead of failing and alerting, and there is nothing to forget to
+# restore afterwards.
+CRON_LOCKS: dict[str, str] = {
+  "playlist-generator-db": "/tmp/nas-playlist-stage.lock",
+}
 
 # Services whose failure takes others with them. Used to order the plan and to
 # widen the blast radius reported in the plan output.
@@ -297,6 +328,95 @@ def wal_is_clean(paths: list[str]) -> bool:
   backup copying the `.db` alone is stale -- silently, every time.
   """
   return not any(p.endswith(("-wal", "-shm")) for p in paths)
+
+
+def needs_parent_mount(target_major: int | None, mount_target: str) -> bool:
+  """True when moving to this major also requires moving the bind mount up.
+
+  Postgres >= 18's images hard-error on a mount at `/var/lib/postgresql/data`,
+  so this is not a tidiness question: without the volume change the new major
+  never starts, and the only symptom is a restart loop with a green plan.
+  """
+  return (target_major is not None
+          and target_major >= PG_PARENT_MOUNT_MAJOR
+          and mount_target == PGDATA_LEGACY_TARGET)
+
+
+def rewrite_pgdata_mount(text: str, service: str) -> tuple[str, int]:
+  """Point `<anything>/<service>:/var/lib/postgresql/data` at the parent.
+
+  Matches the RAW compose text, where the source is still `${CONFIG_DIRECTORY}
+  /<service>` -- the resolved path only exists in the model.
+  """
+  pattern = re.compile(
+    rf"^(\s*-\s*)(\S*{re.escape(service)}):{re.escape(PGDATA_LEGACY_TARGET)}[ \t]*$",
+    re.M,
+  )
+  return pattern.subn(
+    lambda m: f"{m.group(1)}{m.group(2)}:{PGDATA_PARENT_TARGET}", text
+  )
+
+
+def bump_image_line(text: str, old_image: str, new_image: str) -> tuple[str, int]:
+  """Replace an exact `image: <old>` line, returning the text and hit count.
+
+  Anchored on the `image:` key rather than a bare substring: the same image
+  string appears in comments and in the diun manifest, and a loose replace
+  would rewrite prose. Returns the count so the caller can refuse on 0 (the
+  tag is not where we thought) or on >1 (two services share an image and this
+  would move both).
+  """
+  # `[ \t]*$`, never `\s*$`: \s crosses newlines, so a match on the file's
+  # last line swallows its terminator and welds it to the next line.
+  pattern = re.compile(rf"^(\s*image:\s*){re.escape(old_image)}[ \t]*$", re.M)
+  new, n = pattern.subn(lambda m: f"{m.group(1)}{new_image}", text)
+  return new, n
+
+
+def pg_env(svc: dict) -> tuple[str, str, str]:
+  """(user, password, db) from a Postgres service's resolved environment.
+
+  `docker compose config` substitutes `.env`, so the credentials are already
+  here -- there is never a reason to ask an operator for them, and an earlier
+  version of this script refused a Postgres backup for exactly that made-up
+  reason. A refusal that had a readable answer sitting in the model is just a
+  missing feature wearing a safety label.
+  """
+  env = svc.get("environment") or {}
+  if isinstance(env, list):
+    env = dict(x.split("=", 1) for x in env if "=" in x)
+  user = env.get("POSTGRES_USER") or "postgres"
+  return user, env.get("POSTGRES_PASSWORD") or "", env.get("POSTGRES_DB") or user
+
+
+def pgdata_path(svc: dict) -> Path | None:
+  """The host path bound at PGDATA, from the model rather than a convention."""
+  for v in svc.get("volumes") or []:
+    if isinstance(v, dict) and v.get("target") in (PGDATA_LEGACY_TARGET,
+                                                   PGDATA_PARENT_TARGET):
+      src = v.get("source")
+      return Path(src) if src else None
+  return None
+
+
+def pg_major(tag: str) -> int | None:
+  """The Postgres major in a tag: `pg16`, `pg17-v0.4.1`, `18-alpine` -> 16/17/18."""
+  m = re.search(r"(?:^|[^a-z0-9])pg(\d+)", tag, re.I)
+  if m:
+    return int(m.group(1))
+  m = re.match(r"^(\d+)(?:[.\-].*)?$", tag)
+  return int(m.group(1)) if m else None
+
+
+def is_pg_major_change(current: str, target: str) -> bool:
+  """True when the cluster must be dumped and restored, not just restarted.
+
+  Postgres refuses to start against a PGDATA whose `PG_VERSION` does not match
+  the binary, so this is the one upgrade in the stack where moving the tag
+  alone leaves a service that cannot come up at all.
+  """
+  a, b = pg_major(current), pg_major(target)
+  return a is not None and b is not None and a != b
 
 
 @dataclass(frozen=True)
@@ -522,6 +642,7 @@ def wait_healthy(service: str, timeout: int = HEALTH_TIMEOUT_S) -> tuple[bool, s
   """
   deadline = time.time() + timeout
   last = "unknown"
+  restarts = 0
   while time.time() < deadline:
     p = run(["docker", "compose", "ps", "--format", "json", service], timeout=60)
     rows = [json.loads(ln) for ln in p.stdout.splitlines() if ln.strip()]
@@ -535,6 +656,13 @@ def wait_healthy(service: str, timeout: int = HEALTH_TIMEOUT_S) -> tuple[bool, s
         return True, f"{last} (running; no healthcheck to prove more)"
       if health == "unhealthy":
         return False, last
+      # A restart loop will never become healthy; waiting the full timeout
+      # just delays the diagnosis. pg18 crash-looped for 15 minutes here
+      # before this check existed.
+      if state.lower() == "restarting":
+        restarts += 1
+        if restarts >= 3:
+          return False, f"{last} -- restart loop, not a slow start"
     time.sleep(HEALTH_POLL_S)
   return False, f"timeout after {timeout}s (last: {last})"
 
@@ -569,37 +697,271 @@ def sqlite_backup(service: str, config_dir: Path, dest: Path) -> tuple[bool, str
   return True, f"{service} stopped cleanly (exit {exit_code}), WAL checkpointed"
 
 
-def postgres_backup(service: str, image: str, user: str, db: str,
-                    password: str, dest: Path) -> tuple[bool, str]:
+def postgres_backup(service: str, client_image: str, user: str, db: str,
+                    password: str, dest: Path) -> tuple[bool, str, Path | None]:
   """pg_dump into `dest`, then prove it by reading it back.
 
-  A filesystem tar of PGDATA is not a substitute and is not merely worse: it
-  is empty. PGDATA is `drwx------ 999:tom`, so the host user reads nothing and
-  the tar "succeeds" at 4.0K.
+  `client_image` must be the NEWER of the two servers -- pg_dump refuses a
+  server newer than itself, and dumping an old server with a new client is the
+  supported direction. A filesystem tar is never a substitute here and is not
+  merely worse: PGDATA is `drwx------ 999:tom`, so a host-side tar "succeeds"
+  at 4.0K against gigabytes.
   """
   dest.mkdir(parents=True, exist_ok=True)
-  out = f"{service}.dump"
+  out = dest / f"{service}.dump"
   p = run(
     ["docker", "run", "--rm", "--network", "nas-network",
-     "-e", f"PGPASSWORD={password}", "-v", f"{dest}:/out", image,
-     "pg_dump", "-h", service, "-U", user, "-d", db, "-Fc", "-f", f"/out/{out}"],
-    timeout=3600,
+     "-e", f"PGPASSWORD={password}", "-v", f"{dest}:/out", client_image,
+     "pg_dump", "-h", service, "-U", user, "-d", db, "-Fc", "-f", f"/out/{out.name}"],
+    timeout=7200,
   )
   if p.returncode != 0:
-    return False, f"pg_dump failed: {p.stderr.strip()[:300]}"
+    return False, f"pg_dump failed: {p.stderr.strip()[:300]}", None
   # Prove it by listing it. An exit code says the command ran, not that the
-  # archive holds anything.
-  q = run(
-    ["docker", "run", "--rm", "-v", f"{dest}:/out", image,
-     "pg_restore", "-l", f"/out/{out}"],
-    timeout=600,
-  )
-  objects = [ln for ln in q.stdout.splitlines()
-             if "TABLE DATA" in ln or "EXTENSION" in ln]
-  if q.returncode != 0 or not objects:
-    return False, f"dump is unreadable or empty ({len(objects)} objects)"
-  size = (dest / out).stat().st_size if (dest / out).exists() else 0
-  return True, f"{out} {size // 1024 // 1024}MB, {len(objects)} objects verified"
+  # archive holds anything -- and an empty archive is the failure that looks
+  # most like a success.
+  toc = pg_restore_list(client_image, dest, out.name)
+  if not toc:
+    return False, "dump is unreadable or holds no tables/extensions", None
+  size_mb = out.stat().st_size // 1024 // 1024 if out.exists() else 0
+  return True, f"{out.name} {size_mb}MB, {len(toc)} objects verified", out
+
+
+def pg_restore_list(client_image: str, dest: Path, name: str) -> list[str]:
+  """The dump's table-of-contents entries that carry data or extensions."""
+  q = run(["docker", "run", "--rm", "-v", f"{dest}:/out", client_image,
+           "pg_restore", "-l", f"/out/{name}"], timeout=900)
+  if q.returncode != 0:
+    return []
+  return [ln for ln in q.stdout.splitlines()
+          if "TABLE DATA" in ln or "EXTENSION" in ln]
+
+
+def pg_table_count(service: str, user: str, db: str, password: str) -> int | None:
+  """User tables in the live database. The restore's proof-by-effect."""
+  q = run(["docker", "exec", "-e", f"PGPASSWORD={password}", service,
+           "psql", "-U", user, "-d", db, "-tAc",
+           "select count(*) from information_schema.tables "
+           "where table_schema not in ('pg_catalog','information_schema')"],
+          timeout=300)
+  if q.returncode != 0:
+    return None
+  try:
+    return int(q.stdout.strip())
+  except ValueError:
+    return None
+
+
+def postgres_major_upgrade(service: str, svc: dict, target_image: str,
+                           dest: Path) -> tuple[bool, str]:
+  """Dump, cut PGDATA aside, initdb on the new major, restore, verify.
+
+  Postgres refuses to start against a PGDATA whose `PG_VERSION` does not match
+  the binary, so this is the one upgrade here where moving the tag alone leaves
+  a service that cannot come up at all. The sequence is load-bearing:
+
+  * the dump is taken while the OLD server is still running, with the NEW
+    client, and is proved before anything is touched;
+  * dependants stop FIRST -- `playlist-generator` initialises its schema on
+    startup, so a dependant that reaches the new empty cluster before the
+    restore lands you in `relation already exists` halfway through;
+  * PGDATA is **renamed**, never deleted. A same-filesystem `mv` on a
+    tom-owned parent needs no sudo and is what makes this revertible at all;
+  * the restore runs before dependants come back.
+
+  On any failure it stops and names the exact revert, because the old cluster
+  is still sitting there intact under its timestamped name.
+  """
+  user, password, db = pg_env(svc)
+  pgdata = pgdata_path(svc)
+  if pgdata is None:
+    return False, "no PGDATA bind mount found in the compose model"
+  if not password:
+    return False, "POSTGRES_PASSWORD is empty in the resolved model"
+
+  deps = [d for d in DEPENDANTS.get(service, ()) if " " not in d]
+
+  print(f"    [1/7] dump with the new client ({tag_of(target_image)})")
+  ok, why, dump = postgres_backup(service, target_image, user, db, password, dest)
+  print(f"          {why}")
+  if not ok or dump is None:
+    return False, f"refusing to touch PGDATA without a proven dump: {why}"
+  before = pg_table_count(service, user, db, password)
+  print(f"          live table count before: {before}")
+
+  print(f"    [2/7] stop dependants first: {', '.join(deps) or '(none)'}")
+  for d in deps:
+    run(["docker", "compose", "stop", d], timeout=600)
+  run(["docker", "compose", "stop", service], timeout=900)
+
+  aside = pgdata.with_name(f"{pgdata.name}.pre-pg{pg_major(tag_of(target_image))}-"
+                           f"{time.strftime('%Y%m%d-%H%M%S')}")
+  print(f"    [3/7] rename PGDATA aside -> {aside.name}")
+  mv = run(["mv", str(pgdata), str(aside)], timeout=600)
+  if mv.returncode != 0:
+    for d in [service, *deps]:
+      run(["docker", "compose", "up", "-d", d], timeout=600)
+    return False, f"could not rename PGDATA: {mv.stderr.strip()[:200]} (nothing changed)"
+
+  revert = (f"docker compose stop {service}; rm -rf {pgdata}; "
+            f"mv {aside} {pgdata}; git checkout -- compose/ && docker compose up -d {service}")
+
+  want_major = pg_major(tag_of(target_image))
+  mount_target = next((v.get("target") for v in (svc.get("volumes") or [])
+                       if isinstance(v, dict)
+                       and v.get("target") in (PGDATA_LEGACY_TARGET,
+                                               PGDATA_PARENT_TARGET)), "")
+  if needs_parent_mount(want_major, str(mount_target)):
+    moved, mwhy = move_pgdata_mount(service)
+    print(f"    [3b/7] pg{want_major} layout change -- "
+          f"{'ok' if moved else 'FAILED'}: {mwhy}")
+    if not moved:
+      return False, (f"pg{want_major} needs the mount at {PGDATA_PARENT_TARGET} "
+                     f"and it could not be moved: {mwhy}. REVERT: {revert}")
+
+  print("    [4/7] start the new major (initdb makes a fresh cluster)")
+  up = run(["docker", "compose", "up", "-d", "--force-recreate", service], timeout=1800)
+  if up.returncode != 0:
+    return False, f"new major would not start: {up.stderr.strip()[:200]}. REVERT: {revert}"
+  healthy, how = wait_healthy(service)
+  print(f"          health: {how}")
+  if not healthy:
+    return False, f"new major did not become healthy: {how}. REVERT: {revert}"
+
+  # Ask the SERVER what it is, before pouring data into it. A healthy
+  # container on the old major would happily accept the restore and leave the
+  # upgrade silently un-done -- which is exactly what happened on the first
+  # run of this, when the compose tag had not been edited.
+  want = pg_major(tag_of(target_image))
+  live_v = run(["docker", "exec", "-e", f"PGPASSWORD={password}", service,
+                "psql", "-U", user, "-d", "postgres", "-tAc", "show server_version"],
+               timeout=300).stdout.strip()
+  live_major = pg_major(live_v.split(".")[0]) if live_v else None
+  print(f"          server_version: {live_v or '(unreadable)'}")
+  if live_major != want:
+    return False, (f"started on Postgres {live_major}, expected {want} -- the "
+                   f"recreate did not take the new tag. REVERT: {revert}")
+
+  print("    [5/7] restore into the empty cluster (before dependants start)")
+  rs = run(["docker", "run", "--rm", "--network", "nas-network",
+            "-e", f"PGPASSWORD={password}", "-v", f"{dest}:/out", target_image,
+            "pg_restore", "-h", service, "-U", user, "-d", db,
+            "--no-owner", "--no-privileges", f"/out/{dump.name}"],
+           timeout=7200)
+  # pg_restore exits non-zero on benign notices (an extension already present
+  # from the template, for one), so the exit code is not the verdict here --
+  # the row it produced is.
+  after = pg_table_count(service, user, db, password)
+  print(f"    [6/7] verify: {before} tables before -> {after} after "
+        f"(pg_restore exit {rs.returncode})")
+  if after is None or after == 0:
+    return False, (f"restore produced {after} tables. REVERT: {revert}")
+  if before is not None and after < before:
+    return False, (f"restore is INCOMPLETE: {after} tables vs {before} before. "
+                   f"REVERT: {revert}")
+
+  print(f"    [7/7] start dependants: {', '.join(deps) or '(none)'}")
+  for d in deps:
+    run(["docker", "compose", "up", "-d", d], timeout=1800)
+    dh, dhow = wait_healthy(d)
+    print(f"          {d}: {dhow}")
+    if not dh:
+      return False, f"{d} did not come back after the restore. REVERT: {revert}"
+
+  return True, (f"pg{pg_major(tag_of(target_image))} live, {after} tables restored; "
+                f"old cluster kept at {aside.name} (delete it once you are happy)")
+
+
+@contextlib.contextmanager
+def cron_lock(path: str | None, timeout: int = 120):
+  """Hold a host cron job's flock for the window, or yield False if busy.
+
+  Non-blocking with a bounded wait: if a scheduled job is mid-write we would
+  rather skip this service than cut its database out from under it.
+  """
+  if not path:
+    yield None
+    return
+  fh = open(path, "a+")  # noqa: SIM115 -- released in the finally below
+  deadline = time.time() + timeout
+  try:
+    while True:
+      try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+      except OSError:
+        if time.time() >= deadline:
+          yield False
+          return
+        time.sleep(5)
+    yield True
+  finally:
+    try:
+      fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+      fh.close()
+
+
+def compose_files() -> list[Path]:
+  """Every tracked compose file that can declare an image."""
+  return sorted([*REPO.glob("compose/*.yaml"), *REPO.glob("webapps/*/compose.yaml"),
+                 *REPO.glob("compose.yaml")])
+
+
+def bump_tag(old_image: str, new_image: str) -> tuple[bool, str]:
+  """Edit the pinned tag in whichever compose file declares it.
+
+  This is the step whose absence made every pinned bump a silent no-op: the
+  script pulled the target image, ran `up -d`, and compose recreated the
+  container from the tag still written in the file. It reported "applied" and
+  changed nothing -- measured 2026-09-15 against streamystats-db, which came
+  back on pg17 after a "successful" pg18 upgrade.
+
+  The diun manifest is regenerated in the same breath, because `make check`
+  asserts it matches the compose model (ADR-0024).
+  """
+  hits: list[Path] = []
+  for f in compose_files():
+    text = f.read_text()
+    new, n = bump_image_line(text, old_image, new_image)
+    if n:
+      hits.append(f)
+      if n > 1:
+        return False, f"{old_image} appears {n} times in {f.name}; refusing to guess"
+      f.write_text(new)
+  if not hits:
+    return False, f"no compose file declares `image: {old_image}`"
+  if len(hits) > 1:
+    return False, f"{old_image} declared in {len(hits)} files: {[h.name for h in hits]}"
+  m = run(["make", "diun-manifest"], timeout=600)
+  if m.returncode != 0:
+    return False, f"tag bumped in {hits[0].name} but `make diun-manifest` failed"
+  return True, f"{hits[0].name} + diun/manifest.yml"
+
+
+def move_pgdata_mount(service: str) -> tuple[bool, str]:
+  """Rewrite the service's PGDATA bind mount to the pg18+ parent layout."""
+  hits = []
+  for f in compose_files():
+    text = f.read_text()
+    new, n = rewrite_pgdata_mount(text, service)
+    if n == 1:
+      f.write_text(new)
+      hits.append(f)
+    elif n > 1:
+      return False, f"{service} has {n} legacy PGDATA mounts in {f.name}"
+  if not hits:
+    return False, f"no `<src>/{service}:{PGDATA_LEGACY_TARGET}` line found"
+  return True, f"{hits[0].name}: mount moved to {PGDATA_PARENT_TARGET}"
+
+
+def running_tag(service: str) -> str | None:
+  """The tag the container is ACTUALLY running, from the container itself."""
+  cid = run(["docker", "compose", "ps", "-q", service], timeout=60).stdout.strip()
+  if not cid:
+    return None
+  img = run(["docker", "inspect", "-f", "{{.Config.Image}}", cid], timeout=60)
+  return tag_of(img.stdout.strip()) if img.returncode == 0 else None
 
 
 def gate(target: str, timeout: int = 900) -> tuple[bool, str]:
@@ -728,12 +1090,46 @@ def main() -> int:
       res.skipped.append(a.service)
       continue
 
+    svc = services[a.service]
+
+    # A Postgres MAJOR is its own procedure, not a backup followed by a
+    # restart: the new binary refuses a PGDATA whose PG_VERSION differs, so
+    # `up -d` alone leaves a service that cannot start at all. Dump, cut the
+    # old cluster aside, initdb, restore, verify.
+    if a.store is Store.POSTGRES and is_pg_major_change(a.current, a.target or ""):
+      target_image = f"{repo_of(str(svc.get('image') or ''))}:{a.target}"
+      print(f"    postgres MAJOR pg{pg_major(a.current)} -> "
+            f"pg{pg_major(a.target or '')}: dump + restore, not a restart")
+      bumped, bwhy = bump_tag(str(svc.get("image") or ""), target_image)
+      print(f"    tag bump: {'ok' if bumped else 'FAILED'} -- {bwhy}")
+      if not bumped:
+        res.failed.append((a.service, f"could not bump the pinned tag: {bwhy}"))
+        break
+      if not pull(a.service):
+        res.failed.append((a.service, "pull failed"))
+        break
+      with cron_lock(CRON_LOCKS.get(a.service)) as held:
+        if held is False:
+          res.skipped.append(a.service)
+          print("    another job holds the cron lock; skipping rather than racing it")
+          continue
+        ok, why = postgres_major_upgrade(a.service, svc, target_image, backup_root)
+      print(f"    {'ok' if ok else 'FAILED'} -- {why}")
+      if not ok:
+        res.failed.append((a.service, why))
+        print("    HALTING.")
+        break
+      res.applied.append(a.service)
+      continue
+
     if needs_backup(a.service, a.kind):
       if a.store is Store.SQLITE:
         ok, why = sqlite_backup(a.service, cfg, backup_root)
       else:
-        print("    postgres: needs explicit credentials; not attempted unattended")
-        ok, why = False, "postgres dump must be run with explicit credentials"
+        user, password, db = pg_env(svc)
+        target_image = f"{repo_of(str(svc.get('image') or ''))}:{a.target}"
+        ok, why, _ = postgres_backup(a.service, target_image, user, db,
+                                     password, backup_root)
       print(f"    backup: {'ok' if ok else 'FAILED'} -- {why}")
       if not ok:
         if a.needs_proof:
@@ -742,6 +1138,16 @@ def main() -> int:
           break
         res.skipped.append(a.service)
         continue
+
+    # A pinned tag lives in the compose file, and `up -d` reads it from there.
+    # Without this edit the pull is real and the recreate is a no-op.
+    if a.kind is Kind.PINNED:
+      bumped, bwhy = bump_tag(str(svc.get("image") or ""),
+                              f"{repo_of(str(svc.get('image') or ''))}:{a.target}")
+      print(f"    tag bump: {'ok' if bumped else 'FAILED'} -- {bwhy}")
+      if not bumped:
+        res.failed.append((a.service, f"could not bump the pinned tag: {bwhy}"))
+        break
 
     if not pull(a.service):
       res.failed.append((a.service, "pull failed"))
@@ -756,6 +1162,17 @@ def main() -> int:
       res.failed.append((a.service, f"did not become healthy: {how}"))
       print("    HALTING: not touching the next service with this one broken.")
       break
+    # Verify by effect: ask the CONTAINER what it is running, not the plan.
+    # Health was green throughout the no-op bump that prompted this check.
+    live = running_tag(a.service)
+    if a.kind is Kind.PINNED and live != a.target:
+      res.failed.append(
+        (a.service, f"reports healthy but is running {live!r}, not {a.target!r} "
+                    "-- the recreate did not take the new tag")
+      )
+      print("    HALTING: applied is not the same as running.")
+      break
+    print(f"    running: {live}")
     res.applied.append(a.service)
 
   if res.applied and not args.skip_gates:

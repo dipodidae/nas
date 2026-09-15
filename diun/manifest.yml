@@ -166,7 +166,7 @@
   watch_repo: false
 
 # playlist-generator-db
-- name: pgvector/pgvector:pg16
+- name: pgvector/pgvector:pg18
   metadata:
     service: playlist-generator-db
   watch_repo: false
@@ -284,7 +284,7 @@
 
 # streamystats-db
 #   database engine under live data -- read the release notes first
-- name: tensorchord/vchord-postgres:pg17-v0.4.1
+- name: tensorchord/vchord-postgres:pg18-v1.1.1
   metadata:
     service: streamystats-db
   watch_repo: true
