@@ -72,7 +72,13 @@ bootstrap: ## One-time host prep: create the network and pre-chown non-LSIO conf
 	@# permission bits and fail with `Permission denied` on influxdb's config.
 	@# Docker's default -- auto-creating the bind-mount source as root:root --
 	@# is correct there. Do not add it to this loop. ADR-0023.
-	@for d in qui ntfy diun beszel beszel-agent tinyauth tinyauth/resources; do \
+	@# navidrome is the same case as qui: the image's own default user is root,
+	@# but `user: ${PUID}:${PGID}` in compose overrides it, so nothing ever runs
+	@# as root inside to repair a root-owned /data. Verified 2026-09-15.
+	@# Deliberately NOT adguardhome: that one really does run as root and is
+	@# left on Docker's root:root default, the scrutiny case above. ADR-0043.
+	@for d in qui ntfy diun beszel beszel-agent tinyauth tinyauth/resources \
+	         navidrome; do \
 	  p="$(CONFIG_DIRECTORY)/$$d"; \
 	  echo "==> $$p -> $(PUID):$(PGID)"; \
 	  mkdir -p "$$p"; \
@@ -309,6 +315,23 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	  docker inspect "$$s" >/dev/null 2>&1 || { echo "    !!! $$s: NO CONTAINER"; rc=1; crit=1; \
 	    note "$$s has NO CONTAINER (ADR-0006)"; }; \
 	done; [ $$rc -eq 0 ] && echo "    all present"; \
+	echo "==> adguardhome actually answers DNS (ADR-0043)"; \
+	if docker inspect adguardhome >/dev/null 2>&1; then \
+	  if curl -sf -o /dev/null -m 5 "http://127.0.0.1:3053/install.html"; then \
+	    echo "    -- setup wizard not completed yet: AdGuard does not bind :53 until"; \
+	    echo "       it is, so there is no DNS to assert. Finish it at"; \
+	    echo "       https://adguardhome.$${PUBLIC_DOMAIN} and keep the admin port 3000."; \
+	  elif dig +short +time=3 +tries=1 "@$${ADGUARD_DNS_BIND_IP}" example.com >/dev/null 2>&1 \
+	       && [ -n "$$(dig +short +time=3 +tries=1 "@$${ADGUARD_DNS_BIND_IP}" example.com 2>/dev/null)" ]; then \
+	    echo "    ok: $${ADGUARD_DNS_BIND_IP}:53 resolved example.com"; \
+	  else \
+	    echo "    !!! setup IS complete but $${ADGUARD_DNS_BIND_IP}:53 did not resolve."; \
+	    echo "        Every device using this box for DNS is offline. The container"; \
+	    echo "        healthcheck only proves the admin UI serves HTTP -- it cannot"; \
+	    echo "        see this. Check NET_BIND_SERVICE and the DNS listener. ADR-0043"; \
+	    rc=1; crit=1; note "adguardhome is not answering DNS (ADR-0043)"; \
+	  fi; \
+	fi; \
 	echo "==> no stray compose.override.yaml"; \
 	if [ -e compose.override.yaml ] || [ -e compose.override.yml ]; then \
 	  echo "    !!! compose.override.yaml present. It is gitignored AND auto-loaded,"; \

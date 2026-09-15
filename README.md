@@ -14,7 +14,7 @@ project, one reverse proxy, one 10 TB disk.
 | Kernel / Docker | 7.0.0-30-generic / Docker 29.7.2, Compose v5.5.0                |
 | Media disk      | `/mnt/drive`, ext4, 9.1 T (51 % used)                           |
 | Config disk     | `${CONFIG_DIRECTORY}` on the OS NVMe (42 % worn, SMART-watched) |
-| Services        | 33 (4 built locally; ALL watched by diun, 11 manual-update)     |
+| Services        | 35 (4 built locally; ALL watched by diun, 13 manual-update)     |
 | Public entry    | SWAG on `:80`/`:443` + wildcard TLS via Cloudflare DNS-01       |
 
 ---
@@ -205,17 +205,18 @@ listed with its reason in `MANUAL_UPDATE_ONLY` in the checker.
 
 ### Control plane — `compose/infra.yaml`
 
-| Service        | Image                         | Ports            | wt     | Notes                                                                                                                                   |
-| -------------- | ----------------------------- | ---------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `swag`         | lscr.io/…/swag                | `443`, `80`      | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                                      |
-| `tinyauth`     | ghcr.io/tinyauthapp/tinyauth  | `127.0.0.1:3005` | **NO** | **One forward-auth door for every browser-only surface.** Pinned; no Docker socket [ADR-0034](docs/decisions/0034-one-door-tinyauth.md) |
-| `dockerproxy`  | tecnativa/docker-socket-proxy | —                | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md)            |
-| `autoheal`     | willfarrell/autoheal          | —                | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                                |
-| `ntfy`         | binwiederhier/ntfy            | `127.0.0.1:8410` | yes    | Push alerts. Needs a pre-chowned config dir                                                                                             |
-| `beszel`       | henrygd/beszel                | `127.0.0.1:8090` | **NO** | Trend lines: CPU/RAM/disk/per-container history [ADR-0028](docs/decisions/0028-beszel-trend-lines.md)                                   |
-| `beszel-agent` | henrygd/beszel-agent          | —                | **NO** | Collector. **No host networking** — see the ADR before "fixing" that                                                                    |
-| `diun`         | crazymax/diun                 | —                | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md)            |
-| `scrutiny`     | ghcr.io/analogj/scrutiny      | `127.0.0.1:8086` | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md)            |
+| Service        | Image                          | Ports                               | wt     | Notes                                                                                                                                   |
+| -------------- | ------------------------------ | ----------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `swag`         | lscr.io/…/swag                 | `443`, `80`                         | yes    | TLS + auto-proxy. Waits on `4eva-rootpage:healthy`                                                                                      |
+| `tinyauth`     | ghcr.io/tinyauthapp/tinyauth   | `127.0.0.1:3005`                    | **NO** | **One forward-auth door for every browser-only surface.** Pinned; no Docker socket [ADR-0034](docs/decisions/0034-one-door-tinyauth.md) |
+| `dockerproxy`  | tecnativa/docker-socket-proxy  | —                                   | **NO** | **The only container allowed to mount the Docker socket.** [ADR-0013](docs/decisions/0013-dockerproxy-sole-socket-holder.md)            |
+| `autoheal`     | willfarrell/autoheal           | —                                   | **NO** | Restarts unhealthy `qbittorrent`/`slskd`                                                                                                |
+| `ntfy`         | binwiederhier/ntfy             | `127.0.0.1:8410`                    | yes    | Push alerts. Needs a pre-chowned config dir                                                                                             |
+| `beszel`       | henrygd/beszel                 | `127.0.0.1:8090`                    | **NO** | Trend lines: CPU/RAM/disk/per-container history [ADR-0028](docs/decisions/0028-beszel-trend-lines.md)                                   |
+| `adguardhome`  | adguard/adguardhome **pinned** | `192.168.2.56:53`, `127.0.0.1:3053` | **NO** | LAN + WireGuard DNS filter. Binds **one** address; the host does not use it [ADR-0043](docs/decisions/0043-adguard-home-lan-dns.md)     |
+| `beszel-agent` | henrygd/beszel-agent           | —                                   | **NO** | Collector. **No host networking** — see the ADR before "fixing" that                                                                    |
+| `diun`         | crazymax/diun                  | —                                   | **NO** | Update **notification** only; no Docker API access at all [ADR-0024](docs/decisions/0024-diun-version-aware-notification.md)            |
+| `scrutiny`     | ghcr.io/analogj/scrutiny       | `127.0.0.1:8086`                    | **NO** | SMART. Only holder of `SYS_ADMIN` + a raw disk. Covers the **NVMe only** [ADR-0023](docs/decisions/0023-smart-monitoring.md)            |
 
 ### Download path — `compose/media-download.yaml`
 
@@ -249,6 +250,7 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 | ------------ | ------------------------------ | -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
 | `jellyfin`   | lscr.io/…/jellyfin **pinned**  | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
 | `jellyseerr` | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056`                       | yes    | Requests                                                                                                                  |
+| `navidrome`  | deluan/navidrome **pinned**    | `127.0.0.1:4533`                       | **NO** | Subsonic music server. `/rest` is path-scoped **open** [ADR-0044](docs/decisions/0044-navidrome-subsonic-path-scope.md)   |
 | `nextcloud`  | lscr.io/…/nextcloud            | `127.0.0.1:8087`                       | yes    | Whole share at `/external/*`. Log budget 25m/3                                                                            |
 
 ### Locally built — `webapps/*/compose.yaml`

@@ -245,3 +245,67 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
+
+  # ------------------------------------------------------------------------
+  # Navidrome -- the music half of playback. Jellyfin serves the music tree
+  # too, but its music client story is poor; Navidrome speaks Subsonic, which
+  # is what every decent mobile music client actually implements.
+  #
+  # It reads the SAME ${SHARE_DIRECTORY}/music that Lidarr writes. No new
+  # namespace is introduced: Navidrome has no *arr integration and nothing
+  # cross-references its container paths, so /music is local to it and the
+  # three namespaces of ADR-0003 are unaffected.
+  # ------------------------------------------------------------------------
+
+  navidrome:
+    # svc-hardened-tz, NOT svc-lsio: this is not a linuxserver image. It has no
+    # root init, ignores PUID/PGID entirely (upstream says so explicitly), and
+    # needs none of the four LSIO init capabilities because it never chowns
+    # anything -- it runs as `user:` from pid 1 and binds an unprivileged port.
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: tag is PINNED. Navidrome migrates its SQLite schema forward on
+    # every start and ships no down-migration, so an older binary will not open
+    # a database a newer one has touched. The tag is not a rollback; back up
+    # ${CONFIG_DIRECTORY}/navidrome before bumping it. ADR-0044.
+    image: deluan/navidrome:0.64.0
+    container_name: navidrome
+    # INVARIANT: `user:`, not PUID/PGID. Same trap as qui (ADR-0014) -- if
+    # Docker auto-creates ${CONFIG_DIRECTORY}/navidrome as root on first `up`,
+    # this crash-loops on `permission denied` with no root init to repair it.
+    # `make bootstrap` pre-chowns the directory.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    environment:
+      - ND_MUSICFOLDER=/music
+      - ND_DATAFOLDER=/data
+      # NOT ND_SCANSCHEDULE -- that name is from an older release and is
+      # silently ignored, which reads as "the scanner just never runs".
+      # Verified against the 0.64 options table.
+      - ND_SCANNER_SCHEDULE=1h
+      - ND_LOGLEVEL=info
+      # Anonymous usage reporting is ON by default upstream. Off here.
+      - ND_ENABLEINSIGHTSCOLLECTOR=false
+    volumes:
+      - ${CONFIG_DIRECTORY}/navidrome:/data
+      # :ro is correct here, and is NOT the ADR-0039 mistake. That one bit
+      # because Jellyfin writes trickplay tiles *next to the media*; Navidrome
+      # keeps its database, cache and downloaded artwork under /data and never
+      # writes the music tree. Revisit only if playlist export is ever enabled.
+      - ${SHARE_DIRECTORY}/music:/music:ro
+    ports:
+      - '127.0.0.1:4533:4533' # loopback only; the public surface is SWAG
+    networks:
+      - nas-network
+    labels:
+      # No autoheal=true, deliberately: a restart part-way through a scan of a
+      # 1.8 TB library costs more than the restart can win back, and the web
+      # server failing while the scanner runs is not a failure mode seen here.
+      - swag=enable
+    healthcheck:
+      # /ping, measured 200 on 0.64.0. The image carries both wget and curl.
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:4533/ping']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

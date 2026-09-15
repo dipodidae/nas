@@ -50,7 +50,8 @@ fi
 LOGIN_HOST="auth.${DOMAIN}"
 
 PROTECT="sonarr radarr lidarr bazarr prowlarr lingarr qui slskd cleanuparr
-         lidarr-bulk playlist-generator ongehoord jellyseerr"
+         lidarr-bulk playlist-generator ongehoord jellyseerr adguardhome
+         navidrome"
 NEVER="jellyfin nextcloud ntfy auth"
 
 probe() { curl -s -o /dev/null -m 10 -w '%{http_code} %{redirect_url}' "$1" 2>/dev/null; }
@@ -154,6 +155,24 @@ case "$target" in
   https://${LOGIN_HOST}/*) ;;
   *) echo "    !!! /ops.html answered ${code} -> '${target}'; live stack status" >&2
      echo "        is public (ADR-0034)" >&2; rc=1 ;;
+esac
+
+# Navidrome's Subsonic API is path-scoped OPEN, and that needs asserting in the
+# same breath as the door itself -- it is the half that breaks silently. If the
+# `location /rest` block ever loses its place in the conf, `location /` catches
+# the path instead, the route starts 302ing, and every phone stops playing music
+# while the browser UI and every check above stay perfectly green. ADR-0044.
+read -r code target <<<"$(probe "https://navidrome.${DOMAIN}/rest/ping.view")"
+case "$target" in
+  https://${LOGIN_HOST}/*)
+    echo "    !!! navidrome /rest redirects to the login page. That is the" >&2
+    echo "        Subsonic API: no mobile client can follow a 302, so every" >&2
+    echo "        phone has silently stopped playing. Check that the" >&2
+    echo "        'location /rest' block still exists in" >&2
+    echo "        swag/proxy-confs/navidrome.subdomain.conf. ADR-0044" >&2
+    rc=1 ;;
+  *)
+    [ -z "$code" ] && { echo "    !!! navidrome /rest: no response" >&2; rc=1; } ;;
 esac
 
 if [ $rc -eq 0 ]; then

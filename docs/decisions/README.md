@@ -53,3 +53,5 @@ the ADR here. If you are about to change something and the YAML says
 | [0040](0040-nfs-lockd-random-port.md)                | NFS `lockd` drew a random port, took Jellyfin's 7359, and 502'd it for 20 h                          |
 | [0041](0041-cap-kill-is-not-enough-without-grace.md) | `CAP_KILL` without a `stop_grace_period` is still a SIGKILL — amends ADR-0035                        |
 | [0042](0042-postgres-18-moved-the-data-directory.md) | Postgres 18 refuses the old bind mount, and a pinned bump that never edits compose is a silent no-op |
+| [0043](0043-adguard-home-lan-dns.md)                 | AdGuard binds one address (systemd-resolved owns `0.0.0.0:53`); the host does not use it             |
+| [0044](0044-navidrome-subsonic-path-scope.md)        | Navidrome behind the door, `/rest` path-scoped open for Subsonic clients                             |

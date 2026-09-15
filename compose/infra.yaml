@@ -62,6 +62,7 @@ services:
       # unprotects itself on the next recreate. ADR-0034.
       - ../swag/tinyauth-server.conf:/config/nginx/tinyauth-server.conf:ro
       - ../swag/tinyauth-location.conf:/config/nginx/tinyauth-location.conf:ro
+      - ../swag/proxy-confs/adguardhome.subdomain.conf:/config/nginx/proxy-confs/adguardhome.subdomain.conf:ro
       - ../swag/proxy-confs/auth.subdomain.conf:/config/nginx/proxy-confs/auth.subdomain.conf:ro
       - ../swag/proxy-confs/bazarr.subdomain.conf:/config/nginx/proxy-confs/bazarr.subdomain.conf:ro
       - ../swag/proxy-confs/cleanuparr.subdomain.conf:/config/nginx/proxy-confs/cleanuparr.subdomain.conf:ro
@@ -70,6 +71,7 @@ services:
       - ../swag/proxy-confs/lidarr-bulk.subdomain.conf:/config/nginx/proxy-confs/lidarr-bulk.subdomain.conf:ro
       - ../swag/proxy-confs/lidarr.subdomain.conf:/config/nginx/proxy-confs/lidarr.subdomain.conf:ro
       - ../swag/proxy-confs/lingarr.subdomain.conf:/config/nginx/proxy-confs/lingarr.subdomain.conf:ro
+      - ../swag/proxy-confs/navidrome.subdomain.conf:/config/nginx/proxy-confs/navidrome.subdomain.conf:ro
       - ../swag/proxy-confs/nextcloud.subdomain.conf:/config/nginx/proxy-confs/nextcloud.subdomain.conf:ro
       - ../swag/proxy-confs/ntfy.subdomain.conf:/config/nginx/proxy-confs/ntfy.subdomain.conf:ro
       - ../swag/proxy-confs/ongehoord.subdomain.conf:/config/nginx/proxy-confs/ongehoord.subdomain.conf:ro
@@ -648,3 +650,81 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # ------------------------------------------------------------------------
+  # AdGuard Home -- network-wide DNS filtering for the LAN and for WireGuard
+  # clients. Lives in the control plane because that is its blast radius: when
+  # this is the house's resolver, losing it looks like "the internet is down"
+  # on every device at once.
+  #
+  # INVARIANT: the HOST does not use this as its resolver. /etc/resolv.conf
+  # stays on systemd-resolved pointing upstream. If the host resolved through
+  # AdGuard, an AdGuard outage would leave `docker compose pull` unable to
+  # resolve the registry needed to fix it -- a bootstrap deadlock with no
+  # console-free way out. The filtering is for clients, not for this box.
+  # ADR-0043.
+  # ------------------------------------------------------------------------
+
+  adguardhome:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: tag is PINNED. AdGuard rewrites AdGuardHome.yaml to a newer
+    # schema_version on first start after an upgrade and ships no downgrade
+    # path, so the old tag will not read the config the new one wrote. Copy
+    # ${CONFIG_DIRECTORY}/adguardhome/conf before bumping. ADR-0043.
+    image: adguard/adguardhome:v0.107.79
+    container_name: adguardhome
+    cap_add:
+      # INVARIANT: NET_BIND_SERVICE, because :53 is a privileged port and
+      # cap_drop: ALL removes the capability even from a root process. Without
+      # it the DNS listener never binds and only the admin UI comes up --
+      # which still answers the healthcheck, so it would look healthy.
+      - NET_BIND_SERVICE
+    volumes:
+      - ${CONFIG_DIRECTORY}/adguardhome/work:/opt/adguardhome/work
+      - ${CONFIG_DIRECTORY}/adguardhome/conf:/opt/adguardhome/conf
+    ports:
+      # INVARIANT: bound to ONE specific address, never 0.0.0.0. Measured
+      # 2026-09-15: `0.0.0.0:53` fails with `failed to bind host port
+      # 0.0.0.0:53/udp: address already in use` because systemd-resolved holds
+      # the stub listener on 127.0.0.53:53. Upstream's answer is to disable
+      # DNSStubListener, i.e. a host file outside this repo that a rebuild
+      # silently loses (the ADR-0040 shape). Binding the LAN address avoids the
+      # collision and needs no host change.
+      #
+      # WireGuard clients are covered by this SAME address and deliberately do
+      # NOT get a 10.231.245.1 binding: a specific-IP bind requires the address
+      # to exist when Docker binds it, and wg-quick@wg0 has no ordering against
+      # docker.service (both merely After=network-online.target). That race
+      # would make house-wide DNS fail to start because the VPN was slow.
+      # Peers reach this address over the tunnel instead -- verified: INPUT is
+      # ACCEPT and wg0 runs rp_filter=2. ADR-0043.
+      - '${ADGUARD_DNS_BIND_IP}:53:53/tcp'
+      - '${ADGUARD_DNS_BIND_IP}:53:53/udp'
+      # Host port is 3053, NOT 3000: lidarr-bulk already publishes
+      # 127.0.0.1:3000 and compose renders the collision without complaint --
+      # the second container to start simply fails to bind and looks broken
+      # rather than conflicted (ADR-0023). The CONTAINER port stays 3000,
+      # which is what the proxy-conf and the healthcheck both target.
+      - '127.0.0.1:3053:3000' # admin UI, loopback only; public side is SWAG
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+      - autoheal=true
+    healthcheck:
+      # INVARIANT: this probes the ADMIN UI, not :53, and that is deliberate.
+      # Measured: AdGuard does not bind :53 at all until the setup wizard has
+      # been completed, so a DNS-based probe reports unhealthy on a fresh
+      # install -- and with autoheal=true that means being restarted every ~30s
+      # while you are trying to complete the wizard. The web port is up in both
+      # states (302 to /install.html before setup, 302 to /login after), and
+      # busybox wget follows the redirect, so exit 0 means "the process is
+      # serving HTTP" and honestly nothing more. That :53 actually answers is a
+      # runtime fact, asserted by `make verify-runtime` with a real query.
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:3000/']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

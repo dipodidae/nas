@@ -119,6 +119,8 @@ MANUAL_UPDATE_ONLY = {
     "streamystats":          "must stay in lockstep with its job server and schema",
     "streamystats-jobs":     "must stay in lockstep with the UI and schema",
     "tinyauth":              "a bad auth container closes every protected door at once; chosen, never inherited",
+    "navidrome":             "migrates its SQLite schema forward with no down-migration",
+    "adguardhome":           "rewrites AdGuardHome.yaml to a new schema_version, one way",
 }
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
@@ -190,6 +192,13 @@ DOOR = {
     "playlist-generator": "protect",
     "ongehoord":          "protect",
     "jellyseerr":         "protect",
+    # Browser-only admin UI. Its /control/* API is the same surface by another
+    # name and nothing off-box consumes it, so there is no path-scope. ADR-0043.
+    "adguardhome":        "protect",
+    # protect, but with /rest path-scoped OPEN for the Subsonic API -- mobile
+    # clients cannot follow a 302, and that path carries the audio stream for
+    # the web player too. Same shape as the *arr /api exemptions. ADR-0044.
+    "navidrome":          "protect",
 }
 
 # Routes whose door has not been hung yet. This list SHRINKS to empty as the
@@ -216,6 +225,11 @@ PUBLIC_PORT_ALLOWLIST = {
     1900: "Jellyfin DLNA/SSDP (UDP)",
     6881: "qBittorrent BitTorrent inbound (router-forwarded)",
     50300: "slskd Soulseek inbound (router-forwarded)",
+    # AdGuard Home. Bound to ONE address (${ADGUARD_DNS_BIND_IP}), never
+    # 0.0.0.0 -- systemd-resolved's stub listener holds 127.0.0.53:53 and makes
+    # an all-interfaces bind fail outright. LAN clients and WireGuard peers both
+    # reach it there. ADR-0043.
+    53:   "AdGuard Home DNS (LAN + WireGuard, single-address bind)",
 }
 
 # Services whose role legitimately involves holding a credential.

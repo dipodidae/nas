@@ -9,6 +9,12 @@
 # Locally-built services are absent on purpose: no registry to watch.
 # See docs/decisions/0024-diun-version-aware-notification.md
 
+# adguardhome
+- name: adguard/adguardhome:v0.107.79
+  metadata:
+    service: adguardhome
+  watch_repo: false
+
 # autoheal
 - name: willfarrell/autoheal:latest
   metadata:
@@ -151,6 +157,12 @@
 - name: lingarr/lingarr:latest
   metadata:
     service: lingarr
+  watch_repo: false
+
+# navidrome
+- name: deluan/navidrome:0.64.0
+  metadata:
+    service: navidrome
   watch_repo: false
 
 # nextcloud
