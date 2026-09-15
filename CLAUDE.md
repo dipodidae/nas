@@ -41,7 +41,14 @@ make tinyauth-users    # re-render secrets/tinyauth-users from .env, then
                        # `docker compose restart tinyauth` -- `up -d` is a NO-OP here
 
 # Applying an update is ALWAYS by hand — nothing in the stack does it
-# (docs/decisions/0025-watchtower-retired.md). `diun` only notifies.
+# (docs/decisions/0025-watchtower-retired.md). `diun` only notifies, and it
+# MISSES pinned tags: it reported qbittorrent ls475 as newest for two days
+# after ls476 shipped, so a quiet nas-updates lane is not an answer.
+pnpm stack:check                # what is behind? exit 1 == updates available
+pnpm stack:update:dry           # print the plan, touch nothing
+pnpm stack:update               # back up, apply, verify, halt on failure
+#   (same three as `make stack-check` / `make stack-update`; the pnpm form
+#    propagates the 0/1/2 exit contract, make rewrites a non-zero to 2)
 make pull-jellyfin              # pull + up -d + wait for healthy
 make update-qbittorrent         # prompts to bump the pinned tag first
 make measure-qbittorrent-stop   # re-measure the graceful stop (6.2s @ 128 torrents)

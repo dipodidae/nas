@@ -25,7 +25,7 @@ On 2026-09-15, stopping `jellyfin` to back it up before the 12.0 → 12.1 upgrad
 -rw-r--r-- 1 tom tom    6336592 jellyfin.db-wal
 ```
 
-Byte for byte the symptom ADR-0035 says was fixed. Jellyfin's own log shows it *began* the
+Byte for byte the symptom ADR-0035 says was fixed. Jellyfin's own log shows it _began_ the
 shutdown and never finished:
 
 ```
@@ -63,10 +63,10 @@ The damage is in the backups, not the service: **anything copying `jellyfin.db` 
 `stop_grace_period: 120s` on `jellyfin`. Measured immediately after, same container, same
 database:
 
-| | stop time | exit | WAL after stop | shutdown line in log |
-|---|---|---|---|---|
-| CAP_KILL, no grace period | 10.5s | **137** | 6.3 MB left | absent (truncated mid-shutdown) |
-| CAP_KILL + `120s` | **3.7s** | **0** | **removed** | `Disposing CoreAppHost` present |
+|                           | stop time | exit    | WAL after stop | shutdown line in log            |
+| ------------------------- | --------- | ------- | -------------- | ------------------------------- |
+| CAP_KILL, no grace period | 10.5s     | **137** | 6.3 MB left    | absent (truncated mid-shutdown) |
+| CAP_KILL + `120s`         | **3.7s**  | **0**   | **removed**    | `Disposing CoreAppHost` present |
 
 It needs **less** than the default once it is allowed to finish — 3.7s. The 10s ceiling was
 not close; it was landing inside the dispose sequence.
@@ -89,7 +89,7 @@ the value-equals-default case.
 
 **A capability grant is a permission, not an outcome.** ADR-0035 verified that the cap was
 present; it did not re-measure the stop it was granted to fix. When an ADR's remedy is a
-permission, the assertion belongs on the *effect* — exit code 0 and no `-wal` — and
+permission, the assertion belongs on the _effect_ — exit code 0 and no `-wal` — and
 `make check` cannot see either. `make verify-runtime` is where that lives.
 
 The second-order lesson is about ADRs themselves: this one's evidence was quoted

@@ -322,7 +322,7 @@ Three guards it exists for, each a real failure:
 - It does its **own** registry tag lookup rather than trusting `diun`, which
   reported `qbittorrent:…-ls475` as newest for two days after `ls476` shipped.
   Tags are ranked by every numeric run in them (`ls476 > ls475`, `2.20.0 >
-  2.9.0`) — neither a semver parser nor a string sort gets both right.
+2.9.0`) — neither a semver parser nor a string sort gets both right.
 - A **failed registry lookup is reported as UNKNOWN**, never as "up to date".
 - A SQLite service is **stopped** before it is copied and the `-wal`/`-shm`
   files are asserted gone, because `docker compose stop` returns 0 on a
@@ -336,8 +336,12 @@ python scripts/stack_update.py --check             # what is behind? exit 1 if a
 python scripts/stack_update.py --dry-run           # print the plan only
 python scripts/stack_update.py --service jellyfin  # one service (repeatable)
 python scripts/stack_update.py --kind drift        # only floating-tag services
-make stack-check / make stack-update               # the same two, wrapped
+pnpm stack:check / pnpm stack:update:dry / pnpm stack:update
+make stack-check / make stack-update               # the same, wrapped
 ```
+
+Prefer the `pnpm` form in scripts and cron: it passes the 0/1/2 exit contract
+straight through, where `make` rewrites any non-zero recipe exit to its own 2.
 
 Exit codes: 0 applied and verified, 1 partial (something skipped or behind),
 2 fatal (a verification failed, a backup could not be proved, or the compose
