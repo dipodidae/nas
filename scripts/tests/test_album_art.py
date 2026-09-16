@@ -670,7 +670,13 @@ def test_process_restores_the_old_cover_when_the_new_one_is_smaller(tmp_path):
             "2026-09-16T00:00:00+00:00",
         )
     assert (d / "folder.jpg").read_bytes() == b"ORIGINAL-1000px"
-    assert not (d / "folder.jpg.prev").exists()
+    # No debris in the media tree: a stray folder.jpg.prev matches Navidrome's
+    # own `folder.*` cover pattern.
+    assert sorted(p.name for p in d.iterdir()) == [
+        ".album_art_done",
+        "folder.jpg",
+        "track.flac",
+    ]
     assert aa.read_sidecar(d / ".album_art_done")["w"] == 1000
 
 

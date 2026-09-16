@@ -106,6 +106,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -719,9 +720,17 @@ def _process_candidate(config: RunConfig, cand: Candidate, stamp: str) -> tuple[
         # a SMALLER image than the one already here. Keep a copy and put it
         # back if the result is a downgrade -- an upgrade sweep that makes art
         # worse is worse than no sweep.
+        #
+        # The copy lives in the system temp dir, NOT beside the cover: a
+        # `folder.jpg.prev` in the album folder matches Navidrome's own
+        # `folder.*` cover pattern, and a run killed mid-pass would leave one
+        # there permanently. Nothing this script does may leave debris in the
+        # media tree.
         before = cover_width(cover) or 0
-        backup = cover.with_name(f"{cover.name}.prev")
         try:
+            fd, tmp_name = tempfile.mkstemp(prefix="album_art_prev_", suffix=".img")
+            os.close(fd)
+            backup = Path(tmp_name)
             shutil.copy2(cover, backup)
         except OSError:
             backup = None
@@ -729,14 +738,13 @@ def _process_candidate(config: RunConfig, cand: Candidate, stamp: str) -> tuple[
     failed, asked, after = _fetch_cover(config, cand.path)
 
     if backup is not None:
-        if after and after >= before:
-            backup.unlink(missing_ok=True)
-        else:
-            try:
-                os.replace(backup, cover)
+        # copy2 + unlink, not os.replace: the backup is on a different
+        # filesystem from the media tree, where a rename is EXDEV.
+        if not (after and after >= before):
+            with contextlib.suppress(OSError):
+                shutil.copy2(backup, cover)
                 after = before
-            except OSError:
-                backup.unlink(missing_ok=True)
+        backup.unlink(missing_ok=True)
 
     miss_path = cand.path / config.miss_filename
     marker_path = cand.path / config.marker_filename
