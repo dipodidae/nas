@@ -57,13 +57,20 @@ def test_no_limit_means_no_query_string():
     assert ps.build_url(ps.STAGES["lastfm-tracks"], None).endswith("/stream")
 
 
-def test_every_stage_targets_a_stream_endpoint_except_the_one_that_has_none():
-    """The plain endpoints are fire-and-forget, so a non-stream path is a bug."""
-    non_streaming = [n for n, s in ps.STAGES.items() if not s.streaming]
-    assert non_streaming == ["search-vectors"]
+def test_every_stage_is_parsed_for_a_completion_signal():
+    """The plain endpoints are fire-and-forget, so a non-stream path is a bug.
+
+    Every stage is streamed and checked for a terminal `done`. search-vectors
+    is the one whose PATH does not end in /stream -- the endpoint itself is the
+    stream -- but it emits the same terminal event, so it is parsed like the
+    rest rather than trusted on its body.
+    """
+    assert [n for n, s in ps.STAGES.items() if not s.streaming] == []
     for name, stage in ps.STAGES.items():
-        if stage.streaming:
-            assert stage.path.endswith("/stream"), name
+        if name == "search-vectors":
+            assert stage.path == "/rebuild-search-vectors"
+            continue
+        assert stage.path.endswith("/stream"), name
 
 
 # --- SSE parsing: a stream that merely stops is not a success ---
@@ -136,9 +143,13 @@ def test_docker_exec_blowing_up_is_fatal():
     assert ps.run_stage("scan", None, runner=runner) == 2
 
 
-def test_non_streaming_stage_succeeds_on_a_plain_body():
+def test_search_vectors_still_needs_a_completion_signal():
+    """A plain 200 body is not evidence the rebuild ran -- it must say `done`."""
     runner = lambda *a, **k: _proc(stdout='{"status": "ok"}')  # noqa: E731
-    assert ps.run_stage("search-vectors", None, runner=runner) == 0
+    assert ps.run_stage("search-vectors", None, runner=runner) == 2
+
+    ok = lambda *a, **k: _proc(stdout=_sse('{"done": true, "stats": {"updated": 3}}'))  # noqa: E731
+    assert ps.run_stage("search-vectors", None, runner=ok) == 0
 
 
 # --- availability gate ---

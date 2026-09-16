@@ -115,6 +115,81 @@
 12 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-album-tags --lock /tmp/nas-playlist-stage.lock --max-age-min 300 -- python scripts/playlist_sync_stage.py --stage lastfm-album-tags --limit 300 >> logs/playlist_sync.log 2>&1"
 # :42 hourly -- release dates, bounded by max_albums.
 42 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-release-dates --lock /tmp/nas-playlist-stage.lock --max-age-min 300 -- python scripts/playlist_sync_stage.py --stage release-dates --limit 300 >> logs/playlist_sync.log 2>&1"
+# --- playlist-generator: scan + derived stages (2026-09-16) -----------------
+# These three lines did not exist before today, and the reason was a bug, not a
+# decision.
+#
+# `--stage scan` could never report success: scripts/playlist_sync_stage.py
+# treats a stream as complete only on an explicit `done` event, and
+# /scan/stream's terminal event (_build_scan_response) carried no such key.
+# Proved 2026-09-16: a scan that added 9,079 tracks and scanned 11,740 files
+# still exited 2. The backend now emits `done`.
+#
+# Consequences while it was unscheduled: the last scan was 2026-09-13, 14,447
+# audio files on disk had no row in the DB, and -- because deletion
+# reconciliation runs ONLY inside a scan (reconcile_orphans, guarded by
+# evaluate_prune_guard) -- removed media was never reaped either. Both are the
+# same missing cron line.
+#
+# The derived stages were left off for a reason that has since been measured
+# away. TRIAGE-2026-09-03 found them pegging a core inside the request handler
+# and blocking /health (`unhealthy streak=23` at CPU=101%). profiles and
+# banger-flags were the two still running on the event loop; both now run under
+# asyncio.to_thread, and embeddings/profiles take a max_tracks bound. Measured
+# 2026-09-16 draining 17,390 embeddings + 15,890 profiles: container CPU
+# 773-1001%, /health answering in 0.06-0.24s, healthy throughout.
+#
+# All three take the same lock as the Last.fm stages, so no two overlap.
+
+# :52 hourly -- library scan. Gets new Lidarr imports IN and reconciles deleted
+# media OUT. An incremental pass over 168k files that finds nothing new takes
+# seconds (167,920 skipped, 73 scanned). --lock-wait 300 because a scan that
+# lands behind a 600s lastfm-tracks run should queue, not be dropped: a skipped
+# scan is the one skip that silently accumulates staleness in both directions.
+52 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-scan --lock /tmp/nas-playlist-stage.lock --lock-wait 300 --max-age-min 180 -- python scripts/playlist_sync_stage.py --stage scan >> logs/playlist_sync.log 2>&1"
+# :22 hourly -- per-track derived stages, in dependency order (a profile reads
+# the tags an embedding does not, but both are per-track and incremental).
+# Runs in the gap between the :00/:30 lastfm-tracks ticks. 4000 is far above
+# what an hour of imports produces and still finishes in ~2min: measured
+# 32 embeddings/s and ~1,400 profiles/s.
+22 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-derived --lock /tmp/nas-playlist-stage.lock --lock-wait 300 --max-age-min 240 -- python scripts/playlist_sync_stage.py --stage embeddings profiles --limit 4000 >> logs/playlist_sync.log 2>&1"
+# 03:20 daily -- whole-library aggregates. These have no bounded form: each
+# recomputes over the entire library by design (banger scores are within-artist
+# ranks, clusters are a UMAP+HDBSCAN fit, the manifold is a global centroid
+# build, and the search-vector rebuild is what picks up vector changes caused
+# by ENRICHMENT rather than by new files -- the hourly scan only fills in rows
+# that are NULL). Daily is the right cadence and 03:20 keeps them clear of the
+# 03:30 slskd rescan and the 04:10 diun run.
+#
+# studio-scores leads because it is pure metadata and had NO standalone
+# endpoint until 2026-09-16 -- it existed only inside /sync/full-pipeline, so
+# the per-stage drip could not reach it and 9,242 tracks had no score.
+#
+# The whole chain measures 209s. banger-flags alone was over 40min and had not
+# finished when it was killed: two O(n^2) loops in _compute_banger_scores, the
+# worst a linear scan of the 147k-element listener distribution once per track.
+# Replacing it with the bisect helper the same function already used two
+# branches down took it to 3s, with output proved identical on all 147,090
+# tracks (0 mismatches, max abs diff 0.0).
+20 3 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-aggregates --lock /tmp/nas-playlist-stage.lock --lock-wait 1800 --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage studio-scores banger-flags clusters genre-manifold search-vectors >> logs/playlist_sync.log 2>&1"
+# 04:40 daily -- the network-bound catch-up stages, none of which were
+# scheduled before 2026-09-16. All three are rate-limited by someone else's
+# server (MusicBrainz is 1 req/s), so they are a nightly drip, not hourly.
+#   lastfm-artists matters more than its name suggests: track-level Last.fm
+#   tags cover 582 of 162,775 tracks (0.36%), so the BM25 search vector falls
+#   back to ARTIST tags for essentially the whole library, and 522 artists had
+#   none.
+40 4 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-catchup --lock /tmp/nas-playlist-stage.lock --lock-wait 1800 --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage lastfm-artists musicbrainz metal-archives >> logs/playlist_sync.log 2>&1"
+# 05:10 daily -- librosa audio analysis. Its OWN lock, deliberately: this is a
+# multi-hour pass (17,959 tracks had no features on 2026-09-16) and on the
+# shared lock it would starve the hourly scan and derived jobs for the whole
+# run -- three consecutive skips page nas-attention. The backend serialises it
+# on its own _audio_analysis_lock, and it does not write any table the other
+# stages write. Until it drains, valence trajectory scoring and the expanded
+# acoustic continuity terms silently degrade to no-op for unanalysed tracks
+# (playlist-generator CLAUDE.md gotcha 9), which is exactly the kind of quiet
+# partial-correctness this repo does not accept.
+10 5 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-audio --lock /tmp/nas-playlist-audio.lock --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage audio >> logs/playlist_sync.log 2>&1"
 */5 * * * * cd /home/tom/nas && .venv/bin/python scripts/cron_job.py --name media-ops-status --max-age-min 30 -- .venv/bin/python scripts/media_ops_status.py --json-out /home/tom/nas/.docker-config/ops-status/ops-status.json >> logs/media_ops_status.log 2>&1  # media-ops dashboard
 # Sunday 03:50 — backfill missing ARTIST images (folder.jpg in the artist dir)
 # from Deezer. Nothing filled these before 2026-09-13: sacad is an album-cover

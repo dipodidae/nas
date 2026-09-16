@@ -89,19 +89,29 @@ class Stage:
 # stage running before an earlier one is merely early, not wrong.
 STAGES: dict[str, Stage] = {
   "scan": Stage("/scan/stream"),
+  # Pure metadata, no network. Had no standalone endpoint until 2026-09-16 --
+  # it lived only inside the retired /sync/full-pipeline, so the per-stage drip
+  # could not reach it and 9,149 tracks had no studio score.
+  "studio-scores": Stage("/enrich/studio-scores/stream", "max_tracks"),
   "musicbrainz": Stage("/enrich/musicbrainz/stream"),
+  # Artist-level tags + similarity. Absent from this table until 2026-09-16
+  # although the endpoint existed. It matters more than its name suggests:
+  # track-level Last.fm tags cover 582 of 162,775 tracks (0.36%), so the BM25
+  # search vector falls back to ARTIST tags for essentially the whole library.
+  "lastfm-artists": Stage("/enrich/lastfm/stream"),
   "lastfm-tracks": Stage("/enrich/lastfm-tracks/stream", "max_tracks"),
   "lastfm-album-tags": Stage("/enrich/lastfm-album-tags/stream", "max_albums"),
   "metal-archives": Stage("/enrich/metal-archives/stream"),
   "release-dates": Stage("/enrich/release-dates/stream", "max_albums"),
-  "embeddings": Stage("/enrich/embeddings/stream"),
-  "profiles": Stage("/enrich/profiles/stream"),
+  "embeddings": Stage("/enrich/embeddings/stream", "max_tracks"),
+  "profiles": Stage("/enrich/profiles/stream", "max_tracks"),
   "clusters": Stage("/enrich/clusters/stream"),
   "banger-flags": Stage("/enrich/banger-flags/stream"),
   "genre-manifold": Stage("/enrich/genre-manifold/stream"),
   "audio": Stage("/enrich/audio/stream"),
-  # No /stream variant exists for this one; it is a single fast rebuild.
-  "search-vectors": Stage("/rebuild-search-vectors", streaming=False),
+  # No separate /stream path -- this endpoint IS an SSE stream, and it emits
+  # the same terminal `done` event as the /enrich/*/stream ones, so parse it.
+  "search-vectors": Stage("/rebuild-search-vectors"),
 }
 
 
