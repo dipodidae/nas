@@ -114,9 +114,9 @@ services:
       # under one mount and imports hardlink instead of copying. The repath was
       # done offline by scripts/lidarr_repath_db.py; do NOT retry it via
       # `PUT /api/v1/artist/editor`, which wiped 150,187 TrackFiles rows on the
-      # first attempt. A root folder outside lidarr_jellyfin_bridge.py's
-      # DEFAULT_MAP_FROM silently hides every import from Jellyfin, which is
-      # asserted by `make verify-runtime`. ADR-0003 (background: ADR-0002).
+      # first attempt. The Jellyfin half of that story is retired: Jellyfin has
+      # no music library any more, Navidrome owns music, and Lidarr's Subsonic
+      # connector triggers its scans. ADR-0003 (background: ADR-0002, ADR-0051).
       - ${SHARE_DIRECTORY}:/data
       # INVARIANT: the media-notification script and its token are mounted
       # READ-ONLY, and the token is a FILE and not an environment variable --

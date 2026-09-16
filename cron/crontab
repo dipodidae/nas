@@ -196,38 +196,14 @@
 5 5 * * 5 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-movies --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library Movies >> logs/jellyfin_library_scan.log 2>&1"
 # Sat 05:05 — TV Shows.
 5 5 * * 6 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-tv --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library 'TV Shows' >> logs/jellyfin_library_scan.log 2>&1"
-# Sun 05:20 — Music. Deliberately *after* BOTH art jobs: artist_art.py at 03:50
-# and album_art.py at 04:45, which measured 21.6 min and so was still running at
-# the old 05:05 slot -- the last covers it wrote waited a week to be seen.
-# sacad writes folder.jpg straight to disk, which Lidarr never sees and therefore
-# never reports, so this scan is what actually gets new cover art into Jellyfin.
-20 5 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-music --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library Music >> logs/jellyfin_library_scan.log 2>&1"
+# --- Jellyfin music jobs: RETIRED 2026-09-16 (ADR-0051) ---
+# jellyfin-scan-music, jellyfin-image-backfill, music-library-sweep and
+# lidarr-jellyfin-bridge all lived here. Jellyfin no longer has a music library:
+# Navidrome owns music now, so all four targeted a library that does not exist.
+# Left installed they would not have errored -- Jellyfin answers 204 to a refresh
+# for a path under no library -- they would simply have done nothing, forever.
+# Recover them from git history if music ever returns to Jellyfin.
 
-# --- whole-library sweep: the only check that sees "on disk and nowhere else" ---
-# Sun 06:05 -- after the 05:05 Music library scan, so the scan has had an hour to
-# settle anything it was going to add. Walks BOTH directions: disk->Jellyfin
-# catches albums with no item (the Kraftwerk class), Jellyfin->disk catches
-# ghosts on dead paths. A one-directional sweep cannot see the other fault.
-# --ok-codes 0 deliberately: any discrepancy is worth a human, and the wrapper's
-# 0,1 default would swallow one. The script has no exit 1 for the same reason.
-# Sun 05:45 — ask Jellyfin's own providers for images no file on disk supplies.
-# Complements, does not replace, artist_art.py/album_art.py: those write to disk
-# where every consumer sees them, this one covers the tail. The Fanart, Cover
-# Art Archive and last.fm plugins were installed and Active with only TheAudioDB
-# ticked on the music library until 2026-09-13; all four are enabled now. It
-# reports by effect -- Jellyfin answers 204 to a refresh it has merely queued,
-# so the run re-reads the batch and says how many actually gained an image.
-45 5 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-image-backfill --lock /tmp/nas-jf-image-backfill.lock --max-age-min 10380 -- python scripts/jellyfin_image_backfill.py --apply --limit 300 >> logs/jellyfin_image_backfill.log 2>&1"
-
-5 6 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name music-library-sweep --lock /tmp/nas-music-sweep.lock --max-age-min 10380 --ok-codes 0 -- python scripts/music_library_sweep.py >> logs/music_library_sweep.log 2>&1"
-
-# --- Lidarr -> Jellyfin path-mapping bridge (docs/jellyfin-playback-audit.md) ---
-# Lidarr's own "Update Library" connection reaches Jellyfin and returns 204 but is
-# a silent no-op: it reports /music/... paths, Jellyfin's library is /data/movies/
-# music/..., and unmatched paths are dropped without a log line. Sonarr and Radarr
-# have mapFrom/mapTo fields for this; Lidarr's connection does not expose them, so
-# the mapping lives here. Offset from the watchdog's */5 so they don't collide.
-2-59/5 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name lidarr-jellyfin-bridge --lock /tmp/nas-lidarr-jf-bridge.lock --max-age-min 30 -- python scripts/lidarr_jellyfin_bridge.py >> logs/lidarr_jellyfin_bridge.log 2>&1"
 # Every 10 min — tell an off-box dead-man's switch this host is alive. Exits 1
 # (a reported condition, not a failure) when NAS_HEARTBEAT_URL is unset or when
 # stack_watchdog has gone quiet, and 2 only when the ping itself cannot be

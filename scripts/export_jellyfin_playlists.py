@@ -20,7 +20,9 @@ Three things this has to get right, each measured rather than assumed:
    whose `CollectionType` is `music`). ADR-0003's repath broke two consumers
    that had stored a prefix, so a tool that writes paths gets its prefix from
    the service that owns it. A playlist whose tracks match NO known prefix is
-   exit 2, never a warning -- the same rule `lidarr_jellyfin_bridge.py` follows.
+   exit 2, never a warning: a path this cannot translate is a repath nobody
+   told it about, and writing the untranslated path would produce a playlist
+   that resolves for nobody.
 
 2. **The playlist name is not the filename.** `#PLAYLIST:` wins in Navidrome
    (measured), so names keep their `/`, `✦` and Cyrillic while the filename is
@@ -31,9 +33,13 @@ Three things this has to get right, each measured rather than assumed:
    on the host. Only a relative path is true in all four.
 
 A `Playlists/` directory inside the music tree is invisible to every existing
-consumer, which is why it is safe to put it there: `music_library_sweep.py` and
-`album_art.py` both key off AUDIO file extensions, and Lidarr reports no unmapped
-folder for it (all three verified 2026-09-16).
+consumer, which is why it is safe to put it there: `album_art.py` keys off AUDIO
+file extensions, and Lidarr reports no unmapped folder for it (both verified
+2026-09-16).
+
+This is a ONE-OFF migration tool, kept for the record and for re-running if
+Jellyfin ever holds audio playlists again. Jellyfin has had no music library
+since 2026-09-16 (ADR-0051), so a run today finds nothing to export.
 
 Usage
 -----
@@ -128,7 +134,7 @@ def music_library_roots(host: str, token: str) -> list[str] | None:
 
   Read rather than hardcoded on purpose: ADR-0003's repath broke every consumer
   that had a prefix compiled into it. Longest first, so a broad root cannot
-  swallow a more specific one -- the rule lidarr_jellyfin_bridge.py follows.
+  swallow a more specific one.
   """
   folders = _get_json(f"{host.rstrip('/')}/Library/VirtualFolders", token)
   if not isinstance(folders, list):

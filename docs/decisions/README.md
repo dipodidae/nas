@@ -61,3 +61,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0048](0048-a-zero-byte-wal-is-a-receipt.md)             | A 0-byte `-wal` is a checkpoint receipt; the check now asserts bytes, not filenames                  |
 | [0049](0049-lidarr-triggers-navidrome-scans.md)          | Lidarr triggers Navidrome's scan; only `OnReleaseImport`/`OnRename` call `Update()`                  |
 | [0050](0050-playlists-reach-phones-through-navidrome.md) | Playlists out of Jellyfin and into Navidrome; a Subsonic `path` is synthesised from tags             |
+| [0051](0051-jellyfin-drops-music.md)                     | Jellyfin drops music; a deleted library orphans its items, and SQLite needs a VACUUM                 |

@@ -410,12 +410,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> the newest config archive actually holds the databases (ADR-0037)"; \
 	.venv/bin/python scripts/check_backup_contents.py \
 	  || { rc=1; crit=1; note "the nightly config archive is missing state that cannot be rebuilt (ADR-0037)"; }; \
-	echo "==> Lidarr's root folder is one the Jellyfin bridge translates (ADR-0003)"; \
-	.venv/bin/python scripts/check-lidarr-bridge-root.py \
-	  || { rc=1; note "Lidarr's root folder is not covered by lidarr_jellyfin_bridge.py -- imports will not reach Jellyfin (ADR-0003)"; }; \
-	echo "==> Lidarr's Jellyfin connection still lacks mapFrom/mapTo (Lidarr#5646)"; \
-	.venv/bin/python scripts/check-lidarr-jellyfin-notification.py \
-	  || { rc=1; note "Lidarr notification 6 changed: either mapFrom/mapTo appeared (retire the bridge) or a delete toggle drifted on"; }; \
+	echo "==> Jellyfin holds NO music library (ADR-0051)"; \
+	.venv/bin/python scripts/check-jellyfin-no-music.py \
+	  || { rc=1; note "a music library or music items are back in Jellyfin -- Navidrome owns music, and a second indexer of the same tree is what put 168k items and 1.4 GB of free pages in Jellyfin's DB (ADR-0051)"; }; \
 	echo "==> Lidarr still tells Navidrome to rescan on import (ADR-0049)"; \
 	.venv/bin/python scripts/check-lidarr-navidrome-notification.py \
 	  || { rc=1; note "Lidarr's Navidrome connector drifted, or its Navidrome principal lost adminRole -- new albums now wait up to an hour for the scheduled scan (ADR-0049)"; }; \
