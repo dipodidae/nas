@@ -85,6 +85,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
+# Which subtrees regenerate is one fact, so it is imported rather than
+# restated. It matters more here than it does there: config_backup runs
+# against a LIVE stack, while this copy runs with the service STOPPED, so
+# every byte of it is downtime. Unfiltered, jellyfin's tree is 197,841 files /
+# 21.9 GB -- ~17 minutes cross-device -- of which 19 GB is `data/metadata`
+# artwork Jellyfin re-fetches on demand, and lidarr's is 13.3 GB with 8.1 GB
+# of MediaCover. Measured 2026-09-16, after an update run was reported as hung.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config_backup import DEFAULT_EXCLUDES  # noqa: E402, I001
+
 # Docker's default when a service declares no stop_grace_period. A store that
 # checkpoints on close needs more than this -- ADR-0041.
 DOCKER_DEFAULT_STOP = 10
@@ -320,14 +330,55 @@ def stop_is_truncated(caps: list[str], grace: str | int | None) -> bool:
   return secs is None or secs <= DOCKER_DEFAULT_STOP
 
 
-def wal_is_clean(paths: list[str]) -> bool:
-  """True when a stopped SQLite service left no -wal/-shm behind.
+def dirty_wals(entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
+  """The `-wal` files that still hold frames, largest first.
+
+  Content, not existence. A `-wal` holds committed frames not yet folded into
+  the `.db`, so a NON-EMPTY one is what makes a `.db`-only copy stale. A
+  0-byte one is the opposite: it is the receipt for a checkpoint that already
+  happened. And a `-shm` is a shared-memory index INTO the `-wal` -- it holds
+  no committed data of its own, so it is evidence of nothing either way.
+
+  SQLite normally unlinks both on a clean close, but a connection that
+  persists its WAL leaves them at 0 bytes instead; jellyfin's introskipper
+  plugin does exactly that.
+  """
+  return sorted(((p, n) for p, n in entries if p.endswith("-wal") and n > 0),
+                key=lambda e: -e[1])
+
+
+def wal_is_clean(entries: list[tuple[str, int]]) -> bool:
+  """True when a stopped SQLite service left nothing un-checkpointed.
 
   This is the assertion that separates a real stop from a SIGKILL that
   `docker compose stop` still reported as success. A dirty WAL here means any
-  backup copying the `.db` alone is stale -- silently, every time.
+  backup copying the `.db` alone is stale -- silently, every time (ADR-0041).
   """
-  return not any(p.endswith(("-wal", "-shm")) for p in paths)
+  return not dirty_wals(entries)
+
+
+def backup_filter_rules(excludes: list[str] | None = None) -> list[str]:
+  """`rsync` filter arguments for a cold pre-upgrade copy.
+
+  Two properties of rsync's filter engine decide the shape of this, and
+  getting either wrong fails quietly rather than loudly. The FIRST matching
+  rule wins, so every re-include has to precede the excludes; and an excluded
+  directory is never descended into, so a re-include of something beneath one
+  must name each parent directory as well or nothing can ever reach it.
+  """
+  patterns = DEFAULT_EXCLUDES if excludes is None else excludes
+  includes: list[str] = []
+  for pat in patterns:
+    if not pat.startswith("!"):
+      continue
+    keep = pat[1:]
+    parts = keep.rstrip("*").strip("/").split("/")
+    for depth in range(1, len(parts) + 1):
+      rule = f"--include={'/'.join(parts[:depth])}/"
+      if rule not in includes:
+        includes.append(rule)
+    includes.append(f"--include={keep}")
+  return includes + [f"--exclude={p}" for p in patterns if not p.startswith("!")]
 
 
 def needs_parent_mount(target_major: int | None, mount_target: str) -> bool:
@@ -681,20 +732,63 @@ def sqlite_backup(service: str, config_dir: Path, dest: Path) -> tuple[bool, str
   run(["docker", "compose", "stop", service], timeout=600)
   code = run(["docker", "inspect", "-f", "{{.State.ExitCode}}", service], timeout=60)
   exit_code = code.stdout.strip()
-  leftovers = [str(p) for p in src.rglob("*") if p.name.endswith(("-wal", "-shm"))]
+  leftovers = [(str(p), p.stat().st_size) for p in src.rglob("*")
+               if p.name.endswith(("-wal", "-shm")) and p.is_file()]
   dest.mkdir(parents=True, exist_ok=True)
-  cp = run(["cp", "-a", str(src), str(dest / service)], timeout=3600)
-  if cp.returncode != 0:
-    return False, f"copy failed: {cp.stderr.strip()[:200]}"
-  if not wal_is_clean(leftovers):
+  # The service is down from the `stop` above until the copy returns, and
+  # `run` captures output, so an unannounced copy is indistinguishable from a
+  # hang. That is exactly how this step was reported on 2026-09-16.
+  print(f"    copying {service}'s store -> {dest / service} "
+        "(regenerable caches/artwork skipped; service is down until this ends)")
+  copied, how = copy_tree(config_dir, service, dest)
+  if not copied:
+    return False, how
+  dirty = dirty_wals(leftovers)
+  if dirty:
+    named = ", ".join(f"{Path(p).name} ({n:,} bytes)" for p, n in dirty[:3])
     return (
       False,
-      f"{service} stopped with exit {exit_code} but left {len(leftovers)} "
-      f"-wal/-shm file(s): {', '.join(Path(p).name for p in leftovers[:3])}. "
-      "The copy is of a database mid-write. Give it a stop_grace_period "
-      "above Docker's 10s default (ADR-0041) and retry.",
+      f"{service} stopped with exit {exit_code} but left {len(dirty)} "
+      f"un-checkpointed WAL(s): {named}. The copy is of a database "
+      "mid-write. Give it a stop_grace_period above Docker's 10s default "
+      "(ADR-0041) and retry.",
     )
-  return True, f"{service} stopped cleanly (exit {exit_code}), WAL checkpointed"
+  return True, f"{service} stopped cleanly (exit {exit_code}), WAL checkpointed; {how}"
+
+
+def copy_tree(config_dir: Path, service: str, dest: Path) -> tuple[bool, str]:
+  """Copy one service's config tree into `dest/<service>`, minus what regenerates.
+
+  `rsync -R` from the config ROOT with a `/./` pivot, so the transferred paths
+  carry the `<service>/` prefix that the shared exclude patterns are written
+  against -- they say `jellyfin/data/metadata/**`, not `data/metadata/**`.
+  The result is `dest/<service>`, the same shape the `cp -a` this replaced
+  produced.
+
+  The database assertion at the end is not ceremony. Skipping subtrees is the
+  whole point of this function, and an over-broad pattern would show up as a
+  fast, clean, empty backup -- which is worse than the slow one it replaced,
+  and would only be discovered on the day someone needed to roll back.
+  """
+  p = run(["rsync", "-a", "-R", "--stats", *backup_filter_rules(),
+           f"{config_dir}/./{service}", f"{dest}/"], timeout=3600)
+  if p.returncode != 0:
+    return False, f"copy failed: {p.stderr.strip()[:200]}"
+
+  n = size = "?"
+  for line in p.stdout.splitlines():
+    if line.startswith("Number of regular files transferred:"):
+      n = line.split(":", 1)[1].strip()
+    elif line.startswith("Total transferred file size:"):
+      size = line.split(":", 1)[1].strip().split(" bytes")[0]
+
+  if not any(q.is_file() for q in (dest / service).rglob("*.db")):
+    return False, (
+      f"copied {n} file(s) to {dest / service} but no database landed there. "
+      "Every service with a store here keeps at least one *.db, so this is "
+      "not a backup -- check the exclude patterns before retrying."
+    )
+  return True, f"copied {n} file(s), {size} bytes (regenerable subtrees skipped)"
 
 
 def postgres_backup(service: str, client_image: str, user: str, db: str,

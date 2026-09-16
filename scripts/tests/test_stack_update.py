@@ -221,19 +221,50 @@ def test_grace_seconds_parsing(raw, expected):
 
 
 def test_clean_stop_leaves_no_wal():
-  assert su.wal_is_clean(["/c/jellyfin/data/data/jellyfin.db"]) is True
+  assert su.wal_is_clean([("/c/jellyfin/data/data/jellyfin.db", 1417224192)]) is True
 
 
 def test_dirty_wal_is_caught():
-  """`docker compose stop` returned 0 here. The WAL is the only witness."""
+  """`docker compose stop` returned 0 here. The WAL is the only witness.
+
+  These are ADR-0041's own measured bytes; they must still fail.
+  """
   assert su.wal_is_clean([
-    "/c/jellyfin/data/data/jellyfin.db",
-    "/c/jellyfin/data/data/jellyfin.db-wal",
+    ("/c/jellyfin/data/data/jellyfin.db", 1417224192),
+    ("/c/jellyfin/data/data/jellyfin.db-wal", 6336592),
+    ("/c/jellyfin/data/data/jellyfin.db-shm", 2785280),
   ]) is False
 
 
-def test_shm_alone_also_counts_as_dirty():
-  assert su.wal_is_clean(["/c/x.db", "/c/x.db-shm"]) is False
+def test_a_truncated_wal_is_a_checkpoint_not_a_dirty_database():
+  """A 0-byte `-wal` is the *proof* of a checkpoint, not the absence of one.
+
+  Jellyfin's introskipper plugin persists its WAL files rather than unlinking
+  them, so a clean stop leaves `introskipper.db-wal` at 0 bytes beside a live
+  32 KB `-shm`. Measured against a real database 2026-09-16: after
+  `PRAGMA wal_checkpoint(TRUNCATE)` a copy of the `.db` ALONE reads back
+  5000/5000 rows with `integrity_check` ok. Asserting on existence rather
+  than on content halts a one-way upgrade over a file with nothing in it.
+  """
+  assert su.wal_is_clean([
+    ("/c/jellyfin/data/data/introskipper/introskipper.db", 1069056),
+    ("/c/jellyfin/data/data/introskipper/introskipper.db-wal", 0),
+    ("/c/jellyfin/data/data/introskipper/introskipper.db-shm", 32768),
+  ]) is True
+
+
+def test_shm_alone_is_not_evidence_of_anything():
+  """`-shm` is a shared-memory index INTO the `-wal`; it holds no committed
+  data of its own, so with no `-wal` beside it there is nothing to lose."""
+  assert su.wal_is_clean([("/c/x.db", 4096), ("/c/x.db-shm", 32768)]) is True
+
+
+def test_one_dirty_wal_among_clean_ones_still_fails():
+  """The main database checkpointed; a plugin's did not. Still a bad backup."""
+  assert su.wal_is_clean([
+    ("/c/jellyfin/data/data/jellyfin.db-wal", 0),
+    ("/c/jellyfin/data/data/introskipper/introskipper.db-wal", 4194304),
+  ]) is False
 
 
 def test_empty_listing_is_clean():
@@ -565,3 +596,67 @@ def test_a_match_on_the_final_line_keeps_its_newline():
   out2, n2 = su.bump_image_line(img, "a/b:1", "a/b:2")
   assert n2 == 1
   assert out2 == "    image: a/b:2\n"
+
+
+# ---------------------------------------------------------------------------
+# backup_filter_rules — the pre-upgrade copy is downtime, so it must not
+# copy what regenerates. Measured 2026-09-16: an unfiltered `cp -a` of
+# jellyfin moved 197,841 files / 21.9 GB, of which 176,150 files / 19 GB was
+# `data/metadata` artwork Jellyfin re-fetches. At ~200 files/s cross-device
+# that is ~17 minutes with the service STOPPED, and the operator sees no
+# output for any of it -- which is why it was reported as a hang.
+# ---------------------------------------------------------------------------
+
+
+def test_the_regenerable_bulk_is_excluded():
+  """The two subtrees that made the copy 10x its useful size."""
+  rules = su.backup_filter_rules()
+  assert "--exclude=jellyfin/data/metadata/**" in rules   # 19 GB, re-fetched
+  assert "--exclude=*/MediaCover/**" in rules             # 8.1 GB in lidarr
+
+
+def test_reinclude_is_expanded_to_its_parents_and_ordered_first():
+  """rsync prunes an excluded directory before it can match a deeper include,
+  so `!a/b/c/**` needs every parent included too -- and every include must
+  precede the excludes, because rsync stops at the first matching rule."""
+  rules = su.backup_filter_rules(["a/b/**", "!a/b/c/**"])
+  assert rules == ["--include=a/", "--include=a/b/", "--include=a/b/c/",
+                   "--include=a/b/c/**", "--exclude=a/b/**"]
+
+
+def test_the_filter_keeps_the_database_and_drops_the_artwork(tmp_path):
+  """The rules are only worth anything if rsync agrees. Real rsync, real tree.
+
+  Guards the direction that matters: a fast backup missing `jellyfin.db` is
+  worse than the slow one it replaced.
+  """
+  src = tmp_path / "cfg" / "jellyfin"
+  for rel in ("data/data/jellyfin.db", "data/metadata/People/x/folder.jpg",
+              "system.xml", "encoding.xml", "cache/c.dat", "log/j.log",
+              "data/data/trickplay/t.jpg"):
+    p = src / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(rel)
+  dest = tmp_path / "out"
+  dest.mkdir()
+
+  ok, why = su.copy_tree(tmp_path / "cfg", "jellyfin", dest)
+  assert ok, why
+
+  kept = {str(p.relative_to(dest / "jellyfin"))
+          for p in (dest / "jellyfin").rglob("*") if p.is_file()}
+  assert kept == {"data/data/jellyfin.db", "system.xml", "encoding.xml"}
+
+
+def test_a_copy_that_loses_every_database_is_a_failure_not_a_backup(tmp_path):
+  """Defense in depth for the filter itself: the point of this backup is the
+  store, so a copy that landed no SQLite file at all must not report ok."""
+  src = tmp_path / "cfg" / "jellyfin"
+  (src / "data" / "metadata").mkdir(parents=True)
+  (src / "data" / "metadata" / "a.jpg").write_text("art")
+  dest = tmp_path / "out"
+  dest.mkdir()
+
+  ok, why = su.copy_tree(tmp_path / "cfg", "jellyfin", dest)
+  assert not ok
+  assert "no database" in why.lower()
