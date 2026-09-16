@@ -59,3 +59,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0046](0046-album-art-two-stage-and-miss-memory.md)  | Album art: a retry with no memory starved its own batch, and `-t 25` hid 80% of the gap              |
 | [0047](0047-pre-upgrade-backup-is-downtime.md)       | The pre-upgrade backup stopped jellyfin for 17 min to copy 19 GB of re-fetchable artwork             |
 | [0048](0048-a-zero-byte-wal-is-a-receipt.md)         | A 0-byte `-wal` is a checkpoint receipt; the check now asserts bytes, not filenames                  |
+| [0049](0049-lidarr-triggers-navidrome-scans.md)      | Lidarr triggers Navidrome's scan; only `OnReleaseImport`/`OnRename` call `Update()`                  |

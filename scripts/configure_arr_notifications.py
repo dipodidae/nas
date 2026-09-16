@@ -92,6 +92,10 @@ FORBIDDEN_TRIGGERS = frozenset({
   "onMovieAdded",
 })
 
+# Connectors that update a media server's library instead of messaging a human.
+# FORBIDDEN_TRIGGERS does not apply to them -- see the loop in configure_app().
+LIBRARY_UPDATE_IMPLEMENTATIONS = frozenset({"MediaBrowser", "Subsonic"})
+
 
 @dataclass(frozen=True)
 class App:
@@ -285,11 +289,17 @@ def converge_app(app: App, key: str, token: str, apply: bool) -> Outcome:
     bad = sorted(active_triggers(conn) & FORBIDDEN_TRIGGERS)
     if not bad:
       continue
-    # The Jellyfin (MediaBrowser) connector legitimately uses onRename and the
-    # delete events -- those drive library refreshes, not notifications, and
-    # ADR-0016/the jellyfin audit depend on them. Only notification connectors
-    # are in scope here.
-    if conn.get("implementation") == "MediaBrowser":
+    # Library-update connectors legitimately use onRename and the delete
+    # events: those drive library refreshes, not notifications, and nothing
+    # they do reaches a phone. This denylist is the alert-noise fix (ADR-0032),
+    # so only notification connectors are in scope.
+    #   MediaBrowser -- Jellyfin; ADR-0016 and the jellyfin audit depend on it.
+    #   Subsonic     -- Navidrome; onRename is one of only TWO triggers that
+    #                   reach _proxy.Update() and therefore /rest/startScan, so
+    #                   switching it off here would silently un-wire half of
+    #                   ADR-0049 on the next --apply run while --check stayed
+    #                   quiet about why.
+    if conn.get("implementation") in LIBRARY_UPDATE_IMPLEMENTATIONS:
       continue
     outcome.findings.append(
       Finding(app.name, f"{conn.get('name')!r} has forbidden trigger(s) {bad}")

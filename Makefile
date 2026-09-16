@@ -416,6 +416,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> Lidarr's Jellyfin connection still lacks mapFrom/mapTo (Lidarr#5646)"; \
 	.venv/bin/python scripts/check-lidarr-jellyfin-notification.py \
 	  || { rc=1; note "Lidarr notification 6 changed: either mapFrom/mapTo appeared (retire the bridge) or a delete toggle drifted on"; }; \
+	echo "==> Lidarr still tells Navidrome to rescan on import (ADR-0049)"; \
+	.venv/bin/python scripts/check-lidarr-navidrome-notification.py \
+	  || { rc=1; note "Lidarr's Navidrome connector drifted, or its Navidrome principal lost adminRole -- new albums now wait up to an hour for the scheduled scan (ADR-0049)"; }; \
 	echo "==> Jellyfin's live logging.json matches the repo pin"; \
 	if [ ! -f "$$CONFIG_DIRECTORY/jellyfin/logging.json" ]; then \
 	  echo "    !!! not installed -- run: make jellyfin-logging"; rc=1; \
