@@ -20,6 +20,17 @@ classic "clog" downstream of the slskd/Tubifarry interaction.
 
 What this script does
 ---------------------
+0. **Ambiguous-artist pass (default on).** When two artists in the library share a
+   name, Lidarr's ``DownloadMonitoringService`` throws ``MultipleArtistsFoundException``
+   while *tracking* the download and aborts before the import stage. The row is left
+   ``completed`` / ``downloading`` with no ``added`` timestamp, so it is invisible to
+   both the state gate in step 1 and the age gate below — the job reported
+   ``nothing to clean`` hourly while 11 finished albums sat in the queue (2026-09-16).
+   The download itself is fine: ``/manualimport`` resolves every file to the right
+   artist and album with zero rejections, because the grab history holds the real
+   ``artistId`` and only the name lookup is ambiguous. So these are manual-imported and
+   the row cleared with ``blocklist=false``. **Never deleted, never blocklisted** — on
+   failure the row is left in place for a human. Skipped with ``--no-ambiguous``.
 1. GET `/api/v1/queue?pageSize=200`
 2. **Reclaim pass (default on).** For every eligible record whose *only* blocking
    reason is ``Album release not requested`` — i.e. the peer sent a complete,
@@ -104,6 +115,13 @@ FAILED_STATE = "importFailed"
 # A row is reclaimable when this signal is present and no hard blocker is — the
 # files are a valid album, just a different MusicBrainz release than monitored.
 RECLAIM_SIGNAL = "album release not requested"
+# Two artists in the library share a name, so Lidarr's DownloadMonitoringService
+# throws MultipleArtistsFoundException while *tracking* the download and aborts
+# before the import stage. The row therefore never becomes importFailed and never
+# gets an 'added' timestamp -- it is invisible to both gates below. /manualimport
+# resolves it correctly (the grab history holds the real artistId), so these rows
+# are salvage-only: the download succeeded and must never be blocklisted.
+AMBIGUOUS_SIGNAL = "found multiple artists"
 HARD_BLOCKERS = (
   "not close enough",
   "couldn't find similar",
@@ -203,6 +221,42 @@ def collect_wedged(records: list[dict]) -> list[WedgedItem]:
         added=_parse_iso(r.get("added")),
         output_path=str(r.get("outputPath", "")),
         messages=_flatten_messages(r),
+      )
+    )
+  return out
+
+
+def collect_ambiguous(records: list[dict]) -> list[WedgedItem]:
+  """Rows wedged on a same-named-artist collision rather than a bad import.
+
+  Distinct from :func:`collect_wedged` on every axis that matters: the tracked
+  state is still ``downloading`` (tracking aborted), there is no ``added``
+  timestamp, and the payload on disk is *good*. Gated on ``status == completed``
+  so a transfer still running -- which carries the same stale message -- is left
+  alone until it finishes.
+  """
+  out: list[WedgedItem] = []
+  for r in records:
+    if str(r.get("status", "")).lower() != "completed":
+      continue
+    qid = r.get("id")
+    if not isinstance(qid, int):
+      continue
+    output_path = str(r.get("outputPath", ""))
+    if not output_path:
+      continue
+    messages = _flatten_messages(r)
+    if not any(AMBIGUOUS_SIGNAL in m.lower() for m in messages):
+      continue
+    out.append(
+      WedgedItem(
+        queue_id=qid,
+        title=str(r.get("title", "")),
+        status=str(r.get("status", "")),
+        tracked_state=str(r.get("trackedDownloadState", "")),
+        added=_parse_iso(r.get("added")),
+        output_path=output_path,
+        messages=messages,
       )
     )
   return out
@@ -504,6 +558,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--no-ambiguous",
+    action="store_true",
+    help=(
+      "Skip the ambiguous-artist pass (rows wedged because two library artists "
+      "share a name). That pass only ever manual-imports and clears; it never "
+      "blocklists or deletes."
+    ),
+  )
+  parser.add_argument(
     "--import-mode",
     default=DEFAULT_IMPORT_MODE,
     choices=("copy", "move"),
@@ -526,10 +589,50 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ERROR: cannot reach Lidarr: {exc}", file=sys.stderr)
     return 2
 
+  # Ambiguous-artist pass runs first and independently: these rows are not
+  # importFailed, so neither the state gate nor the age gate below can see them,
+  # and an empty importFailed set must not short-circuit the run.
+  ambiguous = [] if args.no_ambiguous else collect_ambiguous(records)
+  ambiguous_failed = 0
+  if ambiguous and args.dry_run:
+    print(f"plan: {len(ambiguous)} ambiguous-artist row(s) to manual-import")
+    for item in ambiguous[:10]:
+      print(f"  DRY ambiguous-artist #{item.queue_id} {item.title[:80]}")
+  elif ambiguous:
+    print(f"ambiguous-artist: {len(ambiguous)} row(s) wedged on a name collision")
+    recovered = 0
+    for item in ambiguous:
+      if reclaim_item(
+        host,
+        api_key,
+        item,
+        import_mode=args.import_mode,
+        accept_min_match=args.accept_min_match,
+      ):
+        recovered += 1
+        # The download was good; clear the row without blocklist or re-search.
+        if not delete_item(host, api_key, item, blocklist=False, skip_redownload=True):
+          print(
+            f"  imported #{item.queue_id} but row cleanup failed "
+            "(Lidarr will clear it next cycle)",
+            file=sys.stderr,
+          )
+      else:
+        # Never delete: the files are fine and the row is the only pointer to
+        # them. Leave it for a human rather than blocklisting a good release.
+        ambiguous_failed += 1
+        print(
+          f"  ambiguous-artist salvage failed for #{item.queue_id} "
+          f"({item.title[:60]}); left in queue",
+          file=sys.stderr,
+        )
+    print(f"ambiguous-artist: imported {recovered}/{len(ambiguous)}")
+
   all_wedged = collect_wedged(records)
   if not all_wedged:
-    print("nothing to clean: 0 importFailed items in queue")
-    return 0
+    if not ambiguous:
+      print("nothing to clean: 0 importFailed items in queue")
+    return 1 if ambiguous_failed else 0
 
   eligible, skipped = filter_old_enough(all_wedged, args.min_age_hours)
   if not eligible:
@@ -537,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
       f"nothing eligible: {len(all_wedged)} importFailed items all younger than "
       f"{args.min_age_hours}h (or missing 'added') — skipping"
     )
-    return 0
+    return 1 if ambiguous_failed else 0
 
   if args.no_reclaim:
     salvageable: list[WedgedItem] = []
@@ -619,7 +722,7 @@ def main(argv: list[str] | None = None) -> int:
       file=sys.stderr,
     )
     return 1
-  return 0
+  return 1 if ambiguous_failed else 0
 
 
 if __name__ == "__main__":

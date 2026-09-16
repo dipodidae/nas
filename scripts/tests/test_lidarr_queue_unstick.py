@@ -3,6 +3,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
   root = Path(__file__).resolve().parents[2]
@@ -484,3 +486,139 @@ def test_main_partial_failure_returns_1(monkeypatch, capsys):
   monkeypatch.setattr(unstick, "delete_item", lambda *a, **k: False)
   assert unstick.main(["--min-age-hours", "1"]) == 1
   assert "WARNING" in capsys.readouterr().err
+
+
+# --- ambiguous-artist pass (two same-named artists in the library) ------------
+# Lidarr's DownloadMonitoringService throws MultipleArtistsFoundException while
+# *tracking* the download, so the row never reaches importFailed and never gets
+# an 'added' timestamp. /manualimport resolves it perfectly (grab history knows
+# the artistId), so these are always salvage-never-delete.
+
+
+def _ambiguous_record(qid=7, status="completed"):
+  return {
+    "id": qid,
+    "title": "Svartsyn - Bloodline [AAC 129kbps]",
+    "status": status,
+    "trackedDownloadState": "downloading",
+    # no 'added' — tracking aborted before Lidarr set one
+    "outputPath": "/data/downloads/complete/slskd/Bloodline",
+    "statusMessages": [
+      {
+        "title": "Svartsyn - Bloodline [AAC 129kbps]",
+        "messages": [
+          "Unable to import automatically, found multiple artists: "
+          "[40b5455e][Svartsyn], [ea2af655][Svartsyn]"
+        ],
+      }
+    ],
+  }
+
+
+def test_collect_ambiguous_picks_completed_multiple_artists_rows():
+  items = unstick.collect_ambiguous([_ambiguous_record()])
+  assert [i.queue_id for i in items] == [7]
+
+
+def test_collect_ambiguous_ignores_still_downloading_rows():
+  # A row still transferring carries the same stale message; not ours yet.
+  assert unstick.collect_ambiguous([_ambiguous_record(status="queued")]) == []
+
+
+def test_collect_ambiguous_ignores_ordinary_import_failures():
+  records = [
+    {
+      "id": 1,
+      "title": "x",
+      "status": "completed",
+      "trackedDownloadState": "importFailed",
+      "outputPath": "/downloads/x",
+      "statusMessages": [{"title": "x", "messages": ["Album release not requested"]}],
+    }
+  ]
+  assert unstick.collect_ambiguous(records) == []
+
+
+def test_collect_ambiguous_requires_output_path():
+  rec = _ambiguous_record()
+  rec["outputPath"] = ""
+  assert unstick.collect_ambiguous([rec]) == []
+
+
+def test_collect_wedged_still_ignores_ambiguous_rows():
+  # The destructive pass must never see these: the download is good.
+  assert unstick.collect_wedged([_ambiguous_record()]) == []
+
+
+def test_main_ambiguous_salvaged_then_cleared_without_blocklist(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: [_ambiguous_record()])
+  reclaimed: list[int] = []
+  monkeypatch.setattr(
+    unstick,
+    "reclaim_item",
+    lambda h, k, item, **kw: reclaimed.append(item.queue_id) or True,
+  )
+  cleared: list[tuple] = []
+
+  def _del(host, key, item, blocklist=True, skip_redownload=False):
+    cleared.append((item.queue_id, blocklist, skip_redownload))
+    return True
+
+  monkeypatch.setattr(unstick, "delete_item", _del)
+  assert unstick.main([]) == 0
+  assert reclaimed == [7]
+  # never blocklist a download that actually succeeded
+  assert cleared == [(7, False, True)]
+  assert "ambiguous-artist" in capsys.readouterr().out
+
+
+def test_main_ambiguous_failure_never_deletes(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: [_ambiguous_record()])
+  monkeypatch.setattr(unstick, "reclaim_item", lambda *_a, **_k: False)
+  deleted: list[int] = []
+  monkeypatch.setattr(
+    unstick,
+    "delete_item",
+    lambda h, k, item, **kw: deleted.append(item.queue_id) or True,
+  )
+  # exit 1 (partial) — something is wedged and we could not fix it
+  assert unstick.main([]) == 1
+  assert deleted == []
+
+
+def test_main_ambiguous_runs_when_no_import_failed_rows(monkeypatch, capsys):
+  # Regression: the old early-return on an empty importFailed set skipped
+  # the whole run, which is exactly the Svartsyn case.
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: [_ambiguous_record()])
+  monkeypatch.setattr(unstick, "reclaim_item", lambda *_a, **_k: True)
+  monkeypatch.setattr(unstick, "delete_item", lambda *_a, **_k: True)
+  assert unstick.main([]) == 0
+  assert "nothing to clean" not in capsys.readouterr().out
+
+
+def test_main_no_ambiguous_flag_skips_the_pass(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: [_ambiguous_record()])
+  called: list[int] = []
+  monkeypatch.setattr(
+    unstick, "reclaim_item", lambda h, k, item, **kw: called.append(item.queue_id)
+  )
+  monkeypatch.setattr(unstick, "delete_item", lambda *_a, **_k: True)
+  assert unstick.main(["--no-ambiguous"]) == 0
+  assert called == []
+
+
+def test_main_ambiguous_dry_run_touches_nothing(monkeypatch, capsys):
+  monkeypatch.setenv("API_KEY_LIDARR", "x")
+  monkeypatch.setattr(unstick, "fetch_queue", lambda *_a, **_k: [_ambiguous_record()])
+  monkeypatch.setattr(
+    unstick, "reclaim_item", lambda *_a, **_k: pytest.fail("dry-run reclaimed")
+  )
+  monkeypatch.setattr(
+    unstick, "delete_item", lambda *_a, **_k: pytest.fail("dry-run deleted")
+  )
+  assert unstick.main(["--dry-run"]) == 0
+  assert "DRY ambiguous-artist" in capsys.readouterr().out

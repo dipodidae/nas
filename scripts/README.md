@@ -426,14 +426,16 @@ Clears Lidarr queue items wedged in `completed / importFailed` state. These accu
 
 The script splits failures by **why** they failed, because they need opposite handling:
 
+**Ambiguous-artist pass (default on).** When two artists in the library share a name — 15 names here have two or more monitored members — Lidarr throws `MultipleArtistsFoundException` while _tracking_ the download and aborts **before** the import stage. The row is left `completed` / `downloading` with an empty artist and **no `added` timestamp**, so it slips past both safety gates below and the script logged `nothing to clean: 0 importFailed items in queue` every hour on top of 11 fully-downloaded Svartsyn albums (2026-09-16). The download is fine: `GET /manualimport` resolves every file to the correct artist and album with zero rejections, because the grab history holds the real `artistId` and only the name lookup is ambiguous. Each such row is manual-imported (effect-verified like the reclaim pass) and then cleared with `blocklist=false&skipRedownload=true`. **It never deletes and never blocklists** — on failure the row is left in place for a human, because the queue row is the only pointer to a good release. Disable with `--no-ambiguous`.
+
 **Reclaim pass (default on).** `Album release not requested` is _not_ a bad download — the peer sent a complete, valid album that maps to a different MusicBrainz release than the one Lidarr monitors. Lidarr's automatic import pipeline deliberately disables release switching (so a random peer can't flip your monitored edition) and there is **no global toggle** for it, so these sit wedged forever. For each such row the script re-imports the download via the manual-import API with `disableReleaseSwitching: false`: Lidarr re-points the monitored release to the edition on disk and imports the files already there. Success is verified against the album's `trackFile` count (a ManualImport that imports nothing still reports `completed`), and if the primary import is a no-op — files were already copied into the library by a prior `albumImportIncomplete` but never registered — it re-scans the artist folder and registers those orphans in place. Only when track files actually appear is the now-satisfied row dropped with `blocklist=false&skipRedownload=true` (no re-download, no blocklist). Disable with `--no-reclaim`.
 
 **Destructive pass.** Genuine bad matches (`Album match is not close enough: X% vs 80%`, `Couldn't find similar album`) and any reclaim that failed get `DELETE /api/v1/queue/{id}?removeFromClient=true&blocklist=true&skipRedownload=true`: drops the entry, kills the slskd transfer via Tubifarry, and blocklists the specific release. `skipRedownload` is **true by default** — an immediate per-row replacement search piles onto the Soulseek search burst that earns flood bans, so re-finding is left to the paced `lidarr_backlog_drip`. Pass `--redownload` to search immediately.
 
 Safety design:
 
-1. **State gate** — only rows with `trackedDownloadState == importFailed` are touched. Downloading / importing rows are left strictly alone.
-2. **Age gate** — only acts on rows whose `added` timestamp is older than `--min-age-hours` (default `1`). Rows missing `added` are skipped conservatively.
+1. **State gate** — only rows with `trackedDownloadState == importFailed` are touched by the reclaim and destructive passes. Downloading / importing rows are left strictly alone. (The ambiguous-artist pass is deliberately outside this gate — its rows are `downloading` by definition — and is non-destructive to compensate.)
+2. **Age gate** — only acts on rows whose `added` timestamp is older than `--min-age-hours` (default `1`). Rows missing `added` are skipped conservatively. (Also bypassed by the ambiguous-artist pass, whose rows never get an `added` at all; it gates on `status == completed` instead, so a transfer still running is left alone.)
 3. **Reclaim is conservative** — a row is only reclaimed when `Album release not requested` is present _and_ no hard blocker (`not close enough`, `couldn't find similar`, `destination already exists`) is, so fuzzy matches never get force-imported.
 4. **Effect-verified** — reclaim never clears a queue row unless the album's track-file count actually increased.
 
@@ -442,6 +444,7 @@ python scripts/lidarr_queue_unstick.py                       # reclaim + clean n
 python scripts/lidarr_queue_unstick.py --dry-run             # report the reclaim/remove split only
 python scripts/lidarr_queue_unstick.py --min-age-hours 0     # immediate (manual one-off)
 python scripts/lidarr_queue_unstick.py --no-reclaim          # legacy: delete+blocklist+redownload everything
+python scripts/lidarr_queue_unstick.py --no-ambiguous        # skip the same-named-artist salvage pass
 python scripts/lidarr_queue_unstick.py --import-mode move    # reclaim with move instead of copy
 python scripts/lidarr_queue_unstick.py --redownload          # blocklist AND immediately search a replacement (default is skip — avoids flood bans)
 python scripts/lidarr_queue_unstick.py --no-blocklist        # remove only (not recommended — Tubifarry will re-grab the same junk)

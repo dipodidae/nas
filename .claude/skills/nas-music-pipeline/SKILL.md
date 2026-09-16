@@ -67,6 +67,15 @@ The doc had these swapped twice. Trust the docstrings.
 ## Normal-looking states that are not problems
 
 - All transfers `Queued, Remotely` — a peer's upload queue. Waiting hours is routine.
+
+**One that looks normal and is not:** a queue row reading `completed` / `downloading`
+with an **empty artist** and no `added` timestamp is wedged on a same-named-artist
+collision, not transferring. Lidarr aborts tracking with
+`MultipleArtistsFoundException` before the import stage, so it never becomes
+`importFailed` and `lidarr_queue_unstick` logged `nothing to clean` hourly on top of 11
+finished albums. The download is good — `lidarr_queue_unstick`'s ambiguous-artist pass
+manual-imports it. 15 artist names in this library have 2+ monitored members. See
+`docs/music-pipeline-integration.md` §7.2.
 - `albumImportIncomplete` — usually a genuinely partial release on Soulseek.
 - `downloadFailed` reading `"Manually marked as failed"` — that is the reaper doing its
   job. Never read the `downloadFailed` count without checking the message field.
