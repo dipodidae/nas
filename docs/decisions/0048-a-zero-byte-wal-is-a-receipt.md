@@ -28,25 +28,25 @@ the **introskipper plugin**, and on disk they were:
 -rw-r--r-- 1 tom tom  1069056 Sep  9 21:41 introskipper.db
 ```
 
-**Zero bytes.** `wal_is_clean()` asserted on the *existence* of a `-wal`/`-shm` name, so a
+**Zero bytes.** `wal_is_clean()` asserted on the _existence_ of a `-wal`/`-shm` name, so a
 file with nothing in it blocked a one-way upgrade.
 
 ## Why zero bytes means the opposite of what the check assumed
 
 A `-wal` holds committed frames not yet folded into the `.db`; that is the whole reason a
 `.db`-only copy can be stale. Frames live **in the `-wal` file**, so a 0-length one holds
-none — it is below even the 32-byte WAL header. A `-shm` is a shared-memory *index into*
+none — it is below even the 32-byte WAL header. A `-shm` is a shared-memory _index into_
 the `-wal`; it carries no committed data of its own and is rebuilt on demand.
 
 SQLite normally unlinks both on a clean close — verified here, a plain `close()` leaves
 neither file. A connection that persists its WAL leaves them in place at 0 bytes instead,
 which is what introskipper does. Measured against a real database, 2026-09-16:
 
-| | `-wal` | `-shm` |
-| --- | ---: | ---: |
-| open, frames not yet folded in | 61,832 | live |
-| after `PRAGMA wal_checkpoint(TRUNCATE)` | **0** | 32,768 |
-| after a plain clean `close()` | absent | absent |
+|                                         | `-wal` | `-shm` |
+| --------------------------------------- | -----: | -----: |
+| open, frames not yet folded in          | 61,832 |   live |
+| after `PRAGMA wal_checkpoint(TRUNCATE)` |  **0** | 32,768 |
+| after a plain clean `close()`           | absent | absent |
 
 Byte for byte the introskipper state. And copying the `.db` **alone** out of that
 truncated state reads back **5000 of 5000 rows** with `PRAGMA integrity_check` → `ok`.

@@ -15,10 +15,10 @@ the tree. The copy was an unfiltered `cp -a` of `${CONFIG_DIRECTORY}/<service>`.
 
 Measured on this host, 2026-09-16, for the `jellyfin` `12.1ubu2604-ls49 -> ls50` bump:
 
-| | files | bytes |
-| --- | ---: | ---: |
-| whole tree | 197,840 | 21.9 GB |
-| of which `data/metadata` | 176,150 | 19 GB |
+|                          |   files |   bytes |
+| ------------------------ | ------: | ------: |
+| whole tree               | 197,840 | 21.9 GB |
+| of which `data/metadata` | 176,150 |   19 GB |
 
 The destination is `/mnt/drive/backups/stack-update`, a different filesystem from the
 root LV the config tree lives on, so every file is a real read-and-write. The aborted run
@@ -72,7 +72,7 @@ Two properties of rsync's filter engine are load-bearing and both fail quietly:
 
 **3. The copy asserts a database landed.** Skipping subtrees is the entire point of the
 change, so an over-broad pattern is now the live risk — and it would present as a fast,
-clean, *empty* backup, discovered on the day someone needed to roll back. Every service in
+clean, _empty_ backup, discovered on the day someone needed to roll back. Every service in
 `STORES` with `Store.SQLITE` keeps at least one `*.db` under its config dir; a copy that
 lands none is a failure, not a backup. For a one-way service that halts the run, which is
 the correct outcome.
@@ -85,17 +85,17 @@ is indistinguishable from a hang.
 
 Every `Store.SQLITE` service, verified against the real config tree with the new rules:
 
-| service | files | → | GB | → | store DBs kept |
-| --- | ---: | --- | ---: | --- | --- |
-| jellyfin | 197,839 | 677 | 21.88 | 1.75 | 4/4 |
-| lidarr | 40,841 | 135 | 13.32 | 2.67 | 1/1 |
-| sonarr | 792 | 97 | 0.22 | 0.13 | 1/1 |
-| radarr | 595 | 75 | 0.19 | 0.07 | 1/1 |
-| prowlarr | 711 | 703 | 0.16 | 0.14 | 1/1 |
-| qbittorrent | 197 | 195 | 0.04 | 0.04 | 1/1 |
-| bazarr | 23 | 10 | 0.02 | 0.01 | 1/1 |
-| beszel | 5 | 3 | 0.01 | 0.00 | 2/2 |
-| tinyauth | 2 | 2 | 0.00 | 0.00 | 1/1 |
+| service     |   files | →   |    GB | →    | store DBs kept |
+| ----------- | ------: | --- | ----: | ---- | -------------- |
+| jellyfin    | 197,839 | 677 | 21.88 | 1.75 | 4/4            |
+| lidarr      |  40,841 | 135 | 13.32 | 2.67 | 1/1            |
+| sonarr      |     792 | 97  |  0.22 | 0.13 | 1/1            |
+| radarr      |     595 | 75  |  0.19 | 0.07 | 1/1            |
+| prowlarr    |     711 | 703 |  0.16 | 0.14 | 1/1            |
+| qbittorrent |     197 | 195 |  0.04 | 0.04 | 1/1            |
+| bazarr      |      23 | 10  |  0.02 | 0.01 | 1/1            |
+| beszel      |       5 | 3   |  0.01 | 0.00 | 2/2            |
+| tinyauth    |       2 | 2   |  0.00 | 0.00 | 1/1            |
 
 The only databases dropped are each `*arr`'s `logs.db` (`**/logs.db*`, excluded on
 purpose; 285 MB in lidarr alone), which is a log store, not the service's state.
