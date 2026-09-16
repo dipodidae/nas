@@ -15,7 +15,7 @@ Single-host homelab NAS stack: **one** Compose project split across many files (
 - `README.md` — service table, ports, setup walkthrough.
 - `scripts/README.md` — per-script flags, exit codes, and the operational workflows (backup, audit, log prune, post-update verify, qBittorrent kickstart, Prowlarr priority management).
 
-The root-level one-off writeups this section used to list (`*-README.md`, `OPTIMIZATION-*.md`, `RADARR_NAMING_*.md`, `JELLYFIN-NO-TRANSCODING-*.md`) **no longer exist** — the only root-level docs are this file, `AGENTS.md`, `README.md` and `TRIAGE-2026-09-03.md`. Historical fixes now live in `docs/` and `docs/decisions/`. Treat `TRIAGE-*.md` as a dated snapshot, not an active runbook, and check the live config before trusting any of it.
+The root-level one-off writeups this section used to list (`*-README.md`, `OPTIMIZATION-*.md`, `RADARR_NAMING_*.md`, `JELLYFIN-NO-TRANSCODING-*.md`) **no longer exist** — the only root-level docs are this file, `AGENTS.md` and `README.md`. Historical fixes now live in `docs/` and `docs/decisions/`. `TRIAGE-2026-09-03.md` joined them on 2026-09-16 for exactly that reason — it was a dated snapshot being read as an active runbook. Recover it from git history rather than looking for it on disk (`git show 06634a2:TRIAGE-2026-09-03.md`).
 
 ## Common commands
 

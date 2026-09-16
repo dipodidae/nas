@@ -128,7 +128,8 @@ misconfiguration. Its definition is exported to
 `docs/removed-indexers/torrent-core-2026-09-03.json` (secret-shaped fields
 redacted on export) so it can be re-added if the site returns.
 
-`1337x` was left in place pending a separate decision; see
-`TRIAGE-2026-09-03.md` §P4 for why byparr cannot fix it (Prowlarr#2572, #2672 —
-Prowlarr discards the solver's body and re-fetches with its own TLS
-fingerprint).
+`1337x` was left in place pending a separate decision. byparr cannot fix it
+(Prowlarr#2572, #2672 — Prowlarr discards the solver's body and re-fetches with
+its own TLS fingerprint). The fuller writeup was `TRIAGE-2026-09-03.md` §P4,
+deleted 2026-09-16; recover it with
+`git show 06634a2:TRIAGE-2026-09-03.md`.
