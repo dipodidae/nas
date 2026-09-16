@@ -119,7 +119,7 @@
 
 # jellyfin
 #   release tags only; a 12.0 major, a 12.0.z point release and a legacy 10.11.z all surface
-- name: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls49
+- name: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls50
   metadata:
     service: jellyfin
   watch_repo: true

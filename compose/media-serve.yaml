@@ -19,7 +19,7 @@ services:
     # deliberately with `make pull-jellyfin`, which waits for healthy.
     # Consequence, accepted: pinned + unlabelled means Watchtower will never
     # report a Jellyfin update. ADR-0006, ADR-0020.
-    image: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls49
+    image: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls50
     container_name: jellyfin
     environment:
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
