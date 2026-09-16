@@ -148,7 +148,7 @@ boundaries and `depends_on` only resolves within a project.
 │   ├── media-manage.yaml         # sonarr, radarr, lidarr, bazarr, whisper,
 │   │                             #   lingarr, cleanuparr, recyclarr
 │   ├── media-serve.yaml          # jellyfin, jellyseerr
-│   └── storage.yaml              # nextcloud
+│   └── storage.yaml              # nextcloud, nextcloud-db
 ├── webapps/<app>/compose.yaml    # one per locally-built app, next to its Dockerfile
 ├── docs/decisions/               # 32 ADRs — the incident history
 ├── scripts/                      # host-side Python/Bash ops tooling (not deployed)
@@ -252,6 +252,7 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 | `jellyseerr` | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056`                       | yes    | Requests                                                                                                                  |
 | `navidrome`  | deluan/navidrome **pinned**    | `127.0.0.1:4533`                       | **NO** | Subsonic music server. `/rest` is path-scoped **open** [ADR-0044](docs/decisions/0044-navidrome-subsonic-path-scope.md)   |
 | `nextcloud`  | lscr.io/…/nextcloud            | `127.0.0.1:8087`                       | yes    | Whole share at `/external/*`. Log budget 25m/3                                                                            |
+| `nextcloud-db` | postgres **pinned**          | none (nas-network only)                | **NO** | Nextcloud's OWN postgres — not a tenant in the other two. Engine over live data                                            |
 
 ### Locally built — `webapps/*/compose.yaml`
 
@@ -271,7 +272,7 @@ image has no registry to watch, so `diun`'s manifest emitter skips them.
 `depends_on` edges, four of which cross module files — the reason this is one project:
 
 ```
-4eva-rootpage ─(healthy)→ swag ────────→ nextcloud
+4eva-rootpage ─(healthy)→ swag ────────→ nextcloud ←(healthy)─ nextcloud-db
 dockerproxy ──→ autoheal   (its only client — ADR-0025)
 qbittorrent ──→ prowlarr, qui ──→ sonarr, radarr, lidarr
 slskd ────────→ lidarr ─────────→ lidarr-bulk
@@ -280,6 +281,7 @@ sonarr, radarr ─────→ recyclarr
 jellyfin, sonarr, radarr ──→ jellyseerr
 sonarr, radarr, lidarr, qbittorrent(healthy) ──→ cleanuparr
 playlist-generator-db ─(healthy)→ playlist-generator
+streamystats-db ──────(healthy)→ streamystats, streamystats-jobs
 ```
 
 ---

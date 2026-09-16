@@ -116,6 +116,7 @@ MANUAL_UPDATE_ONLY = {
     "beszel":                "PocketBase DB under the metric history; bump it deliberately",
     "beszel-agent":          "must stay in lockstep with the hub it reports to",
     "streamystats-db":       "VectorChord/Postgres engine under live data",
+    "nextcloud-db":          "Postgres engine under live data; its own, not a tenant",
     "streamystats":          "must stay in lockstep with its job server and schema",
     "streamystats-jobs":     "must stay in lockstep with the UI and schema",
     "tinyauth":              "a bad auth container closes every protected door at once; chosen, never inherited",
@@ -249,6 +250,10 @@ SECRET_OK = {
     # slips past it entirely. The check is a tripwire for forgotten credentials,
     # not a proof that none are present.
     "streamystats", "streamystats-db", "streamystats-jobs",
+    # nextcloud-db: POSTGRES_PASSWORD, read by the postgres entrypoint at
+    # initdb and never again. Nextcloud itself does NOT get it as an env var --
+    # it is typed into the setup wizard once and lands in config.php.
+    "nextcloud-db",
 }
 
 # Env vars that must NOT appear on a given service, whatever else changes.

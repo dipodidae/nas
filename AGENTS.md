@@ -267,6 +267,9 @@ Required in `.env`:
   Read from the `admin` user row in `${CONFIG_DIRECTORY}/cleanuparr/users.db`; regenerate in the UI
   under Account, or via `POST /api/account/api-key/regenerate`. See `docs/cleanuparr-configuration.md`.
 - `PLAYLIST_GENERATOR_DB_PASSWORD` - Postgres/pgvector password for playlist-generator-db
+- `NEXTCLOUD_DB_PASSWORD` - Postgres password for nextcloud-db. Nextcloud's OWN
+  engine, not a tenant in playlist-generator-db or streamystats-db. Also stored in
+  Nextcloud's `config.php` after the setup wizard, so a rotation edits both
 - `LASTFM_API_KEY` - Last.fm API key for playlist-generator enrichment (read-only; `LASTFM_API_SECRET` optional)
 - `OPENAI_API_KEY`, `DISCOGS_TOKEN` - optional API keys for playlist-generator (app degrades gracefully without them)
 - `API_KEY_JELLYFIN`, `JELLYFIN_USER_ID` - used by playlist-generator's "Push to Jellyfin" export (creates a Jellyfin playlist for that user via the Jellyfin API)

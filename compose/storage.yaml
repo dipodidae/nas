@@ -30,6 +30,11 @@ services:
     depends_on:
       swag:
         condition: service_started
+      # service_healthy, not service_started: Nextcloud's installer and every
+      # page load open a connection immediately, and a postgres that is still
+      # running initdb answers the TCP connect and then refuses the auth.
+      nextcloud-db:
+        condition: service_healthy
     networks:
       - nas-network
     labels:
@@ -48,3 +53,53 @@ services:
       options:
         max-size: 25m
         max-file: '3'
+
+  # ------------------------------------------------------------------------
+  # Nextcloud's database. Its OWN postgres, not a tenant in one of the other
+  # two.
+  #
+  # The stack already runs playlist-generator-db (pgvector) and streamystats-db
+  # (VectorChord). Both are pinned and updated only by hand for one reason:
+  # "never bump a database engine under its data". Renting Nextcloud a database
+  # inside either would silently extend that decision -- a pgvector or vchord
+  # tag bump, taken for the app that owns the container, would move Nextcloud's
+  # data with it, and that app's restart would 500 every WebDAV client on the
+  # LAN. Nextcloud needs no extension at all, so the coupling would buy nothing.
+  #
+  # Debian-based `postgres:18.6`, not -alpine, deliberately: musl has no glibc
+  # locales, and Nextcloud sorts filenames in the database.
+  # ------------------------------------------------------------------------
+
+  nextcloud-db:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned, and updated only by hand. Engine with live data under
+    # it -- the same rule as playlist-generator-db and streamystats-db.
+    image: postgres:18.6
+    container_name: nextcloud-db
+    cap_add:
+      # Postgres' entrypoint runs as root to initdb and chown PGDATA, then
+      # drops to the postgres user. Same shape as the LSIO init set (ADR-0001),
+      # minus what it does not use.
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    environment:
+      - POSTGRES_USER=nextcloud
+      - POSTGRES_PASSWORD=${NEXTCLOUD_DB_PASSWORD}
+      - POSTGRES_DB=nextcloud
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      # INVARIANT: the mount is the PARENT, not .../data. ADR-0042.
+      - ${CONFIG_DIRECTORY}/nextcloud-db:/var/lib/postgresql
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U nextcloud -d nextcloud]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
