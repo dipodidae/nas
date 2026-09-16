@@ -20,7 +20,7 @@ together:
 2. **The `mapFrom`/`mapTo` path mapping** on Sonarr's and Radarr's MediaBrowser
    (Jellyfin) connections. Before it was fixed on 2026-09-01, *arr
    "Update Library" calls reached Jellyfin, returned `204`, and did nothing —
-   because the *arrs sent `/music/...`-shaped paths Jellyfin dropped.
+   because the \*arrs sent `/music/...`-shaped paths Jellyfin dropped.
 3. **playlist-generator's `LOCAL_PATH_PREFIX` / `JELLYFIN_PATH_PREFIX` pair**
    (`/music` → `/data/movies/music`), which rewrites local track paths for its
    "Push to Jellyfin" export.

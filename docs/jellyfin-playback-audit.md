@@ -34,7 +34,7 @@
 >   failure."
 > - **Pass 8**: **corrects pass 7's central conclusion.**
 >   The *arr → Jellyfin "Update Library" notifications were not merely
->   unverified for Radarr and Lidarr — they were *broken for all three\*, in
+>   unverified for Radarr and Lidarr — they were _broken for all three_, in
 >   a way pass 7's verification method could not have detected, and the
 >   Radarr/Lidarr "blocked on downloads" framing was wrong (both were
 >   forceable in minutes). Details in §3.1. Also: built the alerting that

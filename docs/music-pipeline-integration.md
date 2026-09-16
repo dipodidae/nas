@@ -4,11 +4,11 @@ How a music release gets from Soulseek onto disk, into Lidarr, and finally visib
 Jellyfin — every component, every path translation, and how to prove each stage works.
 
 **Audited end-to-end 2026-09-04. Result: all four stages working, 0 albums missing from
-Jellyfin across 15,268 on disk.** See [Audit log](#audit-log-2026-09-04) for the evidence.
+Jellyfin across 15,268 on disk.** See [Audit log](#audit-log--2026-09-04) for the evidence.
 
 This document exists because three of the four stages have failed silently at least once,
 each time returning a success code while doing nothing. Read
-[Failure modes](#failure-modes-and-their-tells) before changing anything here.
+[Failure modes](#7-failure-modes-and-their-tells) before changing anything here.
 
 ---
 
@@ -273,7 +273,7 @@ Design details that matter:
   One new artist at a time is fine; a **bulk backfill will alert**.
 - **An unmappable folder is `exit 2` with the cursor held**, never a warning. `cron_job.py`
   treats `0,1` as success, so a warning could not alert — which is exactly how a day of
-  imports was lost (see [§7](#failure-modes-and-their-tells)).
+  imports was lost (see [§7](#7-failure-modes-and-their-tells)).
 - **`DEFAULT_MAP_FROM` is a tuple**, `("/data/music", "/music")`, so history written on
   either side of the ADR-0003 repath still maps. Longest root wins, so adding a broad
   `/data` cannot swallow `/data/music`.

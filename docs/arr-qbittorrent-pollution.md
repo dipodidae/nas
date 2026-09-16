@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01
 **Scope:** diagnosis pass, then an approved execution pass. See
-[§X Execution](#x-execution-2026-09-01-approved-and-applied) for what was
+[§X Execution](#x-execution-2026-09-01--approved-and-applied) for what was
 actually changed — including one thing that went wrong and was rolled back.
 **Related:** `docs/qbittorrent-crash-fix.md` (same client, earlier the same day).
 
@@ -630,7 +630,7 @@ waived for the restructure.
 Buckets D and E went out through the *arr queue API with `blocklist=true`, so
 those releases are blocklisted and re-searched rather than silently dropped —
 `metaDL` rising 6 → 7 is that working. Bucket F went straight out of
-qBittorrent, since no *arr had a record to clean up.
+qBittorrent, since no \*arr had a record to clean up.
 
 Manifest of exactly what was removed: `logs/qbit_cleanup_<ts>.json`.
 Pre-change backups: `/mnt/drive/backups/pre-cleanup-1788287701/`.
