@@ -246,13 +246,13 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 
 ### Playback and storage
 
-| Service      | Image                          | Ports                                  | wt     | Notes                                                                                                                     |
-| ------------ | ------------------------------ | -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `jellyfin`   | lscr.io/…/jellyfin **pinned**  | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
-| `jellyseerr` | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056`                       | yes    | Requests                                                                                                                  |
-| `navidrome`  | deluan/navidrome **pinned**    | `127.0.0.1:4533`                       | **NO** | Subsonic music server. `/rest` is path-scoped **open** [ADR-0044](docs/decisions/0044-navidrome-subsonic-path-scope.md)   |
-| `nextcloud`  | lscr.io/…/nextcloud            | `127.0.0.1:8087`                       | yes    | Whole share at `/external/*`. Log budget 25m/3                                                                            |
-| `nextcloud-db` | postgres **pinned**          | none (nas-network only)                | **NO** | Nextcloud's OWN postgres — not a tenant in the other two. Engine over live data                                            |
+| Service        | Image                          | Ports                                  | wt     | Notes                                                                                                                     |
+| -------------- | ------------------------------ | -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `jellyfin`     | lscr.io/…/jellyfin **pinned**  | `8096`, `8920`, `7359/udp`, `1900/udp` | **NO** | QSV via `/dev/dri`. `mem_limit 10g` + 2 leak mitigations → [ADR-0008](docs/decisions/0008-jellyfin-memory-mitigations.md) |
+| `jellyseerr`   | ghcr.io/fallenbagel/jellyseerr | `127.0.0.1:5056`                       | yes    | Requests                                                                                                                  |
+| `navidrome`    | deluan/navidrome **pinned**    | `127.0.0.1:4533`                       | **NO** | Subsonic music server. `/rest` is path-scoped **open** [ADR-0044](docs/decisions/0044-navidrome-subsonic-path-scope.md)   |
+| `nextcloud`    | lscr.io/…/nextcloud            | `127.0.0.1:8087`                       | yes    | Whole share at `/external/*`. Log budget 25m/3                                                                            |
+| `nextcloud-db` | postgres **pinned**            | none (nas-network only)                | **NO** | Nextcloud's OWN postgres — not a tenant in the other two. Engine over live data                                           |
 
 ### Locally built — `webapps/*/compose.yaml`
 
