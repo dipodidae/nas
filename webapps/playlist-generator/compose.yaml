@@ -133,6 +133,22 @@ services:
       # reason it does not change. ADR-0016.
       - LOCAL_PATH_PREFIX=/music
       - JELLYFIN_PATH_PREFIX=/data/movies/music
+      # "Push to Navidrome" -- Subsonic, which is what Symfonium and the other
+      # phone clients actually speak. No path rewrite needed: resolution goes
+      # through search3 on title/artist/duration, because a Subsonic `path` is
+      # SYNTHESISED from tags and does not match the filesystem (ADR-0050).
+      #
+      # In-network only. The password rides in the query string, so this must
+      # never be navidrome.${PUBLIC_DOMAIN}, whose /rest ADR-0044 deliberately
+      # leaves un-gated for phones.
+      #
+      # The pushed playlist is OWNED by NAVIDROME_USER, so this names the
+      # account you browse Navidrome with. These are seed-only: the app copies
+      # them into its app_settings table on first boot and reads the DB after,
+      # so change them on the Settings page, not here.
+      - NAVIDROME_URL=http://navidrome:4533
+      - NAVIDROME_USER=${NAVIDROME_PLAYLIST_USER:-}
+      - NAVIDROME_PASSWORD=${NAVIDROME_PLAYLIST_PASSWORD:-}
     volumes:
       # RW (was :ro) so the in-app "Fix Jellyfin release dates" button can
       # write durable album.nfo sidecars (year + <lockdata>) into album
