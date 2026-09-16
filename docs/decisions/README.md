@@ -56,3 +56,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0043](0043-adguard-home-lan-dns.md)                 | AdGuard binds one address (systemd-resolved owns `0.0.0.0:53`); the host does not use it             |
 | [0044](0044-navidrome-subsonic-path-scope.md)        | Navidrome behind the door, `/rest` path-scoped open for Subsonic clients                             |
 | [0045](0045-unrouted-hostnames-must-error.md)        | An unrouted hostname answers 404; `site-confs/default.conf` is tracked                               |
+| [0046](0046-album-art-two-stage-and-miss-memory.md)  | Album art: a retry with no memory starved its own batch, and `-t 25` hid 80% of the gap              |

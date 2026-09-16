@@ -753,9 +753,15 @@ Safe by design: no deletions, no forceful state resets. One reannounce per batch
 
 ### `album_art.py`
 
-Backfills **missing external album covers** (`folder.jpg`) across the music library by delegating to [sacad](https://github.com/desbma/sacad)'s recursive `sacad_r` CLI, which searches Deezer/Discogs/iTunes/Last.fm and writes one image per album folder. Lidarr already writes `folder.jpg` for most albums (the convention this matches); this fills the few hundred gaps — and any future imports Lidarr fails to art — so Jellyfin always has a cover. `sacad_r` natively skips folders that already contain the cover file, so runs are incremental and idempotent (only the gaps trigger network calls). Albums with no cover on any source are simply left untouched and retried next run (sacad has no negative cache).
+Backfills **missing external album covers** (`folder.jpg`) across the music library by delegating to [sacad](https://github.com/desbma/sacad)'s recursive `sacad_r` CLI, which searches Deezer/Discogs/iTunes/Last.fm and writes one image per album folder. Lidarr already writes `folder.jpg` for most albums (the convention this matches); this fills the few hundred gaps — and any future imports Lidarr fails to art — so Jellyfin always has a cover. `sacad_r` natively skips folders that already contain the cover file, so runs are incremental and idempotent (only the gaps trigger network calls). Albums with no cover on any source are left untouched; sacad has no negative cache, so this script keeps one (`.album_art_none`, see below).
 
-**Overwrite-once (`--overwrite-once`)** — much Lidarr/embedded art is low quality. This mode overwrites each album's cover _once_ with a fresh sacad image (`sacad_r -i` per folder), then drops a hidden `.album_art_done` marker so consecutive runs skip that folder forever. New albums arrive unmarked and get their one pass on the next run. `--limit N` (default 300) caps folders per run so the first big pass drains across several runs. **A cover is never blanked** — sacad leaves existing art in place when no source has a replacement. A folder that still has no cover after its attempt stays unmarked and is retried next run (identical to plain gap-fill). `--marker` overrides the sidecar filename. This is the mode the weekly cron uses.
+**Overwrite-once (`--overwrite-once`)** — much Lidarr/embedded art is low quality. This mode overwrites each album's cover _once_ with a fresh sacad image (`sacad_r -i` per folder), then drops a hidden `.album_art_done` marker so consecutive runs skip that folder forever. New albums arrive unmarked and get their one pass on the next run. `--limit N` caps folders per run so the first big pass drains across several runs. **A cover is never blanked, and never replaced by a smaller one** — the existing file is copied aside before the pass and put back if the result is a downgrade. `--marker` overrides the sidecar filename. This is the mode the weekly cron uses.
+
+**Two passes, and a memory of misses (ADR-0046).** sacad's `-t` defaults to **25%**, so a search at `--size 1000` silently discards every cover under 750px and reports `Unable to find cover` — indistinguishable from an album that exists on no source. Any folder the primary pass leaves empty therefore gets a second, relaxed pass at `--fallback-size`/`--fallback-tolerance` (500/90). Measured on 20 albums that had failed every previous weekly run: **16 of them (80%) had art after the relaxed pass**.
+
+A folder that survives both passes with no art writes `.album_art_none`, a JSON sidecar holding an attempt count, and is skipped until its cooldown expires — 7 days after the first miss, then 30, then 90. Without it an unfindable album re-enters the batch on **every** run, at the head of a sorted list, and starves the queue behind it: the three runs before 2026-09-16 each processed 300 folders, marked only 82/116/145 done, and left a backlog that grew 1018 → 1296 → 1573, all at exit 0.
+
+**`--upgrade-below PX`** re-asks for art in folders already marked done whose cover is narrower than PX _and_ whose recorded attempt never asked for anything that large. The marker records both what was asked for and what was achieved, so a 400px cover that is 400px because no source has better is skipped from then on rather than re-fetched every week. Measured 2026-09-16: 1,179 covers under 500px, 2,067 under 600px, 804 of the sub-500 ones locked behind a done-marker.
 
 **Dry-run is the default** — a bare invocation walks the tree and prints a plan (album dirs found / already have the cover / missing, plus a sample of missing paths) and downloads nothing. `--apply` is required to fetch.
 
@@ -766,12 +772,13 @@ python scripts/album_art.py --apply               # fill only MISSING folder.jpg
 python scripts/album_art.py --apply --size 600    # smaller covers
 python scripts/album_art.py --apply --filename cover.jpg   # different cover filename
 python scripts/album_art.py --apply --ignore-existing      # force re-download ALL, every run
-python scripts/album_art.py --apply --overwrite-once --limit 300  # overwrite once then freeze (cron uses this)
+python scripts/album_art.py --apply --overwrite-once --limit 800 --upgrade-below 600  # the cron mode
+python scripts/album_art.py --overwrite-once --upgrade-below 600  # what is left, and why (writes nothing)
 ```
 
-Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited non-zero), `2` fatal (`sacad_r` not installed, music dir missing, unexpected error).
+Exit codes: `0` success / dry-run / nothing to do, `1` partial (`sacad_r` exited non-zero), `2` fatal (`sacad_r` not installed, music dir missing, unexpected error, **or a gap-fill batch of 20+ folders in which not one gained a cover** — the measured hit rate is ~80%, so 0% is an outage, and `cron_job.py` treats exit 1 as fine so it could not have alerted).
 
-Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 300`.
+Environment: `SHARE_DIRECTORY` (default `/mnt/drive`; music root resolves to `$SHARE_DIRECTORY/music` unless `--music-dir` given). Requires `sacad` installed in the venv (`pnpm py:deps`). Cron: Sunday 04:45, flock-guarded, `--apply --overwrite-once --limit 800 --upgrade-below 600`.
 
 **Scope note:** this is an _album_ tool. `sacad_r` never enters an artist
 directory, which is why artist images needed their own script — see

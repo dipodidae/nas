@@ -126,8 +126,26 @@
 # picture is written -- a wrong artist image looks correct forever. Measured
 # 31/40 written, 0 failures, 2 rejected by that gate on the first batch.
 50 3 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name artist-art --lock /tmp/nas-artist-art.lock --max-age-min 10380 -- python scripts/artist_art.py --apply --limit 400 >> logs/artist_art.log 2>&1"
-# Sunday 04:45 — backfill missing folder.jpg album covers (sacad, incremental: skips albums that already have one). After 04:30 post-update verifier, clear of the heavy hourly Tubifarry/slskd hygiene jobs.
-45 4 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name album-art --lock /tmp/nas-album-art.lock --max-age-min 10380 -- python scripts/album_art.py --apply --overwrite-once --limit 300 >> logs/album_art.log 2>&1"
+# Sunday 04:45 — album covers (sacad). After 04:30 post-update verifier, clear of
+# the heavy hourly Tubifarry/slskd hygiene jobs.
+#
+# --limit was 300 and the job was going BACKWARDS. A folder no source could
+# satisfy stayed unmarked, so it re-entered the batch every week at the head of
+# a sorted list: the three runs before 2026-09-16 each processed 300 folders,
+# marked only 82/116/145 done, and left a backlog that grew 1018 -> 1296 ->
+# 1573. Every run exited 0. `.album_art_none` now remembers a miss and holds it
+# out for 7/30/90 days, so the batch is spent on work that can move.
+#
+# Most of those "misses" were not misses: sacad's -t defaults to 25%, so --size
+# 1000 discards every cover under 750px and says "unable to find cover".
+# Re-running 20 permanently-failing albums at 500/90 found art for 16 (80%), so
+# the script now makes that relaxed second pass itself before recording a miss.
+#
+# --upgrade-below 600 re-asks for the 1,407 covers that settled under 600px and
+# were never asked for better (804 of them were locked behind a done-marker and
+# would never have been revisited). A cover is never replaced by a smaller one.
+# Measured 4.3 s/folder, so --limit 800 is a ~60 min run.
+45 4 * * 0 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name album-art --lock /tmp/nas-album-art.lock --max-age-min 10380 -- python scripts/album_art.py --apply --overwrite-once --limit 800 --upgrade-below 600 >> logs/album_art.log 2>&1"
 
 # --- Jellyfin OOM investigation (docs/jellyfin-playback-audit.md) ---
 # Every 5 min — sample jellyfin memory. Was every minute and was the ONE job in

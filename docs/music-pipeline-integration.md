@@ -358,6 +358,8 @@ series delete: `DELETE /api/v3/series/N?deleteFiles=true` removes the folder in 
 | 8   | **The expiring guard** — the bridge's cursor hold released itself | **none.** No artifact to grep: the lost records were never fetched                                                                                      | 2026-09-04, exhaustion is exit 2             |
 | 9   | Bridge cursor was a timestamp, and timestamps are not unique      | An import in the cursor's own second is skipped; nothing distinguishes it from a quiet window                                                           | 2026-09-04, cursor is a history `id`         |
 | 10  | Corrupt cursor state read as "no state"                           | `nothing to report`, exit 0, and the cursor silently re-based to now-30min                                                                              | 2026-09-04, four distinct exit 2s            |
+| 11  | Album-art retry with no memory starved its own batch              | `Processed 300 folder(s)` at exit 0 every week, while "already marked done" grew by only 82/116/145 and the unmarked backlog grew 1018 → 1296 → 1573    | 2026-09-16, `.album_art_none` + ADR-0046     |
+| 12  | sacad `-t 25` made `--size 1000` discard every cover under 750px  | `sacad_r: Unable to find cover` — byte-identical to an album that exists on no source. 16 of 20 "unfindable" albums had art at `500 -t 90`              | 2026-09-16, relaxed second pass, ADR-0046    |
 
 ### 7.1 The expiring guard (#8) — a new failure class
 
