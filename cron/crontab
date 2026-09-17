@@ -172,14 +172,34 @@
 # branches down took it to 3s, with output proved identical on all 147,090
 # tracks (0 mismatches, max abs diff 0.0).
 20 3 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-aggregates --lock /tmp/nas-playlist-stage.lock --lock-wait 1800 --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage studio-scores banger-flags clusters genre-manifold search-vectors >> logs/playlist_sync.log 2>&1"
-# 04:40 daily -- the network-bound catch-up stages, none of which were
-# scheduled before 2026-09-16. All three are rate-limited by someone else's
-# server (MusicBrainz is 1 req/s), so they are a nightly drip, not hourly.
-#   lastfm-artists matters more than its name suggests: track-level Last.fm
-#   tags cover 582 of 162,775 tracks (0.36%), so the BM25 search vector falls
-#   back to ARTIST tags for essentially the whole library, and 522 artists had
-#   none.
-40 4 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-catchup --lock /tmp/nas-playlist-stage.lock --lock-wait 1800 --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage lastfm-artists musicbrainz metal-archives >> logs/playlist_sync.log 2>&1"
+# 04:40 daily -- artist-level Last.fm. Matters more than its name suggests:
+# track-level Last.fm tags cover 582 of 162,947 tracks (0.36%), so the BM25
+# search vector falls back to ARTIST tags for essentially the whole library,
+# and 522 artists had none. Stays on the SHARED lock, deliberately: it is the
+# third Last.fm consumer in the fleet and serialising it against the other two
+# keeps this stack to one Last.fm request at a time. Measured 67s for 80
+# artists.
+40 4 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-catchup --lock /tmp/nas-playlist-stage.lock --lock-wait 1800 --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage lastfm-artists >> logs/playlist_sync.log 2>&1"
+# 05:40 daily -- MusicBrainz + Metal Archives, on their OWN lock.
+#
+# These two ran on the shared lock for exactly one night (2026-09-17) and that
+# was enough: 15,208s -- 4h13m -- during which they starved every hourly job,
+# up to EIGHT consecutive skips for playlist-lastfm-tracks, and cron_job.py's
+# --max-skips 3 correctly paged nas-attention for five separate jobs. The
+# alerting did its job; the schedule was wrong.
+#
+# Most of that was one-off backlog (albums with an MBID are now 17,444/17,833
+# and only 7 albums lack a legitimacy row), so a nightly run is now short. The
+# lock split is not about the current backlog though -- it removes the
+# CAPABILITY to starve the fleet, rather than depending on the backlog staying
+# drained through a heavy import week.
+#
+# Safe to run concurrently: both are I/O-bound on someone else's rate limit
+# (MusicBrainz is 1 req/s, Metal Archives is a polite scrape), so they await
+# and leave the event loop free -- the same distinction TRIAGE-2026-09-03 drew
+# between I/O and CPU stages. Neither touches Last.fm, so no rate-limit overlap
+# with the shared-lock stages.
+40 5 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name playlist-slow-catchup --lock /tmp/nas-playlist-slow.lock --max-age-min 2880 -- python scripts/playlist_sync_stage.py --stage musicbrainz metal-archives >> logs/playlist_sync.log 2>&1"
 # 05:10 daily -- librosa audio analysis. Its OWN lock, deliberately: this is a
 # multi-hour pass (17,959 tracks had no features on 2026-09-16) and on the
 # shared lock it would starve the hourly scan and derived jobs for the whole
