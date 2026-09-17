@@ -346,22 +346,23 @@ series delete: `DELETE /api/v3/series/N?deleteFiles=true` removes the folder in 
 
 ## 7. Failure modes and their tells
 
-| #   | Failure                                                                    | Tell                                                                                                                                                                                                                                   | Fixed                                                                       |
-| --- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| 1   | Lidarr sends `/music`, Jellyfin drops it, returns 204                      | New albums on disk + in Lidarr, absent in Jellyfin                                                                                                                                                                                     | 2026-09-01, bridge created                                                  |
-| 2   | Repath `/music` → `/data/music`, bridge translated only `/music`           | `nothing to report` while the **cursor advances** across a window where imports demonstrably happened; `grep 'outside' logs/lidarr_jellyfin_bridge.log`                                                                                | 2026-09-03, `MAP_FROM` tuple + exit 2                                       |
-| 3   | Dropped folder warned and returned 0, so cron could not alert              | 7 Kraftwerk albums missing for a day, no alert                                                                                                                                                                                         | 2026-09-03, unmappable → exit 2, cursor held                                |
-| 4   | Delete events never dispatched                                             | Files gone, Jellyfin holds items on dead paths                                                                                                                                                                                         | 2026-09-02, toggles on (Sonarr/Radarr)                                      |
-| 5   | `lidarr-bulk` still posted `rootFolderPath: /music`                        | **Every** artist add a hard `400`, `Root folder '/music' does not exist`                                                                                                                                                               | 2026-09-03                                                                  |
-| 6   | Tubifarry fallback fan-out                                                 | Soulseek 30-min ban, "quickly repeat a search"                                                                                                                                                                                         | 2026-06-17, both flags `False`                                              |
-| 7   | Login-aware healthcheck on autoheal path                                   | slskd restart spiral, never recovers                                                                                                                                                                                                   | by design — healthcheck is login-independent                                |
-| 8   | **The expiring guard** — the bridge's cursor hold released itself          | **none.** No artifact to grep: the lost records were never fetched                                                                                                                                                                     | 2026-09-04, exhaustion is exit 2                                            |
-| 9   | Bridge cursor was a timestamp, and timestamps are not unique               | An import in the cursor's own second is skipped; nothing distinguishes it from a quiet window                                                                                                                                          | 2026-09-04, cursor is a history `id`                                        |
-| 10  | Corrupt cursor state read as "no state"                                    | `nothing to report`, exit 0, and the cursor silently re-based to now-30min                                                                                                                                                             | 2026-09-04, four distinct exit 2s                                           |
-| 11  | Album-art retry with no memory starved its own batch                       | `Processed 300 folder(s)` at exit 0 every week, while "already marked done" grew by only 82/116/145 and the unmarked backlog grew 1018 → 1296 → 1573                                                                                   | 2026-09-16, `.album_art_none` + ADR-0046                                    |
-| 12  | sacad `-t 25` made `--size 1000` discard every cover under 750px           | `sacad_r: Unable to find cover` — byte-identical to an album that exists on no source. 16 of 20 "unfindable" albums had art at `500 -t 90`                                                                                             | 2026-09-16, relaxed second pass, ADR-0046                                   |
-| 13  | Two library artists share a name, so Lidarr aborts _tracking_ the download | `status: completed` + `trackedDownloadState: downloading` forever, empty artist column, **no `added`** — and `lidarr_queue_unstick` logs `nothing to clean: 0 importFailed items in queue`, byte-identical to a healthy run            | 2026-09-16, ambiguous-artist pass                                           |
-| 14  | Cleanuparr had Lidarr enabled and Seeker on, forming a closed re-grab loop | Queue Cleaner deletes the row at 3 strikes (~15 min), Seeker re-searches, the next peer fails identically. `lidarr_queue_unstick` logs `nothing eligible` **every hour** because its 1h age gate can never see a row that lives 15 min | 2026-09-17, Lidarr disabled + Seeker off, asserted by `make verify-runtime` |
+| #   | Failure                                                                          | Tell                                                                                                                                                                                                                                   | Fixed                                                                       |
+| --- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | Lidarr sends `/music`, Jellyfin drops it, returns 204                            | New albums on disk + in Lidarr, absent in Jellyfin                                                                                                                                                                                     | 2026-09-01, bridge created                                                  |
+| 2   | Repath `/music` → `/data/music`, bridge translated only `/music`                 | `nothing to report` while the **cursor advances** across a window where imports demonstrably happened; `grep 'outside' logs/lidarr_jellyfin_bridge.log`                                                                                | 2026-09-03, `MAP_FROM` tuple + exit 2                                       |
+| 3   | Dropped folder warned and returned 0, so cron could not alert                    | 7 Kraftwerk albums missing for a day, no alert                                                                                                                                                                                         | 2026-09-03, unmappable → exit 2, cursor held                                |
+| 4   | Delete events never dispatched                                                   | Files gone, Jellyfin holds items on dead paths                                                                                                                                                                                         | 2026-09-02, toggles on (Sonarr/Radarr)                                      |
+| 5   | `lidarr-bulk` still posted `rootFolderPath: /music`                              | **Every** artist add a hard `400`, `Root folder '/music' does not exist`                                                                                                                                                               | 2026-09-03                                                                  |
+| 6   | Tubifarry fallback fan-out                                                       | Soulseek 30-min ban, "quickly repeat a search"                                                                                                                                                                                         | 2026-06-17, both flags `False`                                              |
+| 7   | Login-aware healthcheck on autoheal path                                         | slskd restart spiral, never recovers                                                                                                                                                                                                   | by design — healthcheck is login-independent                                |
+| 8   | **The expiring guard** — the bridge's cursor hold released itself                | **none.** No artifact to grep: the lost records were never fetched                                                                                                                                                                     | 2026-09-04, exhaustion is exit 2                                            |
+| 9   | Bridge cursor was a timestamp, and timestamps are not unique                     | An import in the cursor's own second is skipped; nothing distinguishes it from a quiet window                                                                                                                                          | 2026-09-04, cursor is a history `id`                                        |
+| 10  | Corrupt cursor state read as "no state"                                          | `nothing to report`, exit 0, and the cursor silently re-based to now-30min                                                                                                                                                             | 2026-09-04, four distinct exit 2s                                           |
+| 11  | Album-art retry with no memory starved its own batch                             | `Processed 300 folder(s)` at exit 0 every week, while "already marked done" grew by only 82/116/145 and the unmarked backlog grew 1018 → 1296 → 1573                                                                                   | 2026-09-16, `.album_art_none` + ADR-0046                                    |
+| 12  | sacad `-t 25` made `--size 1000` discard every cover under 750px                 | `sacad_r: Unable to find cover` — byte-identical to an album that exists on no source. 16 of 20 "unfindable" albums had art at `500 -t 90`                                                                                             | 2026-09-16, relaxed second pass, ADR-0046                                   |
+| 13  | Two library artists share a name, so Lidarr aborts _tracking_ the download       | `status: completed` + `trackedDownloadState: downloading` forever, empty artist column, **no `added`** — and `lidarr_queue_unstick` logs `nothing to clean: 0 importFailed items in queue`, byte-identical to a healthy run            | 2026-09-16, ambiguous-artist pass                                           |
+| 14  | Cleanuparr had Lidarr enabled and Seeker on, forming a closed re-grab loop       | Queue Cleaner deletes the row at 3 strikes (~15 min), Seeker re-searches, the next peer fails identically. `lidarr_queue_unstick` logs `nothing eligible` **every hour** because its 1h age gate can never see a row that lives 15 min | 2026-09-17, Lidarr disabled + Seeker off, asserted by `make verify-runtime` |
+| 15  | A single token in the artist name makes every Soulseek search return 0 responses | Lidarr logs `No results found`; slskd logs `completed with 0 responses` **while other searches in the same minute get 100-250**. Not a ban: uploads and folder-listing requests keep serving normally                                  | 2026-09-17, diagnosed; per-artist workaround, no global fix                 |
 
 ### 7.1 The expiring guard (#8) — a new failure class
 
@@ -480,6 +481,81 @@ instance is the control that holds.
 
 `scripts/check-cleanuparr-excludes-lidarr.py` now asserts both on the live DB (WAL
 sidecars copied before reading) and runs in `make verify-runtime`.
+
+### 7.4 The unsearchable artist (#15)
+
+**Dimmu Borgir could not be searched at all.** 18 monitored albums, 0 files, and every
+Lidarr search returning `Album search completed. 0 reports downloaded.`
+
+It is not a ban, not slskd, and not our config. Bisecting the query:
+
+| search term                                 | responses               |
+| ------------------------------------------- | ----------------------- |
+| `Dimmu Borgir Enthrone Darkness Triumphant` | **0**                   |
+| `Enthrone Darkness Triumphant`              | 250 (limit), 3709 files |
+| `Dimmu`                                     | 250 (limit)             |
+| `Mayhem`                                    | 250 (limit)             |
+| **`Borgir`**                                | **0**                   |
+
+Any query containing the token `Borgir` returns zero responses network-wide, reproducibly,
+while unrelated searches minutes earlier and later return 100-250. Meanwhile slskd keeps
+uploading and serving folder listings throughout, so we are connected and not blocked --
+and 201 of those 250 responses to the album title held a complete Dimmu Borgir album in a
+folder literally named `Dimmu Borgir`. The peers have it; the query never reaches them.
+
+A tempting hypothesis -- that the substring `orgi` is filtered -- is **wrong**: `Giorgio
+Moroder` and `Georgia` both contain it and both return 250. The mechanism is specific to
+this token and lives on the Soulseek server side, outside anything this repo controls.
+
+**Why the pipeline cannot route around it.** Lidarr builds its query as
+`<Artist> <Album>`, so every Dimmu Borgir search contains the poisoned token. The one
+configurable lever is `searchTemplates` on the Tubifarry indexer (supports `{{AlbumTitle}}`,
+`{{AlbumYear}}`, `{{Artist.*}}`, empty = disabled). It **replaces** the query rather than
+adding a second one, so unlike `useFallbackSearch` it carries no flood-ban risk -- but it
+applies to all 3,720 artists, and album-title-only queries for generic titles (`Always…`,
+`Portals`, `Reset`) would flood a 100-response limit with the wrong artists. Not enabled.
+
+**The workaround that works**: search the album title alone, then filter results back to
+the right artist _by folder_. Downloads land with no Lidarr queue row and the 05:30
+`process_soulseek_imports.py` cron imports them.
+
+> **Filter by folder, not by response.** A peer sharing the whole discography answers
+> _every_ album-title search, so taking all the audio files in their response mixes albums
+> together -- a first pass resolved `Stormblåst` to a _Godless Savage Garden_ folder and
+> `Inn i evighetens mørke` to a rehearsal folder. Group each response's files by their
+> containing directory and require the directory name to contain the album's tokens. With
+> that fix the two distinct `Stormblåst` albums (1996 original, 10 tracks; 2005
+> re-recording, 11) resolved correctly and independently.
+
+Also note Lidarr's monitored release may be an edition nobody shares: `Eonian` is 25 tracks
+in Lidarr and 10-15 on every peer, so a strict track-count window finds nothing and needs a
+relaxed second pass.
+
+**How to test a suspect artist** (one search, no flood risk):
+
+```bash
+set -a; . ./.env; set +a
+python3 - <<'EOF'
+import json,os,time,urllib.request,uuid,sys
+B="http://localhost:5030/api/v0"; K=os.environ["API_KEY_SLSKD"]
+def req(m,p,d=None):
+    b=json.dumps(d).encode() if d else None
+    h={"X-API-Key":K}
+    if b: h["Content-Type"]="application/json"
+    r=urllib.request.urlopen(urllib.request.Request(B+p,data=b,method=m,headers=h),timeout=60)
+    x=r.read(); return json.loads(x) if x else None
+for term in sys.argv[1:]:
+    sid=str(uuid.uuid4()); req("POST","/searches",{"id":sid,"searchText":term})
+    for _ in range(16):
+        time.sleep(3); s=req("GET",f"/searches/{sid}")
+        if s.get("state","").startswith("Completed"): break
+    print(f"{term!r:40s} {s.get('state'):32s} responses={s.get('responseCount')}")
+    time.sleep(8)
+EOF
+```
+
+Zero responses for a popular term, while the rest of the fleet's searches return results,
+is this failure. Split the term and bisect.
 
 ## 8. Verification runbook
 

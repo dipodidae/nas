@@ -91,6 +91,14 @@ tracking with `MultipleArtistsFoundException` before the import stage, so it nev
 finished albums. The download is good — the ambiguous-artist pass manual-imports it. 15
 artist names here have 2+ monitored members. §7.2.
 
+**A popular artist whose every search returns 0 responses** is not a ban and not slskd.
+A single token in the name can be dead on the Soulseek server: any query containing
+`Borgir` returns 0 while `Dimmu`, `Mayhem` and the album title alone all return 250, and
+uploads keep serving throughout. Lidarr queries as `<Artist> <Album>`, so the artist is
+unreachable by automatic search. Workaround is an album-title search filtered back to the
+artist **by folder** (a peer sharing the discography answers every title search, so
+grouping by response instead of directory mixes albums). §7.4.
+
 **`nothing eligible: N importFailed items all younger than 1.0h`, hour after hour with a
 small constant N**, is not a quiet queue — it is a queue being emptied by something else
 before the salvage job can reach it. That something was Cleanuparr's Queue Cleaner with
