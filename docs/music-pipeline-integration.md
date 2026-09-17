@@ -346,21 +346,22 @@ series delete: `DELETE /api/v3/series/N?deleteFiles=true` removes the folder in 
 
 ## 7. Failure modes and their tells
 
-| #   | Failure                                                                    | Tell                                                                                                                                                                                                                        | Fixed                                        |
-| --- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 1   | Lidarr sends `/music`, Jellyfin drops it, returns 204                      | New albums on disk + in Lidarr, absent in Jellyfin                                                                                                                                                                          | 2026-09-01, bridge created                   |
-| 2   | Repath `/music` → `/data/music`, bridge translated only `/music`           | `nothing to report` while the **cursor advances** across a window where imports demonstrably happened; `grep 'outside' logs/lidarr_jellyfin_bridge.log`                                                                     | 2026-09-03, `MAP_FROM` tuple + exit 2        |
-| 3   | Dropped folder warned and returned 0, so cron could not alert              | 7 Kraftwerk albums missing for a day, no alert                                                                                                                                                                              | 2026-09-03, unmappable → exit 2, cursor held |
-| 4   | Delete events never dispatched                                             | Files gone, Jellyfin holds items on dead paths                                                                                                                                                                              | 2026-09-02, toggles on (Sonarr/Radarr)       |
-| 5   | `lidarr-bulk` still posted `rootFolderPath: /music`                        | **Every** artist add a hard `400`, `Root folder '/music' does not exist`                                                                                                                                                    | 2026-09-03                                   |
-| 6   | Tubifarry fallback fan-out                                                 | Soulseek 30-min ban, "quickly repeat a search"                                                                                                                                                                              | 2026-06-17, both flags `False`               |
-| 7   | Login-aware healthcheck on autoheal path                                   | slskd restart spiral, never recovers                                                                                                                                                                                        | by design — healthcheck is login-independent |
-| 8   | **The expiring guard** — the bridge's cursor hold released itself          | **none.** No artifact to grep: the lost records were never fetched                                                                                                                                                          | 2026-09-04, exhaustion is exit 2             |
-| 9   | Bridge cursor was a timestamp, and timestamps are not unique               | An import in the cursor's own second is skipped; nothing distinguishes it from a quiet window                                                                                                                               | 2026-09-04, cursor is a history `id`         |
-| 10  | Corrupt cursor state read as "no state"                                    | `nothing to report`, exit 0, and the cursor silently re-based to now-30min                                                                                                                                                  | 2026-09-04, four distinct exit 2s            |
-| 11  | Album-art retry with no memory starved its own batch                       | `Processed 300 folder(s)` at exit 0 every week, while "already marked done" grew by only 82/116/145 and the unmarked backlog grew 1018 → 1296 → 1573                                                                        | 2026-09-16, `.album_art_none` + ADR-0046     |
-| 12  | sacad `-t 25` made `--size 1000` discard every cover under 750px           | `sacad_r: Unable to find cover` — byte-identical to an album that exists on no source. 16 of 20 "unfindable" albums had art at `500 -t 90`                                                                                  | 2026-09-16, relaxed second pass, ADR-0046    |
-| 13  | Two library artists share a name, so Lidarr aborts _tracking_ the download | `status: completed` + `trackedDownloadState: downloading` forever, empty artist column, **no `added`** — and `lidarr_queue_unstick` logs `nothing to clean: 0 importFailed items in queue`, byte-identical to a healthy run | 2026-09-16, ambiguous-artist pass            |
+| #   | Failure                                                                    | Tell                                                                                                                                                                                                                                   | Fixed                                                                       |
+| --- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | Lidarr sends `/music`, Jellyfin drops it, returns 204                      | New albums on disk + in Lidarr, absent in Jellyfin                                                                                                                                                                                     | 2026-09-01, bridge created                                                  |
+| 2   | Repath `/music` → `/data/music`, bridge translated only `/music`           | `nothing to report` while the **cursor advances** across a window where imports demonstrably happened; `grep 'outside' logs/lidarr_jellyfin_bridge.log`                                                                                | 2026-09-03, `MAP_FROM` tuple + exit 2                                       |
+| 3   | Dropped folder warned and returned 0, so cron could not alert              | 7 Kraftwerk albums missing for a day, no alert                                                                                                                                                                                         | 2026-09-03, unmappable → exit 2, cursor held                                |
+| 4   | Delete events never dispatched                                             | Files gone, Jellyfin holds items on dead paths                                                                                                                                                                                         | 2026-09-02, toggles on (Sonarr/Radarr)                                      |
+| 5   | `lidarr-bulk` still posted `rootFolderPath: /music`                        | **Every** artist add a hard `400`, `Root folder '/music' does not exist`                                                                                                                                                               | 2026-09-03                                                                  |
+| 6   | Tubifarry fallback fan-out                                                 | Soulseek 30-min ban, "quickly repeat a search"                                                                                                                                                                                         | 2026-06-17, both flags `False`                                              |
+| 7   | Login-aware healthcheck on autoheal path                                   | slskd restart spiral, never recovers                                                                                                                                                                                                   | by design — healthcheck is login-independent                                |
+| 8   | **The expiring guard** — the bridge's cursor hold released itself          | **none.** No artifact to grep: the lost records were never fetched                                                                                                                                                                     | 2026-09-04, exhaustion is exit 2                                            |
+| 9   | Bridge cursor was a timestamp, and timestamps are not unique               | An import in the cursor's own second is skipped; nothing distinguishes it from a quiet window                                                                                                                                          | 2026-09-04, cursor is a history `id`                                        |
+| 10  | Corrupt cursor state read as "no state"                                    | `nothing to report`, exit 0, and the cursor silently re-based to now-30min                                                                                                                                                             | 2026-09-04, four distinct exit 2s                                           |
+| 11  | Album-art retry with no memory starved its own batch                       | `Processed 300 folder(s)` at exit 0 every week, while "already marked done" grew by only 82/116/145 and the unmarked backlog grew 1018 → 1296 → 1573                                                                                   | 2026-09-16, `.album_art_none` + ADR-0046                                    |
+| 12  | sacad `-t 25` made `--size 1000` discard every cover under 750px           | `sacad_r: Unable to find cover` — byte-identical to an album that exists on no source. 16 of 20 "unfindable" albums had art at `500 -t 90`                                                                                             | 2026-09-16, relaxed second pass, ADR-0046                                   |
+| 13  | Two library artists share a name, so Lidarr aborts _tracking_ the download | `status: completed` + `trackedDownloadState: downloading` forever, empty artist column, **no `added`** — and `lidarr_queue_unstick` logs `nothing to clean: 0 importFailed items in queue`, byte-identical to a healthy run            | 2026-09-16, ambiguous-artist pass                                           |
+| 14  | Cleanuparr had Lidarr enabled and Seeker on, forming a closed re-grab loop | Queue Cleaner deletes the row at 3 strikes (~15 min), Seeker re-searches, the next peer fails identically. `lidarr_queue_unstick` logs `nothing eligible` **every hour** because its 1h age gate can never see a row that lives 15 min | 2026-09-17, Lidarr disabled + Seeker off, asserted by `make verify-runtime` |
 
 ### 7.1 The expiring guard (#8) — a new failure class
 
@@ -443,6 +444,42 @@ for k,v in sorted(c.items()):
     mon=[x for x in v if x.get("monitored")]
     if len(mon)>1: print(v[0]["artistName"], "->", len(mon), "monitored")'
 ```
+
+### 7.3 The deletion engine that outran the salvage job (#14)
+
+Two settings that `CLAUDE.md` says must be off had drifted back on in Cleanuparr's
+gitignored `cleanuparr.db`: the **Lidarr instance was enabled**, and **Seeker search was
+on**. Neither is visible to `make check` -- the compose model says nothing about
+Cleanuparr's internal configuration -- so nothing caught it.
+
+Together they close a loop:
+
+1. Queue Cleaner strikes every Lidarr `FailedImport` row every 5 minutes and deletes it
+   at 3 strikes, blocklisting the release.
+2. Seeker fires a replacement album search.
+3. Lidarr grabs the same album from the next peer, which fails identically.
+
+Measured over 48 hours: **245 grabs against 79 imports**, 134 `albumImportIncomplete`,
+25 albums grabbed 3+ times, and `Black Cilice - Votive Fire` grabbed **10 times** and
+imported never. `The Gathering - Always…` was grabbed 9 times; its only monitored release
+is the _remix_ edition, which no peer has, so every copy lands as
+`Album release not requested` -- precisely the case `lidarr_queue_unstick`'s reclaim pass
+exists to fix by release switching.
+
+**And that is the part worth remembering: the loop disabled the fix for the loop.**
+`lidarr_queue_unstick` runs hourly behind a 1h age gate, so a row that Cleanuparr deletes
+in ~15 minutes can never be seen by it. The job's log is the tell, and it reads like
+health: `nothing eligible: 1 importFailed items all younger than 1.0h`, every hour, for
+as long as the loop ran. A _constant small_ count of wedged rows, hour after hour, is not
+a quiet queue -- it is a queue being emptied by something else.
+
+`failed_import_skip_if_not_found_in_client = 1` is **not** sufficient protection. It only
+skips rows with no content id, and Tubifarry supplies one for most slskd downloads; in the
+live logs it skipped exactly one item and struck all the rest. Disabling the Lidarr
+instance is the control that holds.
+
+`scripts/check-cleanuparr-excludes-lidarr.py` now asserts both on the live DB (WAL
+sidecars copied before reading) and runs in `make verify-runtime`.
 
 ## 8. Verification runbook
 
@@ -636,61 +673,63 @@ genuine fault must exit **2**, not 1.
 
 <!-- BEGIN GENERATED: cron-fleet -->
 
-_Generated by `scripts/gen_pipeline_tables.py` from `cron/crontab`. 34 scheduled jobs._
+_Generated by `scripts/gen_pipeline_tables.py` from `cron/crontab`. 35 scheduled jobs._
 
-| Schedule | Job | Script | What it does | `--ok-codes` |
-| --- | --- | --- | --- | --- |
-| `45 4 * * 0` | `album-art` | `album_art.py` | Download missing external album covers (folder.jpg) for the music library | `0,1 (default)` |
-| `50 3 * * 0` | `artist-art` | `artist_art.py` | Download missing artist images (folder.jpg) for the music library, from Deezer | `0,1 (default)` |
-| `0 1 * * *` | `config-backup` | `config_backup.py` | Config backup & restore utility | `0` |
-| `0 3 * * 0` | `docker-prune` | `(shell command)` | — | `0` |
-| `*/10 * * * *` | `heartbeat` | `heartbeat.py` | Ping an off-box dead-man's switch, so a dead host is noticed by something else | `0,1 (default)` |
-| `*/5 * * * *` | `jellyfin-mem-sample` | `(shell command)` | — | `0` |
-| `5 5 * * 5` | `jellyfin-scan-movies` | `jellyfin_library_scan.py` | Scan a single Jellyfin library (or all of them) via the API | `0,1 (default)` |
-| `5 5 * * 6` | `jellyfin-scan-tv` | `jellyfin_library_scan.py` | Scan a single Jellyfin library (or all of them) via the API | `0,1 (default)` |
-| `12,27,42,57 * * * *` | `lidarr-backlog-drip` | `lidarr_backlog_drip.py` | Drip-feed Lidarr's missing-album backlog into Soulseek without flooding it | `0,1 (default)` |
-| `5,20,35,50 * * * *` | `lidarr-monitor-sweep` | `lidarr_monitor_sweep.py` | Re-monitor + search Lidarr artists that landed with nothing monitored | `0,1 (default)` |
-| `07 * * * *` | `lidarr-queue-unstick` | `lidarr_queue_unstick.py` | Drop Lidarr queue items wedged in `completed / importFailed` | `0,1 (default)` |
-| `52 * * * *` | `lidarr-stuck-reaper` | `lidarr_stuck_download_reaper.py` | Reap Lidarr grabs wedged forever at 0 bytes in slskd, and re-source them | `0,1 (default)` |
-| `0 2 * * 0` | `log-pruner` | `log_pruner.py` | Log size pruner / compressor | `0,1 (default)` |
-| `*/5 * * * *` | `media-ops-status` | `media_ops_status.py` | Unified media-ops status aggregator — stack health in one command | `0,1 (default)` |
-| `0 9 * * *` | `notify-digest` | `notify_digest.py` | One markdown message a day, replacing everything that used to be chatter | `0,1 (default)` |
-| `20 3 * * *` | `playlist-aggregates` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `12 * * * *` | `playlist-album-tags` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `10 5 * * *` | `playlist-audio` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `40 4 * * *` | `playlist-catchup` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `22 * * * *` | `playlist-derived` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `*/30 * * * *` | `playlist-lastfm-tracks` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `42 * * * *` | `playlist-release-dates` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `52 * * * *` | `playlist-scan` | `playlist_sync_stage.py` | Run ONE stage of the playlist-generator pipeline, in a bounded batch | `0,1 (default)` |
-| `30 4 * * *` | `post-update-verifier` | `post_update_verifier.py` | Daily stack-health assertion: container state and HTTP reachability | `0,1 (default)` |
-| `30 5 * * *` | `process-soulseek-imports` | `process_soulseek_imports.py` | Process stuck Soulseek downloads and import them into Lidarr | `0,1 (default)` |
-| `*/5 * * * *` | `qbit-settings-enforce` | `qbittorrent_settings_enforce.py` | Enforce qBittorrent Auto Torrent Management so categories drive save paths | `0,1 (default)` |
-| `40 5 * * *` | `scrutiny-collect` | `(shell command)` | — | `0` |
-| `37 * * * *` | `slskd-cleanup` | `slskd_cleanup.py` | Clear stale slskd transfer records + matching orphan incomplete dirs | `0,1 (default)` |
-| `22 * * * *` | `slskd-complete-sweep` | `slskd_complete_sweep.py` | Reap slskd download copies that Lidarr has already imported into /music/ | `0,1 (default)` |
-| `*/15 * * * *` | `slskd-login-watch` | `slskd_login_watch.py` | Alert when slskd is logged out of Soulseek — WITHOUT restarting it | `0,1 (default)` |
-| `30 3 * * *` | `slskd-rescan` | `slskd_rescan.py` | Trigger a slskd shared-library rescan | `0,1 (default)` |
-| `*/5 * * * *` | `stack-watchdog` | `stack_watchdog.py` | Watch the whole compose stack and shout when something breaks | `0,1 (default)` |
-| `15 6 * * *` | `verify-runtime` | `(shell command)` | — | `0` |
-| `17 * * * *` | `wan-shaper` | `(shell command)` | — | `0,1 (default)` |
+| Schedule              | Job                        | Script                            | What it does                                                                   | `--ok-codes`    |
+| --------------------- | -------------------------- | --------------------------------- | ------------------------------------------------------------------------------ | --------------- |
+| `45 4 * * 0`          | `album-art`                | `album_art.py`                    | Download missing external album covers (folder.jpg) for the music library      | `0,1 (default)` |
+| `50 3 * * 0`          | `artist-art`               | `artist_art.py`                   | Download missing artist images (folder.jpg) for the music library, from Deezer | `0,1 (default)` |
+| `0 1 * * *`           | `config-backup`            | `config_backup.py`                | Config backup & restore utility                                                | `0`             |
+| `0 3 * * 0`           | `docker-prune`             | `(shell command)`                 | —                                                                              | `0`             |
+| `*/10 * * * *`        | `heartbeat`                | `heartbeat.py`                    | Ping an off-box dead-man's switch, so a dead host is noticed by something else | `0,1 (default)` |
+| `*/5 * * * *`         | `jellyfin-mem-sample`      | `(shell command)`                 | —                                                                              | `0`             |
+| `5 5 * * 5`           | `jellyfin-scan-movies`     | `jellyfin_library_scan.py`        | Scan a single Jellyfin library (or all of them) via the API                    | `0,1 (default)` |
+| `5 5 * * 6`           | `jellyfin-scan-tv`         | `jellyfin_library_scan.py`        | Scan a single Jellyfin library (or all of them) via the API                    | `0,1 (default)` |
+| `12,27,42,57 * * * *` | `lidarr-backlog-drip`      | `lidarr_backlog_drip.py`          | Drip-feed Lidarr's missing-album backlog into Soulseek without flooding it     | `0,1 (default)` |
+| `5,20,35,50 * * * *`  | `lidarr-monitor-sweep`     | `lidarr_monitor_sweep.py`         | Re-monitor + search Lidarr artists that landed with nothing monitored          | `0,1 (default)` |
+| `07 * * * *`          | `lidarr-queue-unstick`     | `lidarr_queue_unstick.py`         | Drop Lidarr queue items wedged in `completed / importFailed`                   | `0,1 (default)` |
+| `52 * * * *`          | `lidarr-stuck-reaper`      | `lidarr_stuck_download_reaper.py` | Reap Lidarr grabs wedged forever at 0 bytes in slskd, and re-source them       | `0,1 (default)` |
+| `0 2 * * 0`           | `log-pruner`               | `log_pruner.py`                   | Log size pruner / compressor                                                   | `0,1 (default)` |
+| `*/5 * * * *`         | `media-ops-status`         | `media_ops_status.py`             | Unified media-ops status aggregator — stack health in one command              | `0,1 (default)` |
+| `0 9 * * *`           | `notify-digest`            | `notify_digest.py`                | One markdown message a day, replacing everything that used to be chatter       | `0,1 (default)` |
+| `20 3 * * *`          | `playlist-aggregates`      | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `12 * * * *`          | `playlist-album-tags`      | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `10 5 * * *`          | `playlist-audio`           | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `40 4 * * *`          | `playlist-catchup`         | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `22 * * * *`          | `playlist-derived`         | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `*/30 * * * *`        | `playlist-lastfm-tracks`   | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `42 * * * *`          | `playlist-release-dates`   | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `52 * * * *`          | `playlist-scan`            | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `40 5 * * *`          | `playlist-slow-catchup`    | `playlist_sync_stage.py`          | Run ONE stage of the playlist-generator pipeline, in a bounded batch           | `0,1 (default)` |
+| `30 4 * * *`          | `post-update-verifier`     | `post_update_verifier.py`         | Daily stack-health assertion: container state and HTTP reachability            | `0,1 (default)` |
+| `30 5 * * *`          | `process-soulseek-imports` | `process_soulseek_imports.py`     | Process stuck Soulseek downloads and import them into Lidarr                   | `0,1 (default)` |
+| `*/5 * * * *`         | `qbit-settings-enforce`    | `qbittorrent_settings_enforce.py` | Enforce qBittorrent Auto Torrent Management so categories drive save paths     | `0,1 (default)` |
+| `40 5 * * *`          | `scrutiny-collect`         | `(shell command)`                 | —                                                                              | `0`             |
+| `37 * * * *`          | `slskd-cleanup`            | `slskd_cleanup.py`                | Clear stale slskd transfer records + matching orphan incomplete dirs           | `0,1 (default)` |
+| `22 * * * *`          | `slskd-complete-sweep`     | `slskd_complete_sweep.py`         | Reap slskd download copies that Lidarr has already imported into /music/       | `0,1 (default)` |
+| `*/15 * * * *`        | `slskd-login-watch`        | `slskd_login_watch.py`            | Alert when slskd is logged out of Soulseek — WITHOUT restarting it             | `0,1 (default)` |
+| `30 3 * * *`          | `slskd-rescan`             | `slskd_rescan.py`                 | Trigger a slskd shared-library rescan                                          | `0,1 (default)` |
+| `*/5 * * * *`         | `stack-watchdog`           | `stack_watchdog.py`               | Watch the whole compose stack and shout when something breaks                  | `0,1 (default)` |
+| `15 6 * * *`          | `verify-runtime`           | `(shell command)`                 | —                                                                              | `0`             |
+| `17 * * * *`          | `wan-shaper`               | `(shell command)`                 | —                                                                              | `0,1 (default)` |
 
 **Locks.** A held lock is recorded as a skip, not silence (`cron_job.py --lock`); three consecutive skips alert.
 
-| Lock | Holders | Waiters |
-| --- | --- | --- |
-| `/tmp/nas-album-art.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-artist-art.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-lidarr-backlog-drip.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-lidarr-monitor-sweep.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-playlist-audio.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-playlist-stage.lock` | 7 | `playlist-scan` (300s), `playlist-derived` (300s), `playlist-aggregates` (1800s), `playlist-catchup` (1800s) |
-| `/tmp/nas-qbit-enforce.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-stack-watchdog.lock` | 1 | — (all non-blocking) |
-| `/tmp/nas-tubifarry-cleanup.lock` | 5 | `lidarr-stuck-reaper` (120s), `process-soulseek-imports` (600s) |
-| `/tmp/nas-wan-shaper.lock` | 1 | — (all non-blocking) |
+| Lock                                 | Holders | Waiters                                                                                                      |
+| ------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `/tmp/nas-album-art.lock`            | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-artist-art.lock`           | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-lidarr-backlog-drip.lock`  | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-lidarr-monitor-sweep.lock` | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-playlist-audio.lock`       | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-playlist-slow.lock`        | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-playlist-stage.lock`       | 7       | `playlist-scan` (300s), `playlist-derived` (300s), `playlist-aggregates` (1800s), `playlist-catchup` (1800s) |
+| `/tmp/nas-qbit-enforce.lock`         | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-stack-watchdog.lock`       | 1       | — (all non-blocking)                                                                                         |
+| `/tmp/nas-tubifarry-cleanup.lock`    | 5       | `lidarr-stuck-reaper` (120s), `process-soulseek-imports` (600s)                                              |
+| `/tmp/nas-wan-shaper.lock`           | 1       | — (all non-blocking)                                                                                         |
 
-**`--ok-codes`.** 5 of 34 jobs declare it explicitly; 29 inherit the `0,1` default, which swallows exit 1.
+**`--ok-codes`.** 5 of 35 jobs declare it explicitly; 30 inherit the `0,1` default, which swallows exit 1.
 
 <!-- END GENERATED: cron-fleet -->
 
@@ -743,6 +782,10 @@ so they never contend over the same queue rows — five holders, not four. `:52`
   `found multiple artists` is a _successful_ download that Lidarr merely cannot attribute
   by name. Blocklisting it would burn a good release and re-queue a search. It is
   salvage-or-leave; `--no-ambiguous` disables the pass, it does not make it destructive.
+- **Cleanuparr's Lidarr instance stays disabled, and Seeker stays off** — together they
+  form a re-grab loop that also starves `lidarr_queue_unstick` of anything to salvage.
+  Both live in a gitignored SQLite DB that `make check` cannot see, so this is a
+  `make verify-runtime` assertion; a UI click or a config restore reintroduces it.
 - **`slskd_complete_sweep.py` must not be retired in favour of slskd `retention`** — the
   file half of retention is inert on 0.26.0.0 and this script is the only thing reclaiming
   disk. See §5. Re-evaluate only when `check-slskd-effective-config.py` says otherwise.

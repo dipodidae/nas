@@ -179,7 +179,12 @@ stall rule, bounded to 0–99% completion, which is armed.
 
 Its job is to _find and grab_ missing or upgradable content. The problem being
 solved here is disk pollution, and it also pushes searches through Prowlarr —
-see the search-flood notes in `CLAUDE.md`. Revisit after the cleanup settles.
+see the search-flood notes in `CLAUDE.md`.
+
+**It drifted back on and was found on 2026-09-17**, where it supplied the
+re-search half of the re-grab loop in §4. Asserted off by
+`make verify-runtime`. Do not revisit it while Lidarr's queue is served by
+slskd.
 
 ### Blacklist Sync — off
 
@@ -188,19 +193,48 @@ failure mode actually observed on this box.
 
 ---
 
-## 4. Why Lidarr is structurally safe
+## 4. Lidarr is NOT structurally safe — it is safe only while disabled
 
-Lidarr's only download client is **slskd**. It has zero torrents in qBittorrent,
-and Cleanuparr only knows about qBittorrent. Its Lidarr queue items are
-therefore invisible to Cleanuparr's client view, and
-`failedImport.skipIfNotFoundInClient: true` means an item Cleanuparr cannot find
-in a download client is skipped rather than struck.
+> **Corrected 2026-09-17.** This section used to argue that Lidarr was safe _by
+> construction_, because its only client is slskd and
+> `failedImport.skipIfNotFoundInClient: true` skips anything Cleanuparr cannot
+> find in a download client. **That reasoning is wrong, and it cost a week of
+> throughput.** Tubifarry supplies a content id for most slskd downloads, so
+> Cleanuparr _can_ see them: in the live logs it skipped exactly one item for a
+> missing content id and struck every other Lidarr row. The flag is a partial
+> filter, not a guard.
 
-That lane stays owned by the existing scripts —
-`lidarr_stuck_download_reaper.py`, `slskd_incomplete_sweep.py`,
-`lidarr_backlog_drip.py`. **Do not enable Lidarr in Cleanuparr's modules**, and
-do not set `skipIfNotFoundInClient: false`; either would point a deletion engine
-at a queue it cannot see.
+Lidarr's only download client is **slskd**, and that lane stays owned by the
+existing scripts — `lidarr_queue_unstick.py`, `lidarr_stuck_download_reaper.py`,
+`slskd_incomplete_sweep.py`, `lidarr_backlog_drip.py`.
+
+**The control that actually holds is the Lidarr instance being disabled**
+(`arr_instances.enabled = 0`). Keep `skipIfNotFoundInClient: true` as well, but
+do not rely on it.
+
+### What happened when both drifted on
+
+The Lidarr instance was enabled _and_ Seeker's search was on. Together they close
+a loop:
+
+1. Queue Cleaner strikes each Lidarr `FailedImport` row every 5 minutes and
+   deletes + blocklists it at 3 strikes — about 15 minutes end to end.
+2. Seeker fires a replacement album search.
+3. Lidarr grabs the same album from the next peer, which fails identically.
+
+Measured over 48 hours: **245 grabs against 79 imports**, 134
+`albumImportIncomplete`, 25 albums grabbed 3+ times, `Black Cilice - Votive Fire`
+grabbed **10 times** and imported never.
+
+The loop also disabled the fix for the loop: `lidarr_queue_unstick.py` runs
+hourly behind a 1h age gate, so a row deleted in ~15 minutes can never be seen.
+Its log read `nothing eligible: 1 importFailed items all younger than 1.0h`
+every hour — which looks like a quiet queue and is actually a queue being
+emptied by something else.
+
+`scripts/check-cleanuparr-excludes-lidarr.py` asserts both settings on the live
+SQLite DB and runs in `make verify-runtime`, because neither is visible to
+`make check`.
 
 ---
 

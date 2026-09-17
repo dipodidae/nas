@@ -52,8 +52,13 @@ asked what else had the old prefix compiled in. Two things broke for a day.
   to leave slskd **down 15–30 min**, then cold start.
 - Lidarr's Subsonic connector: `updateLibrary` on, and only `onReleaseImport`/`onUpgrade`/
   `onRename` on — the other triggers are `Notify()`-only and inert (ADR-0049).
-- Lidarr in any Cleanuparr module — never. Its only client is slskd, which Cleanuparr
-  cannot see.
+- Lidarr in any Cleanuparr module — never, and **Seeker stays off**. Its only client is
+  slskd, which Cleanuparr cannot see. On 2026-09-17 both had drifted on and formed a closed
+  loop: Queue Cleaner deleted each failed row in ~15 min, Seeker re-searched, the next peer
+  failed identically — 245 grabs for 79 imports over 48h, one album grabbed 10 times. It
+  also starved `lidarr_queue_unstick` (hourly, 1h age gate) of anything to salvage, whose
+  tell is `nothing eligible: 1 importFailed items` **every hour**. Both live in a gitignored
+  SQLite DB; `make verify-runtime` now asserts them.
 - **`slskd_complete_sweep.py` must not be retired** in favour of slskd `retention` — the
   file half of retention is inert, and this script is the only thing reclaiming disk.
 
@@ -67,15 +72,6 @@ The doc had these swapped twice. Trust the docstrings.
 ## Normal-looking states that are not problems
 
 - All transfers `Queued, Remotely` — a peer's upload queue. Waiting hours is routine.
-
-**One that looks normal and is not:** a queue row reading `completed` / `downloading`
-with an **empty artist** and no `added` timestamp is wedged on a same-named-artist
-collision, not transferring. Lidarr aborts tracking with
-`MultipleArtistsFoundException` before the import stage, so it never becomes
-`importFailed` and `lidarr_queue_unstick` logged `nothing to clean` hourly on top of 11
-finished albums. The download is good — `lidarr_queue_unstick`'s ambiguous-artist pass
-manual-imports it. 15 artist names in this library have 2+ monitored members. See
-`docs/music-pipeline-integration.md` §7.2.
 - `albumImportIncomplete` — usually a genuinely partial release on Soulseek.
 - `downloadFailed` reading `"Manually marked as failed"` — that is the reaper doing its
   job. Never read the `downloadFailed` count without checking the message field.
@@ -85,6 +81,20 @@ manual-imports it. 15 artist names in this library have 2+ monitored members. Se
 - The bridge logging `nothing to report` while the cursor advances — normal when the only
   new records are non-file events. It is a fault signal **only** if file imports happened
   in that window. Cross-check `/api/v1/history` before concluding anything.
+
+## Two that look normal and are not
+
+**A queue row reading `completed` / `downloading` with an empty artist and no `added`
+timestamp** is wedged on a same-named-artist collision, not transferring. Lidarr aborts
+tracking with `MultipleArtistsFoundException` before the import stage, so it never becomes
+`importFailed` and `lidarr_queue_unstick` logged `nothing to clean` hourly on top of 11
+finished albums. The download is good — the ambiguous-artist pass manual-imports it. 15
+artist names here have 2+ monitored members. §7.2.
+
+**`nothing eligible: N importFailed items all younger than 1.0h`, hour after hour with a
+small constant N**, is not a quiet queue — it is a queue being emptied by something else
+before the salvage job can reach it. That something was Cleanuparr's Queue Cleaner with
+Lidarr enabled. §7.3.
 
 ## Quick verification
 

@@ -413,6 +413,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> Jellyfin holds NO music library (ADR-0051)"; \
 	.venv/bin/python scripts/check-jellyfin-no-music.py \
 	  || { rc=1; note "a music library or music items are back in Jellyfin -- Navidrome owns music, and a second indexer of the same tree is what put 168k items and 1.4 GB of free pages in Jellyfin's DB (ADR-0051)"; }; \
+	echo "==> Cleanuparr still cannot touch Lidarr, and Seeker is off"; \
+	.venv/bin/python scripts/check-cleanuparr-excludes-lidarr.py \
+	  || { rc=1; crit=1; note "Cleanuparr has Lidarr enabled or Seeker on -- Queue Cleaner deletes Lidarr queue rows in ~15min and Seeker re-grabs them, a closed loop that burns Soulseek searches, blocklists good releases and makes lidarr_queue_unstick structurally unable to run (2026-09-17)"; }; \
 	echo "==> Lidarr still tells Navidrome to rescan on import (ADR-0049)"; \
 	.venv/bin/python scripts/check-lidarr-navidrome-notification.py \
 	  || { rc=1; note "Lidarr's Navidrome connector drifted, or its Navidrome principal lost adminRole -- new albums now wait up to an hour for the scheduled scan (ADR-0049)"; }; \
