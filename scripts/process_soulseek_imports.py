@@ -131,6 +131,26 @@ class ImportSummary:
     failed: int = 0
     errors: int = 0
     results: list[FolderResult] = field(default_factory=list)
+    # How many leading entries of `results` were replayed from the resume state
+    # rather than processed in this run. `results` is deliberately seeded with
+    # the whole state file so the printed breakdown stays cumulative, which
+    # makes the list a LIFETIME log, not a record of what just happened.
+    prior_count: int = 0
+
+    @property
+    def session_results(self) -> list[FolderResult]:
+        """Only what THIS run processed. The correct input to any side effect.
+
+        INVARIANT: anything with an external effect -- a push, a webhook, a
+        write -- iterates this, never `results`. Iterating `results` re-fires
+        for every folder ever imported: `notify_imports` did, and published 60
+        nas-media messages every morning at 05:30 announcing albums imported
+        days earlier, including on a day whose run processed 0 folders and
+        finished in 4.9s. 4100 publish attempts a day, 60 delivered and ~4040
+        swallowed by the artist cooldown -- which is why it read as a cooldown
+        problem in the digest rather than as a loop.
+        """
+        return self.results[self.prior_count:]
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +559,9 @@ def process_folder(
 # ---------------------------------------------------------------------------
 
 def notify_imports(summary: ImportSummary, *, log: logging.Logger, dry_run: bool) -> int:
-    """Publish one nas-media message per imported album. Returns the count sent.
+    """Publish one nas-media message per album imported IN THIS RUN.
+
+    Returns the count sent.
 
     Soulseek albums do NOT come through Lidarr's own import connector in this
     stack -- Lidarr's only download client is slskd, and this script is what
@@ -559,7 +581,7 @@ def notify_imports(summary: ImportSummary, *, log: logging.Logger, dry_run: bool
     if dry_run:
         return 0
     sent = 0
-    for result in summary.results:
+    for result in summary.session_results:
         if result.status != "imported":
             continue
         artist = result.artist or "unknown artist"
@@ -981,7 +1003,10 @@ def main(argv: list[str] | None = None) -> int:
     log.info("-" * 70)
 
     # Seed summary with prior results so the final breakdown is cumulative
-    summary = ImportSummary(total_folders=len(prior_results) + len(folders))
+    summary = ImportSummary(
+        total_folders=len(prior_results) + len(folders),
+        prior_count=len(prior_results),
+    )
     for r in prior_results:
         summary.results.append(r)
         if r.status == "imported":
@@ -1080,11 +1105,12 @@ def main(argv: list[str] | None = None) -> int:
     # own import connector -- this script is what moves them into the library --
     # so this is the only path by which the music half of the box feeds the one
     # lane it should. ADR-0033.
-    if summary.imported and args.execute:
+    session_imported = sum(1 for r in summary.session_results if r.status == "imported")
+    if session_imported and args.execute:
         published = notify_imports(summary, log=log, dry_run=not args.execute)
-        log.info("nas-media: %d of %d imported album(s) published "
+        log.info("nas-media: %d of %d album(s) imported THIS RUN published "
                  "(the rest were inside an artist cooldown)",
-                 published, summary.imported)
+                 published, session_imported)
 
     # Write report file
     if args.report:

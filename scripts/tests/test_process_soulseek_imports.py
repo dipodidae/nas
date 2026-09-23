@@ -145,3 +145,68 @@ def test_process_folder_not_flagged_when_mixed_blockers():
   )
   assert res.status == "skipped"
   assert res.not_upgrade_only is False
+
+
+# --- nas-media is published for THIS RUN's imports only -------------------
+#
+# Regression: `summary.results` is seeded with the whole resume state so the
+# printed breakdown stays cumulative. `notify_imports` iterated that list, so
+# every run re-published every album ever imported -- 4100 attempts a day, 60
+# delivered past the artist cooldown, on a run that processed 0 folders.
+
+
+def _result(psi_mod, folder, artist, status="imported"):
+  return psi_mod.FolderResult(
+    folder=folder, status=status, artist=artist, album=f"{artist} album",
+    tracks_imported=1, tracks_total=1,
+  )
+
+
+def test_session_results_excludes_replayed_state():
+  summary = psi.ImportSummary(prior_count=2)
+  summary.results = [
+    _result(psi, "old-a", "Motörhead"),
+    _result(psi, "old-b", "Bathory"),
+    _result(psi, "new-a", "Kreator"),
+  ]
+  assert [r.folder for r in summary.session_results] == ["new-a"]
+
+
+def test_notify_imports_skips_replayed_state(monkeypatch):
+  published = []
+
+  class _Outcome:
+    sent = True
+    suppressed = False
+    reason = ""
+
+  def _fake_notify(lane, title, body, **kwargs):
+    published.append(kwargs.get("dedup_key"))
+    return _Outcome()
+
+  monkeypatch.setattr(psi.notifier, "notify", _fake_notify)
+
+  summary = psi.ImportSummary(prior_count=2)
+  summary.results = [
+    _result(psi, "old-a", "Motörhead"),
+    _result(psi, "old-b", "Bathory"),
+    _result(psi, "new-a", "Kreator"),
+  ]
+  sent = psi.notify_imports(summary, log=logging.getLogger("t"), dry_run=False)
+
+  assert sent == 1
+  assert published == ["media:music:kreator"]
+
+
+def test_notify_imports_publishes_nothing_when_run_imported_nothing(monkeypatch):
+  def _boom(*a, **k):  # pragma: no cover - must never be reached
+    raise AssertionError("notify called for a run that imported nothing")
+
+  monkeypatch.setattr(psi.notifier, "notify", _boom)
+
+  summary = psi.ImportSummary(prior_count=2)
+  summary.results = [
+    _result(psi, "old-a", "Motörhead"),
+    _result(psi, "old-b", "Bathory"),
+  ]
+  assert psi.notify_imports(summary, log=logging.getLogger("t"), dry_run=False) == 0
