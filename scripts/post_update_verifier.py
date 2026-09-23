@@ -80,6 +80,24 @@ API_KEY_ENV = {
   "lidarr": "API_KEY_LIDARR",
 }
 
+# Services whose vhost is name-based, so the probe MUST send the public Host.
+#
+# INVARIANT: swag is probed over loopback but routed by Host header. The apex
+# conf pins `server_name ${PUBLIC_DOMAIN}` on purpose (ADR-0034 -- the apex is
+# the only public route, and pinning it stops the wildcard subdomain block from
+# swallowing it), so a request arriving as `Host: localhost` matches NO server
+# block and nginx answers from its default server: a flat 404. That is exactly
+# what this check reported at 08:00 on 22 and 23 Sep -- `http=-- err=HTTP error:
+# Not Found` -- while nginx was serving the real apex at 200 the whole time.
+#
+# A 404 here is therefore a probe bug, not an outage, and it is the SECOND time
+# this one probe has asserted the wrong property (see the _LOOPBACK_TLS note
+# below for the certificate-verification version). The property worth asserting
+# is "nginx answers 2xx for the apex vhost".
+HOST_HEADER_ENV = {
+  "swag": "PUBLIC_DOMAIN",
+}
+
 
 @dataclass
 class Result:
@@ -182,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     api_env = API_KEY_ENV.get(name)
     if api_env and (api_key := os.getenv(api_env)):
       headers["X-Api-Key"] = api_key
+    host_env = HOST_HEADER_ENV.get(name)
+    if host_env and (host := os.getenv(host_env)):
+      headers["Host"] = host
     http_status: int | None = None
     latency = None
     error = None
