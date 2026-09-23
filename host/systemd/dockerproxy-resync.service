@@ -1,0 +1,38 @@
+# Re-resolve dockerproxy's Docker socket bind mount after a dockerd restart.
+#
+# ADR-0052. `dockerproxy` bind-mounts /var/run/docker.sock BY INODE. Restarting
+# the Docker daemon unlinks that socket and creates a new one, so a container
+# that was already running keeps a mount of the DELETED inode and every Docker
+# API call 503s -- silently, with no restart and no unhealthy state.
+#
+# `live-restore: true` in /etc/docker/daemon.json is what makes this reachable:
+# containers deliberately survive a daemon restart, so nothing re-resolves the
+# mount on its own. That setting is correct and stays -- it is why Jellyfin
+# keeps streaming through a Docker upgrade -- so the mount has to be re-resolved
+# explicitly, which is this unit.
+#
+# A plain `docker restart` is sufficient and is deliberately what this runs:
+# Docker rebuilds the container's mount namespace on start, so the new inode is
+# picked up. Measured with a scratch bind mount: host inode 411116 -> 411119
+# after a replace, container still reading 411116, and reading 411119 after a
+# restart. A `--force-recreate` would also work and is NOT used -- that is the
+# create/remove capability ADR-0025 removed from this stack after Watchtower's
+# non-atomic recreate left qbittorrent deleted for 13h.
+#
+# Installed by `make install-host-units`; asserted by `make verify-runtime`.
+
+[Unit]
+Description=Re-resolve dockerproxy's Docker socket bind mount (ADR-0052)
+Documentation=file:///home/tom/nas/docs/decisions/0052-a-bind-mounted-socket-detaches-on-daemon-restart.md
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+# The daemon can report started before its API is accepting connections, so
+# wait for it rather than racing it. `|| true` because at first boot the
+# containers may not exist yet, and a missing container is not a failure here.
+ExecStart=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/docker version >/dev/null 2>&1 && break; sleep 1; done; /usr/bin/docker restart dockerproxy autoheal || true'
+
+[Install]
+WantedBy=docker.service

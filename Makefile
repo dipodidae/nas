@@ -289,6 +289,23 @@ install-hooks: ## Install the pre-commit hook that runs `make check`
 	chmod +x "$$hook"; \
 	echo "installed $$hook"
 
+HOST_UNIT_DIR ?= /etc/systemd/system
+
+install-host-units: ## Install host systemd units from host/systemd (needs sudo)
+	@# ADR-0052. These live outside a container on purpose: the thing they
+	@# repair is a bind mount, and a container cannot re-resolve its own.
+	@# Shipped in-repo (unlike ADR-0040's lockd pins) so a host rebuild can
+	@# restore them from git instead of from memory.
+	@set -e; \
+	for u in host/systemd/*.service; do \
+	  n="$$(basename "$$u")"; \
+	  echo "==> installing $$n into $(HOST_UNIT_DIR)"; \
+	  sudo install -m 0644 -o root -g root "$$u" "$(HOST_UNIT_DIR)/$$n"; \
+	  sudo systemctl enable "$$n"; \
+	done; \
+	sudo systemctl daemon-reload; \
+	echo "installed. verify with: make verify-runtime"
+
 # The three notification checks below are the ones that catch a UI edit: the
 # *arr connectors and the jellyseerr/cleanuparr notifiers live in each app's own
 # SQLite, so nothing in git would show someone ticking "On Grab" back on, and
@@ -441,6 +458,29 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> jellyseerr + cleanuparr notifiers match the taxonomy (ADR-0033)"; \
 	.venv/bin/python scripts/configure_service_notifications.py --check \
 	  || { rc=1; note "jellyseerr/cleanuparr notifiers have drifted (ADR-0033)"; }; \
+	echo "==> dockerproxy's socket mount is live, and its resync unit is installed (ADR-0052)"; \
+	hi=$$(stat -c %i /var/run/docker.sock 2>/dev/null || echo ""); \
+	pi=$$(docker exec dockerproxy stat -c %i /var/run/docker.sock 2>/dev/null || echo ""); \
+	if [ -n "$$hi" ] && [ -n "$$pi" ] && [ "$$hi" != "$$pi" ]; then \
+	  echo "    !!! dockerproxy holds inode $$pi, host socket is $$hi -- the mount"; \
+	  echo "        detached when dockerd restarted. Every Docker API call is"; \
+	  echo "        503ing and autoheal supervises NOTHING."; \
+	  echo "        Fix: docker restart dockerproxy autoheal"; \
+	  rc=1; crit=1; \
+	  note "dockerproxy's docker.sock mount is stale (inode $$pi vs $$hi) -- autoheal supervises nothing (ADR-0052)"; \
+	elif [ -n "$$hi" ] && [ "$$hi" = "$$pi" ]; then echo "    ok: inode $$hi on both sides"; fi; \
+	if [ ! -f /etc/systemd/system/dockerproxy-resync.service ]; then \
+	  echo "    !!! dockerproxy-resync.service is NOT installed -- the next"; \
+	  echo "        dockerd restart will detach the mount again. make install-host-units"; \
+	  rc=1; \
+	  note "dockerproxy-resync.service is not installed; a dockerd restart will silently break autoheal (ADR-0052)"; \
+	elif ! cmp -s host/systemd/dockerproxy-resync.service /etc/systemd/system/dockerproxy-resync.service; then \
+	  echo "    !!! installed dockerproxy-resync.service differs from the repo copy"; rc=1; \
+	  note "dockerproxy-resync.service drifted from host/systemd/ (ADR-0052)"; \
+	elif ! systemctl is-enabled --quiet dockerproxy-resync.service 2>/dev/null; then \
+	  echo "    !!! dockerproxy-resync.service is installed but NOT enabled"; rc=1; \
+	  note "dockerproxy-resync.service is installed but not enabled (ADR-0052)"; \
+	else echo "    ok: resync unit installed and enabled"; fi; \
 	echo "==> unhealthy or exited containers"; \
 	u=$$(docker compose ps -a --format '{{.Name}}\t{{.Status}}' \
 	     | grep -iE 'unhealthy|exited|restarting' || true); \

@@ -90,11 +90,72 @@ silent no-op, which is the failure shape this repo keeps paying for. The crash
 loop is the only reason the three days were three days and not three weeks.
 Fix the socket, not the reaction to it.
 
+### 5. The mount is re-resolved on every daemon restart, by systemd
+
+Detection within five minutes is not the same as prevention. The trigger is
+known and narrow — `docker.service` restarting — so the repair is bound to it:
+
+```
+host/systemd/dockerproxy-resync.service   # After=/PartOf=/WantedBy=docker.service
+  ExecStart=… docker restart dockerproxy autoheal
+```
+
+`live-restore: true` in `/etc/docker/daemon.json` is what makes this reachable
+at all: containers deliberately survive a daemon restart, so nothing re-resolves
+the mount on its own. **That setting is correct and stays** — it is why Jellyfin
+keeps streaming through a Docker upgrade. The mount therefore has to be
+re-resolved explicitly.
+
+Three properties of that unit are deliberate.
+
+**A plain `docker restart` is enough, and is what runs.** Docker rebuilds the
+container's mount namespace on start. Measured with a scratch bind mount:
+
+| step                             | host inode | container reads |
+| -------------------------------- | ---------: | --------------- |
+| initial                          |     411116 | 411116          |
+| host file replaced (`rm`+create) |     411119 | 411116 ← stale  |
+| `docker restart`                 |     411119 | 411119          |
+
+`up -d --force-recreate` also works and is **not** used: that is the
+create/remove capability ADR-0025 removed from this stack after Watchtower's
+non-atomic recreate left qbittorrent deleted for 13 h. Restart is the
+capability autoheal already holds under ADR-0010.
+
+**It waits for the API rather than racing it**, because `docker.service` can
+report started before it is accepting connections, and it ends in `|| true`
+because on a first boot the containers may not exist yet.
+
+**The repair cannot live in a container.** autoheal is dockerproxy's only
+client and depends on it, so a dockerproxy healthcheck plus autoheal is
+circular: when dockerproxy is broken, autoheal is exactly what cannot act. It
+also does not live in `stack_watchdog.py`, which stays pure detection.
+
+### 6. Mounting the socket's parent directory was rejected
+
+The textbook fix for an inode detach is to mount the _directory_ instead, since
+directory mounts resolve entries at lookup time. Here the socket's parent is
+`/run` (and `/var/run` is a symlink to it), which on this host holds
+`credentials`, `systemd/private`, `sudo`, `samba`, `user`, and the `lxd`,
+`multipathd` and `rpcbind` sockets. Mounting that into dockerproxy to save one
+`docker restart` is a plain hardening regression against ADR-0001 and against
+ADR-0024's narrowing. A dedicated directory would need a second dockerd
+listening socket via a `daemon.json`/systemd change — more host surface than
+the unit above, for the same outcome.
+
+### 7. The unit is in the repo, and `make verify-runtime` asserts it
+
+ADR-0040's lockd pins live only on the host, so a rebuild has to reapply them
+from memory. This one does not repeat that: the unit is `host/systemd/`,
+installed by `make install-host-units`, and `make verify-runtime` fails when it
+is missing, disabled, or drifted from the repo copy — alongside the live inode
+comparison, so the check covers both the fault and the guard against it.
+
 ## Consequences
 
 - Every `systemctl restart docker` and every Docker package upgrade detaches
-  this mount. The watchdog now catches it within five minutes instead of three
-  days.
+  this mount. The resync unit now re-resolves it as part of the same restart,
+  and the watchdog catches it within five minutes if the unit is ever missing.
 - `dockerproxy` still has no healthcheck. Adding one would be circular —
   autoheal is its only client and depends on it — so the assertion lives
   outside both, in the watchdog.
