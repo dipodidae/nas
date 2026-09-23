@@ -106,6 +106,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
@@ -1008,6 +1009,56 @@ def check_autoheal(containers: dict[str, dict], recent_logs: str) -> list[Alert]
   return alerts
 
 
+def docker_sock_inodes() -> tuple[int | None, int | None]:
+  """(host inode, dockerproxy's mounted inode) for /var/run/docker.sock."""
+  host: int | None = None
+  with contextlib.suppress(OSError):
+    host = os.stat("/var/run/docker.sock").st_ino
+  code, out = _run(["docker", "exec", "dockerproxy", "stat", "-c", "%i", "/var/run/docker.sock"])
+  inside = int(out.strip()) if code == 0 and out.strip().isdigit() else None
+  return host, inside
+
+
+def check_dockerproxy_socket(host_inode: int | None, proxy_inode: int | None) -> list[Alert]:
+  """Catch the bind mount that silently detached from the Docker socket.
+
+  Pure, so the comparison is testable without a live daemon.
+
+  `dockerproxy` bind-mounts `/var/run/docker.sock` BY INODE, exactly as SWAG
+  binds each proxy-conf (ADR-0022). Restarting the Docker daemon unlinks that
+  socket and creates a new one, so a running dockerproxy keeps a mount of the
+  DELETED inode. HAProxy's frontend still accepts connections and still answers
+  — with `SC--` 503 on every request, forever, with no restart and no log line
+  that says anything is wrong.
+
+  Measured here: dockerd restarted Sun 2026-09-20 16:01 and dockerproxy (up
+  since 09-17) held inode 2825 against the host's 546280 for three days. The
+  visible symptom was three hops away — autoheal has `set -e -o pipefail`, so
+  jq choking on HAProxy's HTML 503 page killed it on every pass: 3747 restarts,
+  a healthcheck reporting `cannot exec in a stopped state`, and NOTHING on the
+  box being auto-restarted. The alert fired against autoheal; the fault was
+  here.
+
+  Nothing else can see this. `make check` reads the compose model, where the
+  mount is correct; the container is `running` with no healthcheck; and
+  autoheal's own probe only reports once the damage has already reached it.
+  """
+  if host_inode is None or proxy_inode is None:
+    return []
+  if host_inode == proxy_inode:
+    return []
+  return [
+    Alert(
+      "dockerproxy:socket-detached",
+      "critical",
+      f"dockerproxy's /var/run/docker.sock mount is stale (inode {proxy_inode} "
+      f"vs host {host_inode}) — the Docker daemon restarted underneath it, so "
+      f"every API call 503s and autoheal supervises nothing. "
+      f"Fix: docker compose up -d --force-recreate dockerproxy autoheal",
+    )
+  ]
+
+
 def autoheal_logs(minutes: int = 15) -> str:
   """Recent autoheal output. Empty string if it cannot be read."""
   code, out = _run(["docker", "logs", "--since", f"{minutes}m", "autoheal"])
@@ -1346,6 +1397,7 @@ def main(argv: list[str] | None = None) -> int:
     services, containers, state.get("restart_counts", {}), set(args.ignore)
   )
   if "autoheal" not in set(args.ignore):
+    alerts += check_dockerproxy_socket(*docker_sock_inodes())
     alerts += check_autoheal(containers, autoheal_logs())
   alerts += check_cron_jobs(args.cron_state_dir)
   # Damped on our side of the webhook: only indexers that stayed failed past

@@ -953,3 +953,29 @@ def test_exited_container_is_not_reported_as_stuck_starting():
 
 def test_created_but_never_started_is_not_reported_as_stuck_starting():
     assert wd.check_stuck_starting(_starting("jellyfin", "created", 900), max_min=150) == []
+
+
+# --- dockerproxy's socket bind mount detaches on a dockerd restart ---------
+#
+# Regression: dockerd restarted 2026-09-20, dockerproxy kept a mount of the
+# deleted inode, every Docker API call 503'd for three days, and the only
+# symptom was autoheal crash-looping 3747 times three hops downstream.
+
+
+def test_dockerproxy_socket_matching_inode_is_quiet():
+  assert wd.check_dockerproxy_socket(546280, 546280) == []
+
+
+def test_dockerproxy_socket_detached_is_critical():
+  alerts = wd.check_dockerproxy_socket(546280, 2825)
+  assert len(alerts) == 1
+  assert alerts[0].key == "dockerproxy:socket-detached"
+  assert alerts[0].severity == "critical"
+  assert "2825" in alerts[0].message and "546280" in alerts[0].message
+
+
+def test_dockerproxy_socket_unknown_inode_does_not_alert():
+  # A dockerproxy that is simply absent is check_autoheal's business, not this
+  # check's; guessing here would page on every stack-down.
+  assert wd.check_dockerproxy_socket(546280, None) == []
+  assert wd.check_dockerproxy_socket(None, 2825) == []
