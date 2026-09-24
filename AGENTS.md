@@ -272,6 +272,7 @@ Required in `.env`:
   engine, not a tenant in playlist-generator-db or streamystats-db. Also stored in
   Nextcloud's `config.php` after the setup wizard, so a rotation edits both
 - `LASTFM_API_KEY` - Last.fm API key for playlist-generator enrichment (read-only; `LASTFM_API_SECRET` optional)
+- `LASTFM_NAVIDROME_API_KEY` / `LASTFM_NAVIDROME_SHARED_SECRET` - Navidrome's Last.fm app for scrobbling (compose-consumed; a separate pair so the key always travels with its own secret)
 - `OPENAI_API_KEY`, `DISCOGS_TOKEN` - optional API keys for playlist-generator (app degrades gracefully without them)
 - `API_KEY_JELLYFIN`, `JELLYFIN_USER_ID` - used by playlist-generator's "Push to Jellyfin" export (creates a Jellyfin playlist for that user via the Jellyfin API)
 - `API_KEY_JELLYFIN_ARR` - dedicated Jellyfin API key used **only** by the Sonarr/Radarr/Lidarr "Update Library" connections, so it can be revoked independently of the scripts' key

@@ -286,6 +286,14 @@ services:
       - ND_LOGLEVEL=info
       # Anonymous usage reporting is ON by default upstream. Off here.
       - ND_ENABLEINSIGHTSCOLLECTOR=false
+      # Last.fm scrobbling. The key/secret only make the agent available; each
+      # user still links their own account under Personal -> Last.fm, whose
+      # redirect lands on /api/lastfm/link/callback (the app's callback URL).
+      # A key without its matching secret fails at the link step, not at boot,
+      # hence a dedicated pair rather than playlist-generator's LASTFM_API_KEY.
+      - ND_LASTFM_ENABLED=true
+      - ND_LASTFM_APIKEY=${LASTFM_NAVIDROME_API_KEY:-}
+      - ND_LASTFM_SECRET=${LASTFM_NAVIDROME_SHARED_SECRET:-}
     volumes:
       - ${CONFIG_DIRECTORY}/navidrome:/data
       # :ro is correct here, and is NOT the ADR-0039 mistake. That one bit

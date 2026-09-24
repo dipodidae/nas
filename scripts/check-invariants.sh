@@ -241,6 +241,9 @@ SECRET_OK = {
     # not basic auth, so it cannot use the ?auth= or userinfo tricks the other
     # publishers use. ADR-0024.
     "diun",
+    # navidrome: ND_LASTFM_APIKEY / ND_LASTFM_SECRET, read by its Last.fm agent
+    # to sign the account-link and scrobble calls. No _FILE variant exists.
+    "navidrome",
     # streamystats: SESSION_SECRET and NEXT_SERVER_ACTIONS_ENCRYPTION_KEY are
     # read by Next.js itself; POSTGRES_PASSWORD by the postgres entrypoint;
     # DATABASE_URL by both app halves. All genuinely consumed. ADR-0030.
