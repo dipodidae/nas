@@ -660,3 +660,40 @@ def test_a_copy_that_loses_every_database_is_a_failure_not_a_backup(tmp_path):
   ok, why = su.copy_tree(tmp_path / "cfg", "jellyfin", dest)
   assert not ok
   assert "no database" in why.lower()
+
+
+# --- gate_summary: why a gate failed, not what its last check printed -------
+
+def test_failed_gate_reports_the_fault_not_the_last_check():
+  # The exact shape of 2026-09-24: the resync unit failed, and the last
+  # stdout line was the all-clear of the unrelated container check.
+  out = (
+    "==> dockerproxy's socket mount is live, and its resync unit is installed\n"
+    "    ok: inode 546280 on both sides\n"
+    "    !!! dockerproxy-resync.service is NOT installed -- the next\n"
+    "        dockerd restart will detach the mount again. make install-host-units\n"
+    "==> unhealthy or exited containers\n"
+    "    none\n"
+  )
+  line = su.gate_summary(2, out, "make: *** [Makefile:327: verify-runtime] Error 1\n")
+  assert line == (
+    "dockerproxy-resync.service is NOT installed -- the next "
+    "dockerd restart will detach the mount again. make install-host-units"
+  )
+
+
+def test_several_faults_are_all_reported():
+  out = "==> a\n    !!! first\n==> b\n    ok: fine\n==> c\n    !!! second\n    none\n"
+  assert su.gate_summary(1, out, "") == "first; second"
+
+
+def test_failure_without_fault_markers_falls_back_to_stderr():
+  assert su.gate_summary(2, "==> x\n    ok\n", "boom\n") == "boom"
+
+
+def test_passing_gate_reports_its_last_line():
+  assert su.gate_summary(0, "==> lint\ncompose model OK\n", "") == "compose model OK"
+
+
+def test_empty_output_names_the_exit_code():
+  assert su.gate_summary(2, "", "") == "exit 2"

@@ -1061,8 +1061,36 @@ def running_tag(service: str) -> str | None:
 def gate(target: str, timeout: int = 900) -> tuple[bool, str]:
   """Run a repo gate (`make check`, `make lint`, `make verify-runtime`)."""
   p = run(["make", target], timeout=timeout)
-  tail = (p.stdout or p.stderr).strip().splitlines()
-  return p.returncode == 0, tail[-1] if tail else f"{target} exit {p.returncode}"
+  return p.returncode == 0, gate_summary(p.returncode, p.stdout or "", p.stderr or "")
+
+
+def gate_summary(rc: int, stdout: str, stderr: str) -> str:
+  """One line saying why a gate passed or failed.
+
+  The last stdout line is right for a pass and wrong for a failure: the gates
+  run every check and print a verdict per check, so the last line belongs to
+  whichever check happens to run last. verify-runtime failed on the dockerproxy
+  resync unit and this reported "none" -- the all-clear of the next check.
+  On failure, surface the `!!!` lines the checks print for their faults.
+  """
+  lines = [ln.strip() for ln in stdout.strip().splitlines() if ln.strip()]
+  if rc != 0:
+    # A fault can wrap onto indented continuation lines; keep them with it.
+    faults: list[str] = []
+    in_fault = False
+    for ln in lines:
+      if ln.startswith("!!!"):
+        faults.append(re.sub(r"^!+\s*", "", ln))
+        in_fault = True
+      elif in_fault and not re.match(r"(==>|ok:|note:|none$|all present$)", ln):
+        faults[-1] += " " + ln
+      else:
+        in_fault = False
+    if faults:
+      return "; ".join(faults)
+    err = [ln.strip() for ln in stderr.strip().splitlines() if ln.strip()]
+    lines = err or lines
+  return lines[-1] if lines else f"exit {rc}"
 
 
 def notify(lane: str, title: str, message: str, enabled: bool = True) -> None:
