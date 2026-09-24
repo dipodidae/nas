@@ -29,7 +29,7 @@
 
 # beszel
 #   plain semver tags
-- name: henrygd/beszel:0.19.0
+- name: henrygd/beszel:0.20.0
   metadata:
     service: beszel
   watch_repo: true
@@ -53,7 +53,7 @@
 
 # beszel-agent
 #   plain semver tags; keep in lockstep with the hub
-- name: henrygd/beszel-agent:0.19.0
+- name: henrygd/beszel-agent:0.20.0
   metadata:
     service: beszel-agent
   watch_repo: true
@@ -160,7 +160,7 @@
   watch_repo: false
 
 # navidrome
-- name: deluan/navidrome:0.64.0
+- name: deluan/navidrome:0.64.1
   metadata:
     service: navidrome
   watch_repo: false
@@ -197,7 +197,7 @@
 
 # qbittorrent
 #   floor >= 5.2.2 per ADR-0005; LSIO release tags only
-- name: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls476
+- name: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls477
   metadata:
     service: qbittorrent
   watch_repo: true

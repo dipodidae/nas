@@ -42,7 +42,7 @@ services:
     # INVARIANT: tag is PINNED and the floor is qBittorrent >= 5.2.2 (upstream
     # #24357 / fix #24363). Updates are a deliberate tag bump, never a
     # schedule. ADR-0005, ADR-0006. `make update-qbittorrent`.
-    image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls476
+    image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls477
     container_name: qbittorrent
     # INVARIANT: stable hostname across recreates -- the lockfile records it
     # and the stale-lock init script compares against it. ADR-0005.
