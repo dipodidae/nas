@@ -628,6 +628,19 @@ Exit codes: `0` success / dry-run / already up to date, `1` partial (read fine, 
 
 Environment: `API_KEY_JELLYFIN` (required), `JELLYFIN_HOST` (default `http://localhost:8096`).
 
+### `jellyfin_subtitle_prewarm.py`
+
+Fixes "embedded subtitles take 30 s to load, or never". Subtitle packets are interleaved through the whole container, so Jellyfin serves the first cue of an embedded track only after ffmpeg has read the **entire** file off the USB HDD: measured 35 s for a 3.9 GB episode with the disk idle, 173–239 s during playback (same spindle), and 5–12 min for the 29.5 GB _12 Angry Men_ remux while the browser gave up at ~60 s (`499` in SWAG's `jellyfin-access.log`). Jellyfin caches the result under `/config/data/subtitles/<guid>/` but has no task that fills it, so this script does, **newest imports first**: for each video whose embedded text tracks are not all cached, it requests one track through `/Videos/{id}/{src}/Subtitles/{i}/0/Stream.srt`, and Jellyfin extracts every text track of the file in one pass (29 tracks, 17 s, on a Mayday episode). Afterwards the same request is ~0.08 s through SWAG.
+
+Guards, because each item is a full read of the file: stands down while anything is playing; stops starting items after `--budget-min`; an item that fails 3 times is skipped from then on (`logs/cron-state/jellyfin-subtitle-prewarm-failures.json`, delete an entry to retry). Image subs (PGS/VobSub) are **not** pre-warmed — Jellyfin extracts those one full read per track.
+
+```bash
+python scripts/jellyfin_subtitle_prewarm.py --dry-run --limit 10   # what's left, newest first
+python scripts/jellyfin_subtitle_prewarm.py --limit 1              # extract one
+```
+
+Cron: hourly at `:03`, `--budget-min 50`. Exit codes: `0` ok (also when deferred for playback), `1` an extraction failed, `2` Jellyfin unreachable / no API key. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_URL`, `JELLYFIN_SUBTITLE_CACHE`.
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. The full live crontab on this host:

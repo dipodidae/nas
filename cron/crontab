@@ -291,6 +291,15 @@
 5 5 * * 5 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-movies --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library Movies >> logs/jellyfin_library_scan.log 2>&1"
 # Sat 05:05 — TV Shows.
 5 5 * * 6 /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-scan-tv --max-age-min 10380 -- python scripts/jellyfin_library_scan.py --library 'TV Shows' >> logs/jellyfin_library_scan.log 2>&1"
+# --- Jellyfin subtitle pre-extraction (2026-09-25) ---
+# An embedded subtitle costs ffmpeg a read of the WHOLE file off the USB HDD before
+# the first cue is served: 35 s for a 4 GB episode idle, 4 min during playback, 12
+# min for a 30 GB remux -- the browser gives up at ~60 s. This fills Jellyfin's own
+# subtitle cache ahead of playback (newest first) so selecting a track is ~0.1 s.
+# Hourly, 50-min budget, stands down while anything is playing. --ok-codes 0: an
+# extraction failure alerts, and is retried at most 3 times (state file) rather than
+# re-reading a broken file every hour.
+03 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name jellyfin-subtitle-prewarm --lock /tmp/nas-jellyfin-subtitle-prewarm.lock --max-age-min 180 --ok-codes 0 -- python scripts/jellyfin_subtitle_prewarm.py --budget-min 50 >> logs/jellyfin_subtitle_prewarm.log 2>&1"
 # --- Jellyfin music jobs: RETIRED 2026-09-16 (ADR-0051) ---
 # jellyfin-scan-music, jellyfin-image-backfill, music-library-sweep and
 # lidarr-jellyfin-bridge all lived here. Jellyfin no longer has a music library:
