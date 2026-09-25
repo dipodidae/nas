@@ -433,6 +433,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> Cleanuparr still cannot touch Lidarr, and Seeker is off"; \
 	.venv/bin/python scripts/check-cleanuparr-excludes-lidarr.py \
 	  || { rc=1; crit=1; note "Cleanuparr has Lidarr enabled or Seeker on -- Queue Cleaner deletes Lidarr queue rows in ~15min and Seeker re-grabs them, a closed loop that burns Soulseek searches, blocklists good releases and makes lidarr_queue_unstick structurally unable to run (2026-09-17)"; }; \
+	echo "==> Bazarr is still the accuracy-first setup (providers, sync framerate fix, NL + EN)"; \
+	.venv/bin/python scripts/check-bazarr-config.py \
+	  || { rc=1; note "Bazarr config drifted -- a restore or UI click undid the 2026-09-25 setup (scripts/check-bazarr-config.py names it); Poirot got PAL-timed and wrong-episode subtitles under the old one"; }; \
 	echo "==> Lidarr still tells Navidrome to rescan on import (ADR-0049)"; \
 	.venv/bin/python scripts/check-lidarr-navidrome-notification.py \
 	  || { rc=1; note "Lidarr's Navidrome connector drifted, or its Navidrome principal lost adminRole -- new albums now wait up to an hour for the scheduled scan (ADR-0049)"; }; \
