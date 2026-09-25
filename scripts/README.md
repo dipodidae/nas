@@ -641,6 +641,31 @@ python scripts/jellyfin_subtitle_prewarm.py --limit 1              # extract one
 
 Cron: hourly at `:03`, `--budget-min 50`. Exit codes: `0` ok (also when deferred for playback), `1` an extraction failed, `2` Jellyfin unreachable / no API key. Environment: `API_KEY_JELLYFIN`, `JELLYFIN_URL`, `JELLYFIN_SUBTITLE_CACHE`.
 
+### `subtitle_audit.py`
+
+Checks every external subtitle against what is actually spoken (ADR-0054). Bazarr scores a subtitle by its metadata and cannot see a wrong episode (Poirot S03E07 carried S03E08's subtitle at 94.72%), a 25 fps PAL-DVD subtitle drifting 4% on a 24 fps Blu-ray, or a different cut. For each subtitle it transcribes three seeked 60 s clips (20/50/80%) with the local `whisper` container. That is purely a measurement; nothing transcribed is ever written as a subtitle. It then matches spoken lines to cues:
+
+| Verdict               | Meaning                                                                           | `--apply` does                                                                              |
+| --------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `GOOD`                | every window within 0.75 s                                                        | nothing                                                                                     |
+| `FIXABLE`             | one line `audio = a·sub + b` explains every window (drift and/or shift)           | retime, then re-measure at 4 **other** points; keep only if all aligned, else → `UNFIXABLE` |
+| `MOSTLY`              | right in most windows, off in one (a locally different cut)                       | nothing: a retime would make the good parts worse                                           |
+| `WRONG` / `UNFIXABLE` | speech not in the subtitle / right words, but no retime lines them up             | back up, then Bazarr blacklist (delete + never pick that file again + re-search)            |
+| `UNSURE`              | too little speech, or a subtitle in another language than the audio (onset check) | nothing; re-checked after 30 days                                                           |
+
+Originals of everything touched are kept at `${SHARE_DIRECTORY}/backups/subtitle-audit/<same relative path>`. Verdicts are remembered per file size + mtime in `logs/cron-state/subtitle-audit.json`, so an unchanged file is measured once; a replacement or retime gets measured again.
+
+```bash
+python scripts/subtitle_audit.py --path "/mnt/drive/series/Agatha Christie's Poirot/Season 3"   # report only
+python scripts/subtitle_audit.py --apply --limit 5
+```
+
+Cron: hourly at `:33`, `--apply --budget-min 25`. About 20 s per subtitle on the CPU `small` model. Exit codes: `0` ok, `1` some items errored (for example a clip timing out while Bazarr syncs; retried next run), `2` whisper or Bazarr unreachable. Environment: `WHISPER_URL`, `BAZARR_URL`, `SHARE_DIRECTORY`, `SUBTITLE_AUDIT_FFMPEG_CONTAINER` (default `bazarr`: the host has no ffmpeg).
+
+### `check-bazarr-config.py`
+
+`make verify-runtime` check that Bazarr's **live** settings (read over its API, not from the YAML) are still the ADR-0054 setup. It covers: providers (and that `whisperai`/`subf2m` stay off), minimum scores 90/80, sync on with framerate correction and thresholds 96/86, the four correction mods, deep audio analysis, OpenSubtitles hash matching, and every series and movie on the "NL + EN" profile with it as the default. Exit `0` ok / `1` drift (each named) / `2` unreachable.
+
 ### Integration
 
 All new scripts are included in `test_scripts.py` for import validation. The full live crontab on this host:
