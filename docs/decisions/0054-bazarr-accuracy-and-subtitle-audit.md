@@ -71,6 +71,43 @@ A subtitle in a different language from the audio (NL on English, EN on Korean) 
 be text-matched. It gets a speech-onset check, which is reported and never acted on.
 Verdicts are remembered per file size + mtime.
 
+### 3. Replacing, not just removing
+
+Blacklisting one file does not stop Bazarr from choosing its **sibling**. After the
+first pass, SubDL's replacements for Poirot S03 were the same mis-numbered pack
+re-uploaded (`…english-2329921.zip`, one file per episode, each with its own
+`subs_id`), and 7 of 8 came back WRONG again. Then SubSource offered a third copy
+(`651487`). And with OpenSubtitles over its daily quota, S03E07's only candidates were
+four 86% Gestdown DVD rips: below the 90 minimum, so Bazarr's own search would leave
+the episode with no English subtitle at all.
+
+So the audit drives replacement itself. Every removed subtitle is tracked (state key
+`_replacing`) together with the **pack id** it came from (the ≥6-digit upload id, which
+survives re-uploads across providers). While nothing has replaced it, the audit takes
+Bazarr's manual-search candidates, skips anything from a known-bad pack and anything
+already tried, and queues the best one, **ignoring the minimum score**: the audit
+decides, not the score. The next run measures what landed. It makes at most 5 attempts,
+then rests a day (OpenSubtitles' quota resets, and new uploads appear).
+
+Provider and `subs_id` for the blacklist are read from `bazarr.db` read-only, not from
+`/api/episodes/history`. That endpoint inner-joins Bazarr's subtitle index, so right
+after a subtitle is deleted or replaced the episode's whole history disappears from it:
+0 rows for S03E07, an hour after it returned 5.
+
+### 4. Wrong here is often right next door
+
+Every provider's Poirot S03 subtitles were WRONG, even Gestdown's (Addic7ed) DVD rip,
+and for one reason: **TVDB counts the feature-length _Mysterious Affair at Styles_ as
+S03E01, and every subtitle site leaves it out of Season 3**, so their "S03E*n*" is
+Sonarr's S03E*n+1*. Measured: Gestdown's "S03E10" matched S03E11's audio 15/24 and at
+most 2 lines against every other Season 3 video; the pack's "S03E07" is S03E08's.
+
+So a WRONG subtitle is tried against its neighbours (±1, then ±2, in the same
+season) with one mid-episode window before it is discarded. If the spoken lines are
+there, it moves to that episode, unless that episode already has a subtitle the
+audit has not judged bad. The next run measures it in full, so it is retimed if
+need be. Bazarr cannot do this: it only ever searches by the episode's own number.
+
 ## What was measured
 
 - Poirot S03 (11 subs): **8 WRONG**, 7 of them from the one mis-numbered pack, 1 MOSTLY,

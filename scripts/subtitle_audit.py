@@ -34,6 +34,9 @@ From the matched (subtitle time, audio time) pairs it fits ``audio = a * sub + b
 * MOSTLY   -- right in most windows, off in one: a locally different cut. Reported,
               never retimed, because a straight line through it would make the
               good parts worse;
+* BADSYNC  -- right words, but seconds-to-minutes off at every point and no single
+              retime explains it: replaced like WRONG (not re-homed: it is this
+              episode's);
 * UNSURE   -- too little speech to judge, or an inconsistent fit: left alone.
 
 Subtitles in a language other than the one being spoken cannot be text-matched, so
@@ -55,6 +58,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -65,11 +69,11 @@ import urllib.request
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://localhost:9000")
 BAZARR_URL = os.environ.get("BAZARR_URL", "http://localhost:6767")
+BAZARR_DB = Path(os.environ.get("BAZARR_DB", ".docker-config/bazarr/db/bazarr.db"))
 BAZARR_CONFIG = Path(os.environ.get("BAZARR_CONFIG", ".docker-config/bazarr/config/config.yaml"))
 SHARE = Path(os.environ.get("SHARE_DIRECTORY", "/mnt/drive"))
 # The container that runs ffmpeg, and where it sees SHARE. The host has no ffmpeg.
@@ -265,6 +269,7 @@ def fit_line(pairs: list[tuple[float, float]]) -> tuple[float, float, float]:
   return a, b, res
 
 
+MOSTLY_MAX_S = 2.0  # a kept "mostly" retime may be this far off at its worst point
 INLIER_S = 1.5  # a pair further than this from its window's median is a false match
 
 
@@ -282,7 +287,7 @@ def inliers(w: Window) -> list[tuple[float, float]]:
 
 @dataclass
 class Verdict:
-  kind: str  # GOOD / MOSTLY / FIXABLE / WRONG / UNSURE
+  kind: str  # GOOD / MOSTLY / FIXABLE / BADSYNC / WRONG / UNSURE (+ UNFIXABLE)
   detail: str
   a: float = 1.0
   b: float = 0.0
@@ -310,11 +315,16 @@ def classify_text(windows: list[Window]) -> Verdict:
   if len(usable) < 2:
     return Verdict("UNSURE", f"misaligned, but only one window to measure from ({offsets})")
   a, b, _ = fit_line([p for w in usable for p in inliers(w)])
+  # Right words, and nowhere near the right time at ANY point, in a way no single retime
+  # explains (Plymouth Express: -88 / -141 / -188 s). Unwatchable, so it is replaced
+  # like a wrong one rather than left as "unsure" with nothing looking for better.
+  hopeless = all(abs(m) > MOSTLY_MAX_S for m in meds)
   if len(usable) < 3:
     # Two windows fit any line exactly, so a drift is only believed when its slope is
     # a real framerate conversion (Spanish Chest on its PAL-DVD subtitle: 0.9604).
     if not any(abs(a - r) <= FPS_RATIO_TOLERANCE for r in FPS_RATIOS):
-      return Verdict("UNSURE", f"misaligned, too few windows to fit a drift (a={a:.4f}; {offsets})")
+      kind = "BADSYNC" if hopeless else "UNSURE"
+      return Verdict(kind, f"misaligned, too few windows to fit a drift (a={a:.4f}; {offsets})")
     return Verdict("FIXABLE", f"framerate audio = {a:.5f}*sub {b:+.2f}s ({offsets})", a, b)
   # A different CUT (an extra scene, a trimmed recap) is off in one place and right in
   # the others. A straight line through that would move the good parts too, so the fit
@@ -322,7 +332,7 @@ def classify_text(windows: list[Window]) -> Verdict:
   worst = max(abs(statistics.median(y - (a * x + b) for x, y in inliers(w))) for w in usable)
   if worst > FIT_MAX_RESIDUAL_S or not 0.9 <= a <= 1.1:
     return Verdict(
-      "UNSURE",
+      "BADSYNC" if hopeless else "UNSURE",
       f"off in places, not a drift or shift (a={a:.4f}, worst window {worst:.2f}s; {offsets})",
     )
   return Verdict(
@@ -331,13 +341,23 @@ def classify_text(windows: list[Window]) -> Verdict:
 
 
 def verify_retime(windows: list[Window]) -> Verdict:
-  """GOOD only if enough held-out windows were measurable and every one is aligned."""
+  """Judge a retime at held-out points: GOOD, MOSTLY (kept), or UNSURE (reverted).
+
+  GOOD needs MIN_VERIFY_WINDOWS measurable points, every one aligned. MOSTLY -- most
+  points aligned, none worse than MOSTLY_MAX_S -- is kept too: Wasps' Nest after its
+  PAL retime was +0.02 / +0.05 / -0.24 / -1.69 s, and reverting that left the episode
+  with no English subtitle at all, which is worse than one scene 1.7 s late.
+  """
   usable = [w for w in windows if len(inliers(w)) >= MIN_PAIRS_PER_WINDOW]
   offsets = ", ".join(f"{w.at / 60:.0f}m {_median_offset(w):+.2f}s" for w in usable)
-  if len(usable) < MIN_VERIFY_WINDOWS:
-    return Verdict("UNSURE", f"only {len(usable)} held-out windows measurable ({offsets})")
-  if all(abs(_median_offset(w)) <= GOOD_TOLERANCE_S for w in usable):
+  meds = [abs(_median_offset(w)) for w in usable]
+  aligned = sum(m <= GOOD_TOLERANCE_S for m in meds)
+  if len(usable) >= MIN_VERIFY_WINDOWS and aligned == len(usable):
     return Verdict("GOOD", f"held-out {offsets}")
+  if len(usable) >= 2 and aligned * 2 >= len(usable) and max(meds) <= MOSTLY_MAX_S:
+    return Verdict("MOSTLY", f"held-out {offsets}")
+  if len(usable) < 2:
+    return Verdict("UNSURE", f"only {len(usable)} held-out windows measurable ({offsets})")
   return Verdict("UNSURE", f"held-out windows still off ({offsets})")
 
 
@@ -453,29 +473,77 @@ def measure(
   return windows, spoken, text_mode
 
 
-def latest_download(history: list[dict], lang: str) -> dict | None:
-  """Bazarr's most recent download of `lang` for one video.
+PACK_ID = re.compile(r"(\d{6,})")
+MAX_ATTEMPTS = 5  # candidates tried per subtitle before giving up for the day
+REQUEST_WAIT_S = 30 * 60  # Bazarr queues downloads; give one this long to land
+RETRY_EXHAUSTED_S = 86400  # OpenSubtitles' quota resets daily, and new uploads appear
 
-  Matched by language, not by path: history keeps the filename the subtitle had when it
-  was downloaded (`…S03E07.1080p.BluRay.x264-YELLOWBIRD.en.srt`) and a Sonarr rename
-  since then does not update it. Sync rows (action 5) carry no provider and are skipped.
+
+def pack_key(ident: str) -> str:
+  """What a bad subtitle's siblings share. Season packs carry one upload id across every
+  episode file and across re-uploads: subf2m `…/english/2329921` and subdl
+  `…english-2329921.zip/Csw5YxSHnR` are the same mis-numbered Poirot S03 pack."""
+  m = PACK_ID.search(ident or "")
+  return m.group(1) if m else (ident or "").split("/")[0]
+
+
+def _cand_id(c: dict) -> str:
+  return f"{c.get('provider')}|{c.get('url') or c.get('subtitle', '')[:200]}"
+
+
+def choose_candidate(cands: list[dict], tried: list[str], bad_packs: list[str]) -> dict | None:
+  """Best untried candidate that is not from a pack already proven wrong.
+
+  Deliberately ignores Bazarr's minimum score: that is exactly what left Poirot S03E07
+  with nothing but four 86% DVD rips, and a DVD rip is what the audit can retime. The
+  audit, not the score, decides whether it stays.
   """
-  rows = [
-    h
-    for h in history
-    if h.get("provider")
-    and h.get("subs_id")
-    and isinstance(h.get("language"), dict)
-    and h["language"].get("code2") == lang
+
+  def from_bad_pack(c: dict) -> bool:
+    blob = " ".join([str(c.get("url") or ""), *map(str, c.get("release_info") or [])])
+    return any(p and p in blob for p in bad_packs)
+
+  ok = [c for c in cands if _cand_id(c) not in tried and not from_bad_pack(c)]
+  return min(
+    ok, key=lambda c: (c.get("hearing_impaired") == "True", -int(c.get("score") or 0)), default=None
+  )
+
+
+def latest_download(rows: list[dict], lang: str) -> dict | None:
+  """Bazarr's most recent download of `lang` for one video, from `table_history` rows.
+
+  Read from the DB, not the API: `/api/episodes/history` inner-joins Bazarr's subtitle
+  INDEX, so an episode whose subtitle was just deleted or replaced -- exactly the moment
+  this is needed -- has its whole history hidden until the next index scan (it returned
+  0 rows for Poirot S03E07 an hour after returning 5). Matched by language, not path:
+  history keeps the pre-rename filename. Sync rows (action 5) have no provider.
+  `language` is `en`, `en:hi` or `en:forced`.
+  """
+  ok = [
+    r
+    for r in rows
+    if r.get("provider") and r.get("subs_id") and str(r.get("language", "")).split(":")[0] == lang
   ]
+  return max(ok, key=lambda r: str(r.get("timestamp") or ""), default=None)
 
-  def when(h: dict) -> datetime:
-    try:
-      return datetime.strptime(h.get("parsed_timestamp") or "", "%m/%d/%y %H:%M:%S")
-    except ValueError:
-      return datetime.min
 
-  return max(rows, key=when, default=None)
+def history_rows(kind: str, media_id: int, db: Path = BAZARR_DB) -> list[dict]:
+  con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=30)
+  try:
+    con.row_factory = sqlite3.Row
+    table, col = (
+      ("table_history", "sonarrEpisodeId")
+      if kind == "episode"
+      else ("table_history_movie", "radarrId")
+    )
+    return [
+      dict(r)
+      for r in con.execute(
+        f"SELECT provider, subs_id, language, timestamp FROM {table} WHERE {col} = ?", (media_id,)
+      )
+    ]
+  finally:
+    con.close()
 
 
 class Bazarr:
@@ -506,21 +574,18 @@ class Bazarr:
     with urllib.request.urlopen(req, timeout=900) as resp:
       return resp.status
 
-  def blacklist(self, video: Path, sub: Path) -> str:
-    """Blacklist + delete + re-search. Returns a description, or '' if Bazarr does not own it."""
+  def blacklist(self, video: Path, sub: Path) -> tuple[str, str]:
+    """Blacklist + delete + re-search. Returns (description, subs_id); ('', '') if not Bazarr's."""
     hit = self.by_path.get(to_container(video))
     if not hit:
-      return ""
+      return "", ""
     kind, item = hit
     csub = to_container(sub)
-    if kind == "episode":
-      hist = self._get(f"/api/episodes/history?episodeid={item['sonarrEpisodeId']}")["data"]
-    else:
-      hist = self._get(f"/api/movies/history?radarrid={item['radarrId']}")["data"]
-    row = latest_download(hist, sub_language(sub) or "")
+    media_id = item["sonarrEpisodeId"] if kind == "episode" else item["radarrId"]
+    row = latest_download(history_rows(kind, media_id), sub_language(sub) or "")
     if not row:
-      return ""
-    code = row["language"]["code2"]
+      return "", ""
+    code = str(row["language"]).split(":")[0]
     form = {
       "provider": row["provider"],
       "subs_id": row["subs_id"],
@@ -533,11 +598,166 @@ class Bazarr:
     else:
       form |= {"radarrid": item["radarrId"]}
       self._post("/api/movies/blacklist", form)
-    return f"blacklisted {row['provider']} {row['subs_id']} in Bazarr and re-searched"
+    return f"blacklisted {row['provider']} {row['subs_id']} in Bazarr", row["subs_id"]
+
+  def owns(self, video: Path) -> bool:
+    return to_container(video) in self.by_path
+
+  def candidates(self, video: Path, lang: str) -> list[dict]:
+    """Bazarr's manual-search results for this video, in one language."""
+    kind, item = self.by_path[to_container(video)]
+    if kind == "episode":
+      data = self._get(f"/api/providers/episodes?episodeid={item['sonarrEpisodeId']}")["data"]
+    else:
+      data = self._get(f"/api/providers/movies?radarrid={item['radarrId']}")["data"]
+    return [c for c in data if c.get("language") == lang]
+
+  def download(self, video: Path, cand: dict) -> None:
+    """Queue a specific candidate. Bazarr runs it from its job queue, minutes later."""
+    kind, item = self.by_path[to_container(video)]
+    form = {
+      "hi": cand.get("hearing_impaired") or "False",
+      "forced": cand.get("forced") or "False",
+      "original_format": cand.get("original_format") or "False",
+      "provider": cand["provider"],
+      "subtitle": cand["subtitle"],
+    }
+    if kind == "episode":
+      form |= {"seriesid": item["sonarrSeriesId"], "episodeid": item["sonarrEpisodeId"]}
+      self._post("/api/providers/episodes", form)
+    else:
+      form |= {"radarrid": item["radarrId"]}
+      self._post("/api/providers/movies", form)
 
 
-def backup(sub: Path) -> Path:
-  dest = BACKUP_DIR / sub.relative_to(SHARE)
+EPISODE = re.compile(r"S(\d{1,3})E(\d{1,3})", re.I)
+HOME_MIN_PAIRS = 5  # matched lines in one mid-episode window to call it "this one's"
+HOME_MIN_RATIO = 0.4
+
+
+def neighbours(video: Path, reach: int = 2) -> list[Path]:
+  """Same-season videos at episode distance 1, then 2 -- nearest first."""
+  m = EPISODE.search(video.name)
+  if not m:
+    return []
+  season, ep = int(m.group(1)), int(m.group(2))
+  found: dict[int, Path] = {}
+  for c in video.parent.iterdir():
+    n = EPISODE.search(c.name)
+    if c.suffix.lower() in VIDEO_EXTS and n and int(n.group(1)) == season and c != video:
+      found[int(n.group(2))] = c
+  return [found[e] for d in range(1, reach + 1) for e in (ep + d, ep - d) if e in found]
+
+
+def belongs_to(video: Path, cues: list[Cue]) -> bool:
+  """One mid-episode window: are this video's spoken lines in these cues?"""
+  at = duration_s(video) * 0.5
+  segs, _ = transcribe(video, at, None)
+  lines, pairs = match_pairs(segs, cues, at)
+  return len(pairs) >= HOME_MIN_PAIRS and len(pairs) >= HOME_MIN_RATIO * lines
+
+
+def rehome(sub: Path, video: Path, text: str, lang: str | None, state: dict) -> str:
+  """A WRONG subtitle is often right for a NEIGHBOUR: give it there instead of losing it.
+
+  Poirot Season 3 on TVDB (so Sonarr) counts the feature-length Mysterious Affair at
+  Styles as S03E01; every subtitle site leaves it out, so their "S03En" is our
+  S03E(n+1). Every provider's pack and every re-upload was WRONG for the same
+  reason, and the right subtitle for each episode was in hand, filed under its
+  neighbour. The target is only overwritten when it has no subtitle yet or one this
+  audit already judged bad; the moved file is measured in full on the next run.
+  """
+  if not lang:
+    return ""
+  cues = parse_srt(text)
+  for other in neighbours(video):
+    target = other.with_name(f"{other.stem}.{lang}.srt")
+    verdict = (state.get(str(target)) or {}).get("verdict")
+    if target.exists() and verdict not in ("WRONG", "UNFIXABLE", "BADSYNC", "UNSURE", "ERROR"):
+      continue  # GOOD/MOSTLY, or not measured yet: leave it to the normal pass
+    if belongs_to(other, cues):
+      if target.exists():
+        backup(target)
+      target.write_text(text, encoding="utf-8")
+      state.pop(str(target), None)  # measure it fresh
+      m = EPISODE.search(other.name)
+      return f"it belongs to {m.group(0).upper() if m else other.name}: moved there"
+  return ""
+
+
+REPLACING = "_replacing"  # state key: subtitles removed as bad, being replaced
+
+
+def track_replacement(
+  state: dict, sub: Path, video: Path, lang: str | None, subs_id: str, now: float
+) -> None:
+  """Remember a removed subtitle, and the pack it came from, until a verified one replaces it."""
+  rep = state.setdefault(REPLACING, {}).setdefault(
+    str(sub), {"video": str(video), "lang": lang, "bad_packs": [], "tried": [], "attempts": 0}
+  )
+  if (key := pack_key(subs_id)) and key not in rep["bad_packs"]:
+    rep["bad_packs"].append(key)
+  # Bazarr's own re-search (queued by the blacklist) gets the first go.
+  rep["last"] = now
+
+
+def next_step(rep: dict, sub_exists: bool, now: float) -> str:
+  """What to do about one pending replacement: wait / request / exhausted / idle."""
+  if sub_exists:
+    return "idle"  # something landed; the audit loop measures it
+  if now - rep.get("last", 0) < REQUEST_WAIT_S:
+    return "wait"
+  if rep["attempts"] >= MAX_ATTEMPTS:
+    if now - rep.get("exhausted_at", now) < RETRY_EXHAUSTED_S:
+      return "exhausted"
+    return "request"
+  return "request"
+
+
+def drive_replacements(bazarr: Bazarr, state: dict, now: float) -> list[str]:
+  """Request the next candidate for every removed subtitle nothing has replaced yet."""
+  out = []
+  for sub_s, rep in sorted(state.get(REPLACING, {}).items()):
+    sub, video = Path(sub_s), Path(rep["video"])
+    step = next_step(rep, sub.exists(), now)
+    if step == "exhausted" and "exhausted_at" not in rep:
+      rep["exhausted_at"] = now
+    if step != "request" or not video.exists() or not bazarr.owns(video):
+      continue
+    if rep["attempts"] >= MAX_ATTEMPTS:  # a day has passed: one more round
+      rep["attempts"], rep["tried"] = MAX_ATTEMPTS - 1, rep["tried"][-20:]
+      rep.pop("exhausted_at", None)
+    try:
+      pick = choose_candidate(bazarr.candidates(video, rep["lang"]), rep["tried"], rep["bad_packs"])
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+      out.append(f"  REPLACE {sub.relative_to(SHARE)}: search failed: {exc}")
+      continue
+    rep["last"] = now
+    if not pick:
+      rep["attempts"], rep["exhausted_at"] = MAX_ATTEMPTS, now
+      out.append(
+        f"  REPLACE {sub.relative_to(SHARE)}: no untried candidate outside bad packs {rep['bad_packs']}"
+      )
+      continue
+    bazarr.download(video, pick)
+    rep["tried"].append(_cand_id(pick))
+    rep["attempts"] += 1
+    out.append(
+      f"  REPLACE {sub.relative_to(SHARE)}: try {rep['attempts']}/{MAX_ATTEMPTS} "
+      f"{pick['provider']} {pick.get('score')}% {(pick.get('release_info') or [''])[0][:50]!r}"
+    )
+  return out
+
+
+def backup(sub: Path, root: Path = BACKUP_DIR) -> Path:
+  """Copy `sub` into the backup tree, never over an earlier backup of the same path.
+
+  The same path gets replaced several times (Poirot S03E07: subf2m, then subdl, then
+  whatever comes next), and each version is its own evidence.
+  """
+  dest = root / sub.relative_to(SHARE)
+  if dest.exists():
+    dest = dest.with_name(f"{dest.name}.{int(time.time())}")
   dest.parent.mkdir(parents=True, exist_ok=True)
   shutil.copy2(sub, dest)
   return dest
@@ -620,8 +840,9 @@ def main() -> int:
         sub.write_text(retime_srt(text, v.a, v.b), encoding="utf-8")
         held_out, _, _ = measure(video, sub.read_text(encoding="utf-8"), lang, VERIFY_WINDOWS)
         after = verify_retime(held_out)
-        if after.kind == "GOOD":
-          v, action = Verdict("GOOD", f"retimed ({v.detail}); now {after.detail}"), "retimed"
+        if after.kind in ("GOOD", "MOSTLY"):
+          v = Verdict(after.kind, f"retimed ({v.detail}); now {after.detail}")
+          action = "retimed"
         else:
           # A different cut: the right words, but no single retime lines them up, and
           # seconds-off is no better than nothing. Hand it back to Bazarr like a wrong
@@ -630,14 +851,31 @@ def main() -> int:
           shutil.copy2(bak, sub)
           v = Verdict("UNFIXABLE", v.detail)
           action = f"retime did not verify ({after.detail})"
-          replaced = bazarr.blacklist(video, sub) if bazarr else ""
+          replaced, subs_id = bazarr.blacklist(video, sub) if bazarr else ("", "")
           action += f"; {replaced}" if replaced else "; original restored"
+          if replaced:
+            track_replacement(state, sub, video, lang, subs_id, now)
+      elif args.apply and same and v.kind == "BADSYNC":
+        backup(sub)
+        action, subs_id = bazarr.blacklist(video, sub) if bazarr else ("", "")
+        if action:
+          track_replacement(state, sub, video, lang, subs_id, now)
       elif args.apply and same and v.kind == "WRONG":
         backup(sub)
-        action = bazarr.blacklist(video, sub) if bazarr else ""
-        if not action:
+        rehomed = rehome(sub, video, text, lang, state)
+        action, subs_id = bazarr.blacklist(video, sub) if bazarr else ("", "")
+        if rehomed:
+          action = f"{rehomed}; {action}" if action else rehomed
+        if action:
+          track_replacement(state, sub, video, lang, subs_id, now)
+        else:
           sub.unlink()
           action = f"not Bazarr's; moved to {BACKUP_DIR}"
+      rep = state.get(REPLACING, {}).pop(str(sub), None)
+      if rep and v.kind not in ("GOOD", "MOSTLY"):
+        state[REPLACING][str(sub)] = rep  # still being replaced; track_replacement updated it
+      elif rep:
+        action += f"{'; ' if action else ''}replacement verified after {rep['attempts']} tries"
       counts[v.kind] = counts.get(v.kind, 0) + 1
       print(
         f"  {v.kind:7s} {rel}  [{lang}/{spoken}] {v.detail}" + (f"  -> {action}" if action else "")
@@ -661,6 +899,11 @@ def main() -> int:
         "at": now,
       }
       print(f"  ERROR   {rel}: {exc}")
+    save_state(state)
+
+  if bazarr:
+    for line in drive_replacements(bazarr, state, now):
+      print(line)
     save_state(state)
 
   print("done: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) + f", errors {errors}")

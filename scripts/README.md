@@ -653,6 +653,8 @@ Checks every external subtitle against what is actually spoken (ADR-0054). Bazar
 | `WRONG` / `UNFIXABLE` | speech not in the subtitle / right words, but no retime lines them up             | back up, then Bazarr blacklist (delete + never pick that file again + re-search)            |
 | `UNSURE`              | too little speech, or a subtitle in another language than the audio (onset check) | nothing; re-checked after 30 days                                                           |
 
+**A wrong subtitle is often a neighbour's.** Before discarding one, the audit tries it against episodes ±1/±2 in the same season, and moves it there if the spoken lines match, unless that episode already has an unflagged subtitle. Poirot S03 is numbered one off between TVDB and every subtitle site. **Removed is not the end.** Blacklisting one file doesn't stop Bazarr picking its sibling from the same mis-numbered season pack; Poirot S03's replacements were the same pack re-uploaded. So each removed subtitle is tracked with its pack id, and the audit queues Bazarr's next-best candidate from outside the bad packs, below the minimum score if need be. The next run measures what lands. At most 5 attempts per subtitle, then one more round a day.
+
 Originals of everything touched are kept at `${SHARE_DIRECTORY}/backups/subtitle-audit/<same relative path>`. Verdicts are remembered per file size + mtime in `logs/cron-state/subtitle-audit.json`, so an unchanged file is measured once; a replacement or retime gets measured again.
 
 ```bash

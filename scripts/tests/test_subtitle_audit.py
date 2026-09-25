@@ -186,12 +186,12 @@ def test_two_windows_agreeing_on_a_shift_is_fixable():
   assert (v.kind, v.a, round(v.b, 2)) == ("FIXABLE", 1.0, 8.98)
 
 
-def test_off_in_every_window_but_not_linearly_is_unsure():
+def test_off_in_every_window_but_not_linearly_is_badsync():
   ws = [
     _window(at, [at + i * 5 for i in range(8)], off)
     for at, off in ((600, 5.0), (1500, -9.0), (2400, 6.0))
   ]
-  assert sa.classify_text(ws).kind == "UNSURE"
+  assert sa.classify_text(ws).kind == "BADSYNC"
 
 
 def test_actionable_verdicts_are_remeasured_but_unfixable_is_sticky():
@@ -202,40 +202,43 @@ def test_actionable_verdicts_are_remeasured_but_unfixable_is_sticky():
   assert not sa.needs_check({"fp": "1:2", "verdict": "MOSTLY", "at": now}, "1:2", now)
 
 
-def test_latest_download_matches_language_not_the_stale_path():
-  en = {"code2": "en"}
-  hist = [
+def test_latest_download_matches_language_and_skips_sync_rows():
+  rows = [
+    {"provider": None, "subs_id": None, "language": "en", "timestamp": "2026-09-25 11:41:34"},
+    {"provider": "subf2m", "subs_id": "b", "language": "en:hi", "timestamp": "2026-05-28 00:36:17"},
+    {"provider": "subdl", "subs_id": "a", "language": "en", "timestamp": "2025-12-01 10:00:00"},
     {
-      "action": 5,
-      "provider": None,
-      "subs_id": None,
-      "language": en,
-      "parsed_timestamp": "09/25/26 11:41:34",
-    },
-    {
-      "action": 3,
-      "provider": "subf2m",
-      "subs_id": "b",
-      "language": en,
-      "parsed_timestamp": "05/28/26 00:36:17",
-    },
-    {
-      "action": 1,
-      "provider": "subdl",
-      "subs_id": "a",
-      "language": en,
-      "parsed_timestamp": "12/01/25 10:00:00",
-    },
-    {
-      "action": 1,
       "provider": "opensubtitlescom",
       "subs_id": "n",
-      "language": {"code2": "nl"},
-      "parsed_timestamp": "09/25/26 12:00:00",
+      "language": "nl",
+      "timestamp": "2026-09-25 12:00:00",
     },
   ]
-  assert sa.latest_download(hist, "en")["subs_id"] == "b"
-  assert sa.latest_download(hist, "fr") is None
+  assert sa.latest_download(rows, "en")["subs_id"] == "b"
+  assert sa.latest_download(rows, "fr") is None
+
+
+def test_history_rows_reads_the_db_read_only(tmp_path):
+  import sqlite3
+
+  db = tmp_path / "bazarr.db"
+  con = sqlite3.connect(db)
+  con.execute(
+    "CREATE TABLE table_history (sonarrEpisodeId INT, provider TEXT, subs_id TEXT, language TEXT, timestamp TEXT)"
+  )
+  con.execute(
+    "INSERT INTO table_history VALUES (30, 'subdl', 'x-2329921.zip/Q', 'en', '2026-09-25 13:07:23')"
+  )
+  con.commit()
+  con.close()
+  assert sa.history_rows("episode", 30, db) == [
+    {
+      "provider": "subdl",
+      "subs_id": "x-2329921.zip/Q",
+      "language": "en",
+      "timestamp": "2026-09-25 13:07:23",
+    }
+  ]
 
 
 def test_two_windows_fix_a_drift_only_on_a_real_framerate_ratio():
@@ -243,20 +246,33 @@ def test_two_windows_fix_a_drift_only_on_a_real_framerate_ratio():
   v = sa.classify_text(pal)
   assert v.kind == "FIXABLE" and v.a == pytest.approx(24 / 25, rel=1e-6)
   odd = [_window(at, [at + i * 5 for i in range(8)], 3.0, scale=0.93) for at in (660, 1620)]
-  assert sa.classify_text(odd).kind == "UNSURE"
+  assert sa.classify_text(odd).kind == "BADSYNC"  # no fps ratio, and off everywhere
 
 
 def test_retime_verification_needs_held_out_windows_all_aligned():
   ok = [_window(at, [at + i * 5 for i in range(8)], 0.1) for at in (300, 1050, 1950, 2700)]
   assert sa.verify_retime(ok).kind == "GOOD"
-  # Spanish Chest after its PAL retime: right at 27 min, 5 s off at 37 min.
+  # Spanish Chest after its PAL retime: 5 s off at 37 min -- a different cut, reverted.
   cut = [
     _window(at, [at + i * 5 for i in range(8)], off)
     for at, off in ((318, -1.44), (960, 2.15), (1602, 0.14), (2244, 5.01))
   ]
   assert sa.verify_retime(cut).kind == "UNSURE"
-  too_few = [_window(at, [at + i * 5 for i in range(8)], 0.0) for at in (300, 1050)]
-  assert sa.verify_retime(too_few).kind == "UNSURE"
+  one = [_window(300, [300 + i * 5 for i in range(8)], 0.0)]
+  assert sa.verify_retime(one).kind == "UNSURE"
+
+
+def test_a_retime_right_almost_everywhere_is_kept_as_mostly():
+  # Wasps' Nest after its PAL retime.
+  wasps = [
+    _window(at, [at + i * 5 for i in range(8)], off)
+    for at, off in ((300, 0.02), (1140, 0.05), (2040, -1.69), (2880, -0.24))
+  ]
+  assert sa.verify_retime(wasps).kind == "MOSTLY"
+  two = [
+    _window(at, [at + i * 5 for i in range(8)], off) for at, off in ((300, 0.07), (2880, -1.66))
+  ]
+  assert sa.verify_retime(two).kind == "MOSTLY"
 
 
 def test_video_for_never_pairs_scene_names_by_their_first_dot(tmp_path):
@@ -271,3 +287,125 @@ def test_video_for_prefers_the_longest_stem(tmp_path):
   (tmp_path / "Show - S01E01.mkv").write_text("")
   (tmp_path / "Show - S01E01.Part 2.mkv").write_text("")
   assert sa.video_for(tmp_path / "Show - S01E01.Part 2.en.srt").name == "Show - S01E01.Part 2.mkv"
+
+
+# ---- replacement loop -----------------------------------------------------
+
+
+def test_pack_key_links_a_pack_across_providers_and_reuploads():
+  subf2m = "https://subf2m.co/subtitles/agatha-christies-poirot-third-season/english/2329921"
+  subdl = "agatha-christies-poirot-third-season_english-2329921.zip/Csw5YxSHnR"
+  assert sa.pack_key(subf2m) == sa.pack_key(subdl) == "2329921"
+  assert sa.pack_key("abc/def") == "abc"
+
+
+def _cand(provider, score, url, hi="False", rel=""):
+  return {
+    "provider": provider,
+    "score": score,
+    "url": url,
+    "hearing_impaired": hi,
+    "release_info": [rel],
+    "subtitle": url,
+  }
+
+
+def test_choose_candidate_skips_bad_packs_and_tried_and_ignores_min_score():
+  cands = [
+    _cand("subdl", 93, "https://dl.subdl.com/x/2329921-a.zip"),
+    _cand("gestdown", 86, "https://api.gestdown.info/subtitles/download/ebd6"),
+    _cand("gestdown", 86, "https://api.gestdown.info/subtitles/download/7b54", hi="True"),
+    _cand("opensubtitlescom", 80, "https://os/1"),
+  ]
+  pick = sa.choose_candidate(cands, [], ["2329921"])
+  assert pick["url"].endswith("ebd6")  # best non-HI outside the bad pack, though below 90
+  tried = [sa._cand_id(pick)]
+  assert sa.choose_candidate(cands, tried, ["2329921"])["url"] == "https://os/1"  # non-HI before HI
+  tried.append("opensubtitlescom|https://os/1")
+  assert sa.choose_candidate(cands, tried, ["2329921"])["hearing_impaired"] == "True"
+  tried.append(sa._cand_id(cands[2]))
+  assert sa.choose_candidate(cands, tried, ["2329921"]) is None
+
+
+def test_track_replacement_accumulates_bad_packs(tmp_path):
+  state = {}
+  sub, video = tmp_path / "a.en.srt", tmp_path / "a.mkv"
+  sa.track_replacement(state, sub, video, "en", "x/english/2329921", 100.0)
+  sa.track_replacement(state, sub, video, "en", "pack-2329921.zip/Q", 200.0)
+  sa.track_replacement(state, sub, video, "en", "other-555555.zip/R", 300.0)
+  rep = state[sa.REPLACING][str(sub)]
+  assert rep["bad_packs"] == ["2329921", "555555"] and rep["last"] == 300.0
+
+
+def test_next_step_waits_for_bazarr_then_requests_then_rests_a_day():
+  rep = {"attempts": 0, "last": 1000.0}
+  assert sa.next_step(rep, True, 99999.0) == "idle"
+  assert sa.next_step(rep, False, 1000.0 + 60) == "wait"
+  assert sa.next_step(rep, False, 1000.0 + sa.REQUEST_WAIT_S + 1) == "request"
+  done = {"attempts": sa.MAX_ATTEMPTS, "last": 0.0, "exhausted_at": 5000.0}
+  assert sa.next_step(done, False, 5000.0 + 3600) == "exhausted"
+  assert sa.next_step(done, False, 5000.0 + sa.RETRY_EXHAUSTED_S + 1) == "request"
+
+
+def test_backup_keeps_every_version(tmp_path, monkeypatch):
+  share = tmp_path / "share"
+  sub = share / "series" / "a.en.srt"
+  sub.parent.mkdir(parents=True)
+  monkeypatch.setattr(sa, "SHARE", share)
+  sub.write_text("first")
+  b1 = sa.backup(sub, tmp_path / "bak")
+  sub.write_text("second")
+  b2 = sa.backup(sub, tmp_path / "bak")
+  assert b1 != b2 and b1.read_text() == "first" and b2.read_text() == "second"
+
+
+def test_neighbours_are_same_season_nearest_first(tmp_path):
+  for n in (1, 2, 3, 4, 5, 6):
+    (tmp_path / f"Poirot - S03E0{n} - x.mkv").write_text("")
+  (tmp_path / "Poirot - S04E04 - y.mkv").write_text("")
+  names = [p.name[9:15] for p in sa.neighbours(tmp_path / "Poirot - S03E04 - x.mkv")]
+  assert names == ["S03E05", "S03E03", "S03E06", "S03E02"]
+
+
+def test_rehome_moves_a_wrong_subtitle_to_the_episode_it_belongs_to(tmp_path, monkeypatch):
+  v7, v8 = tmp_path / "P - S03E07 - a.mkv", tmp_path / "P - S03E08 - b.mkv"
+  for v in (v7, v8):
+    v.write_text("")
+  monkeypatch.setattr(sa, "SHARE", tmp_path)
+  monkeypatch.setattr(sa, "BACKUP_DIR", tmp_path / "bak")
+  monkeypatch.setattr(sa, "belongs_to", lambda video, cues: video == v8)
+  state = {}
+  msg = sa.rehome(tmp_path / "P - S03E07 - a.en.srt", v7, SRT, "en", state)
+  assert msg == "it belongs to S03E08: moved there"
+  assert (tmp_path / "P - S03E08 - b.en.srt").read_text() == SRT
+
+
+def test_rehome_never_overwrites_a_verified_subtitle(tmp_path, monkeypatch):
+  v7, v8 = tmp_path / "P - S03E07 - a.mkv", tmp_path / "P - S03E08 - b.mkv"
+  for v in (v7, v8):
+    v.write_text("")
+  good = tmp_path / "P - S03E08 - b.en.srt"
+  good.write_text("verified")
+  monkeypatch.setattr(sa, "belongs_to", lambda video, cues: True)
+  state = {str(good): {"verdict": "GOOD"}}
+  assert sa.rehome(tmp_path / "P - S03E07 - a.en.srt", v7, SRT, "en", state) == ""
+  assert good.read_text() == "verified"
+
+
+def test_minutes_off_everywhere_is_badsync_not_unsure():
+  # Plymouth Express: the right words at -88 / -141 / -188 s -- not on one line.
+  plymouth = [
+    _window(at, [at + i * 5 for i in range(8)], off)
+    for at, off in ((660, -88.0), (1560, -141.0), (2520, -120.0))
+  ]
+  assert sa.classify_text(plymouth).kind == "BADSYNC"
+  # Marsdon Manor: two windows, a slope that is no framerate ratio.
+  jumpy = [
+    _window(at, [at + i * 5 for i in range(8)], off) for at, off in ((600, 77.5), (1600, 103.2))
+  ]
+  assert sa.classify_text(jumpy).kind == "BADSYNC"
+  mild = [
+    _window(at, [at + i * 5 for i in range(8)], off)
+    for at, off in ((600, 1.0), (1500, -1.5), (2400, 1.2))
+  ]
+  assert sa.classify_text(mild).kind == "UNSURE"
