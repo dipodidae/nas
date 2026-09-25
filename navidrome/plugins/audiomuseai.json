@@ -1,0 +1,8 @@
+{
+  "apiUrl": "http://audiomuse:8000",
+  "apiToken": "${AUDIOMUSE_API_TOKEN}",
+  "instantMixSource": "similarSong",
+  "eliminateDuplicates": true,
+  "radiusSimilarity": true,
+  "artistSimilarCount": 20
+}

@@ -1,0 +1,9 @@
+# Navidrome plugins, pinned. Installed by `make navidrome-plugins` (ADR-0053).
+# One line per plugin: <id> <version> <sha256> <url>
+# The id IS the filename stem (<id>.ndp) and is what ND_AGENTS /
+# ND_LYRICSPRIORITY reference -- rename the file and both silently stop
+# matching. audiomuseai moves in LOCKSTEP with the audiomuse image tag in
+# compose/audiomuse.yaml: upstream says a skewed pair errors.
+nd-lyrics       8.1.0  29dd571ba0d4bb756e62c0d5c594a2d7e7c9ccec2950f3b027bd64c73c605715  https://github.com/J0R6IT0/navidrome-lyrics-plugin/releases/download/v8.1.0/nd-lyrics.ndp
+coverartarchive 1.0.0  3b0ec9055ce7825ebecf70f129e69aafc2d3f1398376ce7a7d390e31e72046cb  https://github.com/sunsetroute1/navidrome-coverartarchive-plugin/releases/download/v1.0.0/coverartarchive.ndp
+audiomuseai     10.0.0 c138e9af16f097d8cd07ac957fb8a49d91a7da066e5b4a1457cadbd479aa10a7  https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v10/audiomuseai.ndp

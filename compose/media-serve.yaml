@@ -294,6 +294,23 @@ services:
       - ND_LASTFM_ENABLED=true
       - ND_LASTFM_APIKEY=${LASTFM_NAVIDROME_API_KEY:-}
       - ND_LASTFM_SECRET=${LASTFM_NAVIDROME_SHARED_SECRET:-}
+      # Plugins (ADR-0053). The .ndp files, their config and their enabled
+      # flag live in /data, NOT here -- `make navidrome-plugins` installs them
+      # from navidrome/plugins/. Enabled is already the upstream default; it is
+      # stated because everything below is inert without it.
+      - ND_PLUGINS_ENABLED=true
+      # INVARIANT: audiomuseai FIRST. Navidrome asks agents in order and the
+      # first one that answers similar-songs/similar-artists wins, so anything
+      # ahead of it (lastfm) silently takes Instant Mix back. The rest is the
+      # 0.64 default (deezer,lastfm,listenbrainz) with coverartarchive LAST:
+      # ADR-0046 measured CAA at 0/30 on this library's art gaps, so it only
+      # gets the albums the commercial agents already missed. It is reached at
+      # all only when an album folder has no cover.*/folder.*/front.*/embedded
+      # art -- CoverArtPriority tries `external` (the agents) last.
+      - ND_AGENTS=audiomuseai,deezer,lastfm,listenbrainz,coverartarchive
+      # Upstream default + nd-lyrics last, so a sidecar or embedded lyric
+      # always beats a network lookup. The value is the plugin's FILENAME stem.
+      - ND_LYRICSPRIORITY=.ttml,.yaml,.yml,.elrc,.lrc,.srt,.txt,embedded,nd-lyrics
     volumes:
       - ${CONFIG_DIRECTORY}/navidrome:/data
       # :ro is correct here, and is NOT the ADR-0039 mistake. That one bit

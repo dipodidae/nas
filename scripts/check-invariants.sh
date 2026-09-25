@@ -122,6 +122,10 @@ MANUAL_UPDATE_ONLY = {
     "tinyauth":              "a bad auth container closes every protected door at once; chosen, never inherited",
     "navidrome":             "migrates its SQLite schema forward with no down-migration",
     "adguardhome":           "rewrites AdGuardHome.yaml to a new schema_version, one way",
+    "audiomuse-db":          "Postgres engine under days of analysis output",
+    "audiomuse":             "lockstep with the audiomuseai Navidrome plugin pin (ADR-0053)",
+    "audiomuse-worker":      "same tag as audiomuse; one schema, one queue",
+    "audiomuse-worker-2":    "same tag as audiomuse; one schema, one queue",
 }
 
 # KNOWN GAP, not an exemption: these do not drop capabilities. ADR-0018.
@@ -200,6 +204,10 @@ DOOR = {
     # clients cannot follow a 302, and that path carries the audio stream for
     # the web player too. Same shape as the *arr /api exemptions. ADR-0044.
     "navidrome":          "protect",
+    # Browser-only UI. Its API's only consumer is Navidrome's plugin, over
+    # nas-network with a bearer token, never through SWAG -- so, unlike the
+    # *arrs, no /api path-scope. ADR-0053.
+    "audiomuse":          "protect",
 }
 
 # Routes whose door has not been hung yet. This list SHRINKS to empty as the
@@ -257,6 +265,10 @@ SECRET_OK = {
     # initdb and never again. Nextcloud itself does NOT get it as an env var --
     # it is typed into the setup wizard once and lands in config.php.
     "nextcloud-db",
+    # audiomuse*: POSTGRES_PASSWORD, read by the postgres entrypoint and by
+    # AudioMuse's config.py to build its DSN. Past first boot everything else
+    # AudioMuse knows lives in its DB, not its environment. ADR-0053.
+    "audiomuse-db", "audiomuse", "audiomuse-worker", "audiomuse-worker-2",
 }
 
 # Env vars that must NOT appear on a given service, whatever else changes.
@@ -2369,6 +2381,41 @@ else:
          (_gen.stderr or _gen.stdout).strip().replace("\n", " ")[:200]
          or "docs/music-pipeline-integration.md cron tables are stale; "
             "run scripts/gen_pipeline_tables.py --write")
+
+# ==========================================================================
+# 36. Navidrome's agent chain puts AudioMuse first, and names real plugins
+# ==========================================================================
+# Navidrome asks agents in ND_AGENTS order and the FIRST that answers
+# similar-songs wins. lastfm ahead of audiomuseai hands Instant Mix back to
+# Last.fm with no error anywhere -- measured: the same seed gave 90% overlap
+# with AudioMuse's answer in order, 0% with the plugin out of the chain. And an
+# agent/lyrics name is the plugin's FILENAME stem, so a renamed .ndp is a chain
+# entry that silently matches nothing. The plugin table itself (enabled,
+# config) is outside git -- `make verify-runtime` checks that half. ADR-0053.
+if "navidrome" in services:
+    _nd_env = env_of("navidrome")
+    if isinstance(_nd_env, list):
+        _nd_env = dict(e.split("=", 1) for e in _nd_env if "=" in e)
+    _agents = [a.strip() for a in (_nd_env.get("ND_AGENTS") or "").split(",") if a.strip()]
+    _lyrics = [a.strip() for a in (_nd_env.get("ND_LYRICSPRIORITY") or "").split(",") if a.strip()]
+    _lock = [ln.split()[0] for ln in Path("navidrome/plugins/plugins.lock").read_text().splitlines()
+             if ln.strip() and not ln.startswith("#")]
+    _probs = []
+    if not _agents or _agents[0] != "audiomuseai":
+        _probs.append(f"ND_AGENTS starts with {(_agents or ['<unset>'])[0]!r}, not 'audiomuseai'")
+    if "nd-lyrics" not in _lyrics:
+        _probs.append("ND_LYRICSPRIORITY does not name nd-lyrics")
+    for _pid in ("audiomuseai", "coverartarchive"):
+        if _pid in _lock and _pid not in _agents:
+            _probs.append(f"{_pid} is pinned in plugins.lock but not in ND_AGENTS")
+    for _name in [a for a in _agents + _lyrics if not a.startswith(".") and a != "embedded"]:
+        if _name not in _lock and _name not in ("deezer", "lastfm", "listenbrainz", "spotify"):
+            _probs.append(f"{_name!r} is in the chain but is neither built in nor in plugins.lock")
+    if _probs:
+        fail("navidrome-agent-chain", "ADR-0053", "; ".join(_probs))
+    else:
+        ok("navidrome-agent-chain", f"{','.join(_agents)}")
+
 
 if verbose:
     for check, msg in passes:

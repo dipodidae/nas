@@ -436,6 +436,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> Lidarr still tells Navidrome to rescan on import (ADR-0049)"; \
 	.venv/bin/python scripts/check-lidarr-navidrome-notification.py \
 	  || { rc=1; note "Lidarr's Navidrome connector drifted, or its Navidrome principal lost adminRole -- new albums now wait up to an hour for the scheduled scan (ADR-0049)"; }; \
+	echo "==> Navidrome plugins loaded, and Instant Mix is AudioMuse's (ADR-0053)"; \
+	.venv/bin/python scripts/check-navidrome-plugins.py \
+	  || { rc=1; note "Navidrome plugins drifted or Instant Mix is not AudioMuse's -- a restored navidrome.db brings plugins back disabled and Instant Mix silently falls back to Last.fm; run make navidrome-plugins (ADR-0053)"; }; \
 	echo "==> Jellyfin's live logging.json matches the repo pin"; \
 	if [ ! -f "$$CONFIG_DIRECTORY/jellyfin/logging.json" ]; then \
 	  echo "    !!! not installed -- run: make jellyfin-logging"; rc=1; \
@@ -493,6 +496,12 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	    --message "$$msg" --dedup-key "verify-runtime:$$lane" || true; \
 	fi; \
 	exit $$rc
+
+navidrome-plugins: ## Install, configure + enable the pinned Navidrome plugins (restarts navidrome)
+	scripts/navidrome_plugins.sh
+
+audiomuse-setup: ## Push AudioMuse-AI's config + nightly schedule from .env (restarts its workers)
+	@set -a; . ./.env; set +a; .venv/bin/python scripts/audiomuse_setup.py
 
 jellyfin-logging: ## Install jellyfin/logging.json into Jellyfin's config (needs ONE restart)
 	@set -a; . ./.env; set +a; \

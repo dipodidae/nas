@@ -1,0 +1,19 @@
+{
+  "providerMode": "priority",
+  "providersList": [
+    { "provider": "lrclib", "translationLanguage": "none", "romanizationScript": "none" },
+    { "provider": "lrcmux", "sources": ["lrclib", "musixmatch", "netease", "kugou", "genius", "ytmusic"], "translationLanguage": "none", "romanizationScript": "none" },
+    { "provider": "netease", "translationLanguage": "none", "romanizationScript": "none" },
+    { "provider": "kugou", "translationLanguage": "none", "romanizationScript": "none" },
+    { "provider": "lyrics.ovh", "translationLanguage": "none", "romanizationScript": "none" }
+  ],
+  "lyricsFormats": "ttml,elrc,lyricsfile,lrc,srt,plain",
+  "stripSectionLabels": true,
+  "durationToleranceSeconds": 3,
+  "requireAlbumMatch": false,
+  "enableCache": true,
+  "cacheTtlHours": 720,
+  "negativeCache": true,
+  "negativeCacheTtlHours": 168,
+  "writeLyrics": false
+}

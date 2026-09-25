@@ -1114,6 +1114,18 @@ Reads its token from `/run/ntfy-arr-token` (`0600`, bind-mounted `:ro`) — neve
 
 Tested against the real file with `sh` and a loopback ntfy — 30 tests covering all four message shapes, every excluded event type, and every failure path.
 
+### `navidrome_plugins.sh` / `make navidrome-plugins`
+
+Fetches each plugin pinned in `navidrome/plugins/plugins.lock` (a sha256 mismatch refuses to install), applies `navidrome/plugins/<id>.json` as its config (`${VAR}` expanded from `.env`, so the AudioMuse token is never tracked), grants **read-only** library access only to plugins that declare it, enables everything, then **restarts navidrome**: the CLI writes `navidrome.db`, which the running server does not re-read. Idempotent. Exit `0` / `2`. ADR-0053.
+
+### `audiomuse_setup.py` / `make audiomuse-setup`
+
+Pushes AudioMuse-AI's Navidrome connection, admin account, API token, analysis tuning and nightly schedule into its database through `/api/setup` + `/api/cron`, the same endpoints its browser wizard uses. Tests the Navidrome credentials before saving. **Restarts AudioMuse's workers**, so avoid running it mid-pass. `"status": "partial"` in the reply is normal (a restart outlasts the ack budget). Exit `0` / `2`. ADR-0053.
+
+### `check-navidrome-plugins.py`
+
+`make verify-runtime`. Asserts every locked plugin is installed at its sha256, enabled and error-free. Then, **by effect**, checks that Navidrome's `getSimilarSongs2` shares ≥ 50% of ids with AudioMuse's own `/api/similar_tracks` for a track AudioMuse has analysed. With the plugin off, Navidrome still returns a full list, from Last.fm with 0% overlap, so "non-empty" proves nothing. Exit `0` ok, `1` drift, `2` unreachable/nothing analysed.
+
 ## 🧪 Testing & Linting
 
 Python unit tests live in `scripts/tests/` and use `pytest` for structure plus the existing `test_scripts.py` smoke harness.

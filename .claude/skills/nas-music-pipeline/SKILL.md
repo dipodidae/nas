@@ -31,6 +31,7 @@ understands another.
 | Lidarr    | `/data/music` (root folder) — and `/music` in history written before the 2026-09-02 repath |
 | slskd     | `/music` — **no `/data` mount at all**                                                     |
 | Navidrome | `/music` (read-only) — plus playlists at `/music/Playlists/*.m3u8` (ADR-0050)              |
+| AudioMuse | **nothing** — no mount; it streams each track from `navidrome:4533` by Navidrome id (ADR-0053) |
 
 Jellyfin's `/data/movies/music` was the third and is retired. Note Navidrome and slskd
 agree on `/music`, which is convenient and also a trap: they are different mounts of the
@@ -52,6 +53,11 @@ asked what else had the old prefix compiled in. Two things broke for a day.
   to leave slskd **down 15–30 min**, then cold start.
 - Lidarr's Subsonic connector: `updateLibrary` on, and only `onReleaseImport`/`onUpgrade`/
   `onRename` on — the other triggers are `Notify()`-only and inert (ADR-0049).
+- `ND_AGENTS` must start with `audiomuseai` (ADR-0053). The first agent that answers
+  similar-songs wins, so anything ahead of it hands Instant Mix back to Last.fm with no
+  error. The plugin table (enabled/config) lives in `navidrome.db`, so after a DB restore
+  run `make navidrome-plugins`; `make verify-runtime` compares Instant Mix to AudioMuse's
+  own answer by id overlap.
 - Lidarr in any Cleanuparr module — never, and **Seeker stays off**. Its only client is
   slskd, which Cleanuparr cannot see. On 2026-09-17 both had drifted on and formed a closed
   loop: Queue Cleaner deleted each failed row in ~15 min, Seeker re-searched, the next peer

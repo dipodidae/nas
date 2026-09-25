@@ -49,6 +49,8 @@ include:
   # Playback. Restart cadence: deliberately, and not at 04:00 (ADR-0006).
   - compose/media-serve.yaml
 
+  - compose/audiomuse.yaml
+
   # Files.
   - compose/storage.yaml
 

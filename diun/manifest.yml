@@ -15,6 +15,30 @@
     service: adguardhome
   watch_repo: false
 
+# audiomuse
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+  metadata:
+    service: audiomuse
+  watch_repo: false
+
+# audiomuse-db
+- name: postgres:15.19-alpine3.24
+  metadata:
+    service: audiomuse-db
+  watch_repo: false
+
+# audiomuse-worker
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+  metadata:
+    service: audiomuse-worker
+  watch_repo: false
+
+# audiomuse-worker-2
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+  metadata:
+    service: audiomuse-worker-2
+  watch_repo: false
+
 # autoheal
 - name: willfarrell/autoheal:latest
   metadata:

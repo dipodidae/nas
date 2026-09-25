@@ -63,3 +63,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0050](0050-playlists-reach-phones-through-navidrome.md)         | Playlists out of Jellyfin and into Navidrome; a Subsonic `path` is synthesised from tags                  |
 | [0051](0051-jellyfin-drops-music.md)                             | Jellyfin drops music; a deleted library orphans its items, and SQLite needs a VACUUM                      |
 | [0052](0052-a-bind-mounted-socket-detaches-on-daemon-restart.md) | A bind-mounted Docker socket detaches when the daemon restarts; dockerproxy 503s and autoheal crash-loops |
+| [0053](0053-navidrome-plugins-and-audiomuse.md)                  | Navidrome plugins + AudioMuse-AI owns Instant Mix; two workers, not one bigger one (64.6× realtime)       |

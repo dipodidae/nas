@@ -69,6 +69,7 @@ services:
       - ../swag/tinyauth-server.conf:/config/nginx/tinyauth-server.conf:ro
       - ../swag/tinyauth-location.conf:/config/nginx/tinyauth-location.conf:ro
       - ../swag/proxy-confs/adguardhome.subdomain.conf:/config/nginx/proxy-confs/adguardhome.subdomain.conf:ro
+      - ../swag/proxy-confs/audiomuse.subdomain.conf:/config/nginx/proxy-confs/audiomuse.subdomain.conf:ro
       - ../swag/proxy-confs/auth.subdomain.conf:/config/nginx/proxy-confs/auth.subdomain.conf:ro
       - ../swag/proxy-confs/bazarr.subdomain.conf:/config/nginx/proxy-confs/bazarr.subdomain.conf:ro
       - ../swag/proxy-confs/cleanuparr.subdomain.conf:/config/nginx/proxy-confs/cleanuparr.subdomain.conf:ro

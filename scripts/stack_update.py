@@ -146,6 +146,7 @@ STORES: dict[str, Store] = {
   "beszel": Store.SQLITE,
   "streamystats-db": Store.POSTGRES,
   "playlist-generator-db": Store.POSTGRES,
+  "audiomuse-db": Store.POSTGRES,
 }
 
 # Services that migrate their store ONE WAY on first start of a new version.
@@ -155,7 +156,7 @@ STORES: dict[str, Store] = {
 # `depends_on: tinyauth: service_healthy`, that takes SWAG down with it,
 # turning a protected-routes outage into a total one (ADR-0036).
 ONE_WAY = frozenset({"jellyfin", "tinyauth", "streamystats-db",
-                     "playlist-generator-db"})
+                     "playlist-generator-db", "audiomuse-db"})
 
 # Postgres 18 moved where the official images keep the cluster: under a
 # major-versioned subdirectory (/var/lib/postgresql/18/docker) so that
@@ -183,6 +184,7 @@ DEPENDANTS: dict[str, tuple[str, ...]] = {
   "swag": ("every public route",),
   "streamystats-db": ("streamystats", "streamystats-jobs"),
   "playlist-generator-db": ("playlist-generator",),
+  "audiomuse-db": ("audiomuse", "audiomuse-worker", "audiomuse-worker-2"),
 }
 
 

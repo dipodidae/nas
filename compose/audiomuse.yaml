@@ -1,0 +1,154 @@
+# AudioMuse-AI -- sonic analysis of the music library. ADR-0053.
+#
+# It downloads every track through Navidrome's Subsonic `stream` endpoint,
+# runs MusiCNN + CLAP over the audio, and stores the embeddings in its own
+# Postgres. Navidrome's `audiomuseai` plugin then asks it for similar songs
+# (Instant Mix, getSimilarSongs2) and similar artists (Radio, getArtistInfo2)
+# instead of Last.fm -- whose similarity data is thin exactly where this
+# library is thickest, in the underground half.
+#
+# It never reads /mnt/drive: no music mount, by design. Every byte arrives
+# over Subsonic as the `audiomuse` Navidrome user, so there is no fourth path
+# namespace for the music tree (nas-music-pipeline skill) and nothing here
+# can write to the library.
+#
+# Configuration lives in ITS DATABASE, not here. Past first boot only the
+# Postgres and TZ variables are read from the environment; the Setup Wizard
+# (or `scripts/audiomuse_setup.py`, which drives the same /api/setup) owns
+# everything else. So a variable added below is a first-boot seed at most.
+
+services:
+
+  audiomuse-db:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned, and updated only by hand -- a database engine with
+    # live data under it. 15 because upstream ships and tests 15.
+    image: postgres:15.19-alpine3.24
+    container_name: audiomuse-db
+    cap_add:
+      # The postgres entrypoint runs as root to initdb and chown PGDATA, then
+      # drops to postgres. Same set as streamystats-db.
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    environment:
+      - POSTGRES_USER=audiomuse
+      - POSTGRES_PASSWORD=${AUDIOMUSE_DB_PASSWORD}
+      - POSTGRES_DB=audiomusedb
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      # Pre-18 layout: the cluster IS /var/lib/postgresql/data. (18+ moved it
+      # and refuses this path -- see streamystats-db before bumping a major.)
+      - ${CONFIG_DIRECTORY}/audiomuse-db:/var/lib/postgresql/data
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U audiomuse -d audiomusedb]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  audiomuse:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned, and in lockstep with the Navidrome plugin
+    # (audiomuseai in navidrome/plugins/plugins.lock). Upstream is explicit
+    # that core, plugin and Navidrome versions drift into errors when they are
+    # not updated together. Bump all three in one commit.
+    image: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+    container_name: audiomuse
+    # Runs as root inside, with EVERY capability dropped. The image writes
+    # model caches into root-owned /app/model and has no USER; root without
+    # DAC_OVERRIDE can still write files root owns, which is all it needs.
+    #
+    # No volumes at all: every piece of state is in audiomuse-db. Upstream
+    # mounts /app/plugin/installed for AudioMuse's OWN plugin system, which
+    # this stack does not use -- and a ${PUID}-owned bind mount there would be
+    # unwritable to capability-less root anyway (no DAC_OVERRIDE).
+    environment:
+      - SERVICE_TYPE=flask
+      - POSTGRES_USER=audiomuse
+      - POSTGRES_PASSWORD=${AUDIOMUSE_DB_PASSWORD}
+      - POSTGRES_DB=audiomusedb
+      - POSTGRES_HOST=audiomuse-db
+      - POSTGRES_PORT=5432
+      - TEMP_DIR=/app/temp_audio
+    tmpfs:
+      - /app/temp_audio:size=512m
+    ports:
+      - '127.0.0.1:8010:8000' # loopback only; the public surface is SWAG
+    depends_on:
+      audiomuse-db:
+        condition: service_healthy
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -fsS, -o, /dev/null, 'http://127.0.0.1:8000/api/health']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  audiomuse-worker:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: same tag as `audiomuse`. Flask and worker share one schema
+    # and one Postgres-backed task queue.
+    image: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+    container_name: audiomuse-worker
+    environment:
+      - SERVICE_TYPE=worker
+      - POSTGRES_USER=audiomuse
+      - POSTGRES_PASSWORD=${AUDIOMUSE_DB_PASSWORD}
+      - POSTGRES_DB=audiomusedb
+      - POSTGRES_HOST=audiomuse-db
+      - POSTGRES_PORT=5432
+      - TEMP_DIR=/app/temp_audio
+    # CPU: a LOW WEIGHT plus a per-worker ceiling -- NOT a Pi-era leftover
+    # (ADR-0001 retired those). The first analysis is ~169k tracks / 13.5k
+    # hours and is CPU-bound. `cpu_shares: 128` is 1/8 of every other
+    # container's weight, so under contention jellyfin, navidrome and the
+    # *arrs win 8:1 and the analysis only ever eats IDLE cycles.
+    #
+    # Two workers at 8, not one at 14 or 16. Measured in audio-seconds per
+    # wall-second: one worker at 8 CPUs = 30.3x realtime, the same worker at
+    # 14 = 35.3x -- 75% more CPU for 16% more throughput, because one worker
+    # analyses one track at a time and ONNX does not scale across that many
+    # threads. The queue is in Postgres with per-album advisory locks, so a
+    # second worker takes the next album instead. ADR-0053.
+    cpu_shares: 128
+    cpus: 8
+    tmpfs:
+      # Each track is downloaded here, analysed, deleted. tmpfs keeps that
+      # churn off the 75%-full root disk.
+      - /app/temp_audio:size=2g
+    depends_on:
+      audiomuse-db:
+        condition: service_healthy
+    networks:
+      - nas-network
+    # No autoheal label and no web port: its liveness is the task queue, which
+    # the flask UI reports. A mid-analysis restart just re-queues the batch.
+    healthcheck:
+      test: [CMD-SHELL, 'supervisorctl -c /etc/supervisor/conf.d/supervisord.conf status | grep -q RUNNING']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # The second analysis worker -- identical, see the CPU note above. Delete
+  # this block once the first full pass is done if the box needs the RAM
+  # (~1.3 GB each); incremental analysis of new albums is fine on one.
+  audiomuse-worker-2:
+    extends:
+      service: audiomuse-worker
+    container_name: audiomuse-worker-2

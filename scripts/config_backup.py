@@ -96,6 +96,9 @@ SKIP_SERVICES = {
   "whisper": "~460 MB of re-downloadable model weights",
   "playlist-generator-db": "live Postgres data dir - needs pg_dump; a file tar of a running cluster does not restore",
   "streamystats-db": "live Postgres data dir - same reason",
+  # Regenerable, at a price: a full re-analysis is ~9 days of CPU (ADR-0053).
+  # `make stack-update` pg_dumps it before any audiomuse tag bump.
+  "audiomuse-db": "live Postgres data dir - same reason",
   "beszel-agent": "the agent keeps no state of its own",
   "backups": "the archive destination itself, when it lives under CONFIG_DIRECTORY",
 }
