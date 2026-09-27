@@ -1,0 +1,98 @@
+# Web analytics: Umami for www.ongehoord.nl (production) and
+# acceptance.ongehoord.nl. ADR-0056.
+#
+# Blast radius: nothing else in the stack. No other service depends on these,
+# and these depend on nothing but each other.
+#
+# Shape of the data path, and why it hides this box: visitors' browsers never
+# talk to Umami. The Nuxt site (nuxt-umami, `proxy: 'cloak'`) posts events to
+# its OWN /api/savory, and Vercel's server forwards them to
+# https://umami.${PUBLIC_DOMAIN}/api/send with the visitor's IP and user agent
+# inside the payload. So no visitor ever resolves this domain, no adblock list
+# ever sees an Umami host, and the website ID never reaches a browser.
+#
+# Cookieless: Umami stores no IP -- a session is a salted hash that rotates
+# monthly (SALT_ROTATION default) -- so no consent banner is needed.
+
+services:
+
+  umami-db:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned, updated only by hand -- a database engine under live
+    # data (MANUAL_UPDATE_ONLY). Its OWN postgres, not a tenant in another app's
+    # (same reasoning as nextcloud-db / streamystats-db).
+    image: postgres:18.6-alpine
+    container_name: umami-db
+    cap_add:
+      # Same set as streamystats-db: the entrypoint runs as root to initdb and
+      # chown PGDATA, then drops to postgres.
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    environment:
+      - POSTGRES_USER=umami
+      - POSTGRES_PASSWORD=${UMAMI_DB_PASSWORD}
+      - POSTGRES_DB=umami
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      # INVARIANT: the PARENT, not .../data -- pg18 refuses to start with a
+      # mount at the old path (see streamystats-db, docker-library/postgres#1259).
+      - ${CONFIG_DIRECTORY}/umami-db:/var/lib/postgresql
+    networks:
+      - nas-network
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U umami -d umami]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  umami:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    # INVARIANT: pinned (MANUAL_UPDATE_ONLY). Umami runs its Prisma migrations
+    # forward on every start and has no down-migration, so the old tag is not a
+    # rollback -- pg_dump umami-db before bumping it.
+    image: docker.umami.is/umami-software/umami:3.4.0
+    container_name: umami
+    # Runs as the image's own `nextjs` (uid 1001) with no capabilities at all;
+    # it keeps no state on disk -- everything is in umami-db.
+    environment:
+      - DATABASE_URL=postgresql://umami:${UMAMI_DB_PASSWORD}@umami-db:5432/umami
+      # Signs sessions. Changing it logs everyone out; keep it stable.
+      - APP_SECRET=${UMAMI_APP_SECRET}
+      # Enables TOTP two-factor for dashboard logins (64 hex chars).
+      - TWO_FACTOR_ENCRYPTION_KEY=${UMAMI_TWO_FACTOR_KEY}
+      # INVARIANT: location comes from the visitor IP in the payload (bundled
+      # GeoLite2), never from request headers. Every event arrives from
+      # Vercel's server, so a geo header (x-vercel-ip-country, and cf-ipcountry
+      # once the tunnel is live) would describe VERCEL, and every visitor
+      # would appear to come from one datacenter.
+      - SKIP_LOCATION_HEADERS=1
+      - DISABLE_TELEMETRY=1
+      # diun reports new tags (ADR-0024); the in-app banner would be a second,
+      # louder copy of that.
+      - DISABLE_UPDATES=1
+    depends_on:
+      umami-db:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:3450:3000' # loopback only; the public side is SWAG
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      # /api/heartbeat is unauthenticated and touches no database; it proves the
+      # server is up, not that ingestion works. `make verify-runtime` is where
+      # an actual event is sent.
+      test: [CMD, curl, -fsS, http://localhost:3000/api/heartbeat]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

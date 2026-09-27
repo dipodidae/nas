@@ -120,6 +120,9 @@ MANUAL_UPDATE_ONLY = {
     "streamystats":          "must stay in lockstep with its job server and schema",
     "streamystats-jobs":     "must stay in lockstep with the UI and schema",
     "tinyauth":              "a bad auth container closes every protected door at once; chosen, never inherited",
+    "cloudflared":           "the only public ingress; a bad connector takes down every route at once (ADR-0055)",
+    "umami-db":              "Postgres engine under the analytics history",
+    "umami":                 "runs Prisma migrations forward on start; no down-migration (ADR-0056)",
     "navidrome":             "migrates its SQLite schema forward with no down-migration",
     "adguardhome":           "rewrites AdGuardHome.yaml to a new schema_version, one way",
     "audiomuse-db":          "Postgres engine under days of analysis output",
@@ -208,6 +211,9 @@ DOOR = {
     # nas-network with a bearer token, never through SWAG -- so, unlike the
     # *arrs, no /api path-scope. ADR-0053.
     "audiomuse":          "protect",
+    # protect, with exactly `location = /api/send` open (POST only): its sole
+    # caller is the ongehoord Nuxt server, which cannot follow a 302. ADR-0056.
+    "umami":              "protect",
 }
 
 # Routes whose door has not been hung yet. This list SHRINKS to empty as the
@@ -269,6 +275,10 @@ SECRET_OK = {
     # AudioMuse's config.py to build its DSN. Past first boot everything else
     # AudioMuse knows lives in its DB, not its environment. ADR-0053.
     "audiomuse-db", "audiomuse", "audiomuse-worker", "audiomuse-worker-2",
+    # umami: APP_SECRET (session signing) and TWO_FACTOR_ENCRYPTION_KEY (TOTP
+    # secrets at rest) are read by the Next.js server; POSTGRES_PASSWORD by the
+    # postgres entrypoint. Umami has no _FILE variants. ADR-0056.
+    "umami-db", "umami",
 }
 
 # Env vars that must NOT appear on a given service, whatever else changes.

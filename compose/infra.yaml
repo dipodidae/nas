@@ -48,6 +48,7 @@ services:
       # by deliberate edit, where stock SWAG serves a 200 welcome page. It was
       # untracked until 2026-09-15. ADR-0045.
       - ../swag/site-confs/default.conf:/config/nginx/site-confs/default.conf:ro
+      - ../swag/site-confs/cloudflared-realip.conf:/config/nginx/site-confs/cloudflared-realip.conf:ro
       # INVARIANT: every enabled proxy-conf is TRACKED HERE and mounted read-only,
       # not left to live in gitignored ${CONFIG_DIRECTORY}/swag where the nightly
       # backup is the only thing keeping it. Six of these have no upstream sample
@@ -88,6 +89,7 @@ services:
       - ../swag/proxy-confs/radarr.subdomain.conf:/config/nginx/proxy-confs/radarr.subdomain.conf:ro
       - ../swag/proxy-confs/slskd.subdomain.conf:/config/nginx/proxy-confs/slskd.subdomain.conf:ro
       - ../swag/proxy-confs/sonarr.subdomain.conf:/config/nginx/proxy-confs/sonarr.subdomain.conf:ro
+      - ../swag/proxy-confs/umami.subdomain.conf:/config/nginx/proxy-confs/umami.subdomain.conf:ro
       - ../nginx-cache:/var/cache/nginx:rw
     ports:
       - '443:443'
@@ -229,6 +231,69 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # cloudflared -- the ONLY way the public reaches SWAG. ADR-0055.
+  #
+  # An outbound-only Cloudflare Tunnel (`nas-4eva`, remotely managed: its
+  # ingress rules live in Cloudflare, not here). 4eva.me and *.4eva.me are
+  # proxied CNAMEs to the tunnel, so DNS never answers with the home IP and the
+  # router forwards nothing on 80/443. Every public hostname lands on
+  # https://swag:443 with the original Host header; SWAG still does all the
+  # routing and the tinyauth door, exactly as before.
+  #
+  # INVARIANT: static 172.30.0.250. SWAG's cloudflared-realip.conf trusts
+  # CF-Connecting-IP from THIS address only -- without it every visitor is
+  # cloudflared, so one bad login trips tinyauth's lockout for everyone and one
+  # fail2ban ban blocks the whole tunnel. A static IP is needed because
+  # set_real_ip_from takes no hostnames; trusting the /24 would let any
+  # container (or a hairpinned LAN client) spoof its address.
+  #
+  # INVARIANT: the token is a 0600 file mounted :ro, never TUNNEL_TOKEN in the
+  # environment (ADR-0011). Rotate it in the Cloudflare dashboard and rewrite
+  # secrets/cloudflared-token.
+  #
+  # INVARIANT: the tag is pinned (MANUAL_UPDATE_ONLY). This is the only way
+  # in from the internet; a bad connector closes every route at once, the
+  # never-gated ones included. `diun` still reports new tags (ADR-0024).
+  #
+  # Deliberately NOT autoheal=true: /ready is false whenever Cloudflare's edge
+  # is unreachable, which a restart cannot fix, and cloudflared already
+  # reconnects on its own.
+  cloudflared:
+    extends:
+      file: _fragments.yaml
+      service: svc-hardened-tz
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: cloudflared
+    # Distroless image, no init, needs no capabilities. Run as the owner of the
+    # 0600 token file rather than the image's own uid 65532, which could not
+    # read it.
+    user: '${PUID:-1000}:${PGID:-1000}'
+    read_only: true
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --metrics
+      - 127.0.0.1:2000
+      - run
+      - --token-file
+      - /secrets/token
+    volumes:
+      - ../secrets/cloudflared-token:/secrets/token:ro
+    networks:
+      nas-network:
+        ipv4_address: 172.30.0.250
+    depends_on:
+      swag:
+        condition: service_started
+    # /ready is 200 only while at least one connection to Cloudflare's edge is
+    # registered -- i.e. the public surface actually exists.
+    healthcheck:
+      test: [CMD, cloudflared, tunnel, --metrics, 127.0.0.1:2000, ready]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   # Read-only Docker API proxy. INVARIANT: the only container in this stack
   # permitted to mount /var/run/docker.sock. ADR-0013.

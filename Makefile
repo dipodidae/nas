@@ -23,7 +23,7 @@ CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 .PHONY: help check lint config diun-manifest bootstrap up down logs pull \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
         submodules install-hooks verify-runtime backup-offsite \
-        notify-test notify-acl tinyauth-users tinyauth-unlock swag-apply
+        notify-test notify-acl tinyauth-users tinyauth-unlock swag-apply umami-setup
 
 help: ## Show this help
 	@echo "NAS stack targets:"
@@ -409,6 +409,9 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> the doors are actually closed on the live host (ADR-0034)"; \
 	scripts/check-door-live.sh \
 	  || { rc=1; crit=1; note "a protected route is answering the internet without a login, or a route that must stay open is redirecting to one (ADR-0034)"; }; \
+	echo "==> umami ingests an event through its public route, geolocated from the payload IP (ADR-0056)"; \
+	scripts/check-umami-live.py \
+	  || { rc=1; note "umami is not ingesting events end to end -- ongehoord.nl analytics are silently empty or mislocated (ADR-0056)"; }; \
 	echo "==> nothing but dockerproxy has the Docker socket (ADR-0013)"; \
 	bad=$$(docker ps -q | xargs -r docker inspect \
 	  --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
@@ -505,6 +508,9 @@ navidrome-plugins: ## Install, configure + enable the pinned Navidrome plugins (
 
 audiomuse-setup: ## Push AudioMuse-AI's config + nightly schedule from .env (restarts its workers)
 	@set -a; . ./.env; set +a; .venv/bin/python scripts/audiomuse_setup.py
+
+umami-setup: ## Converge Umami's goals/funnels/segments for ongehoord.nl from scripts/umami_setup.py (ADR-0056)
+	@set -a; . ./.env; set +a; .venv/bin/python scripts/umami_setup.py
 
 jellyfin-logging: ## Install jellyfin/logging.json into Jellyfin's config (needs ONE restart)
 	@set -a; . ./.env; set +a; \

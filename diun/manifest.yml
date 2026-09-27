@@ -111,6 +111,12 @@
     service: cleanuparr
   watch_repo: false
 
+# cloudflared
+- name: cloudflare/cloudflared:2026.9.3
+  metadata:
+    service: cloudflared
+  watch_repo: false
+
 # diun
 #   plain semver tags
 - name: crazymax/diun:4.33.0
@@ -404,6 +410,18 @@
     - '-rc'
     - '^dev$'
     - '-dev$'
+
+# umami
+- name: docker.umami.is/umami-software/umami:3.4.0
+  metadata:
+    service: umami
+  watch_repo: false
+
+# umami-db
+- name: postgres:18.6-alpine
+  metadata:
+    service: umami-db
+  watch_repo: false
 
 # whisper
 - name: onerahmet/openai-whisper-asr-webservice:latest

@@ -54,6 +54,10 @@ include:
   # Files.
   - compose/storage.yaml
 
+  # Web analytics for ongehoord.nl. Restart cadence: freely; nothing depends
+  # on it, and the site drops events silently while it is down. ADR-0056.
+  - compose/analytics.yaml
+
   # Locally-built apps. Each lives next to its Dockerfile so `build.context: .`
   # resolves locally; each is Watchtower-opt-out by construction (ADR-0006).
   - webapps/4eva-rootpage/compose.yaml
