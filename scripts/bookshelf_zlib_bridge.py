@@ -537,6 +537,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"FATAL: Bookshelf unreachable: {exc}", file=sys.stderr)
     return 2
 
+  # Empty per-md5 folders left by failed or interrupted downloads (a success
+  # removes its own). Only EMPTY ones: a folder with a file in it is evidence.
+  if staging.is_dir() and not args.dry_run:
+    for sub in staging.iterdir():
+      if sub.is_dir():
+        with contextlib.suppress(OSError):
+          sub.rmdir()
+
   now = time.time()
   state = load_state(STATE_PATH)
   todo: list[Wanted] = []
