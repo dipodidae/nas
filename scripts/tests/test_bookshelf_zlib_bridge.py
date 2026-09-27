@@ -258,3 +258,29 @@ def test_a_spent_zlibrary_quota_defers_rather_than_fails(monkeypatch, tmp_path):
   result = z.attempt(_want(), bs=None, zl=zl, staging=tmp_path)
   assert result.transient and "spent" in result.reason
   assert zl.link_calls == 0
+
+
+def test_max_books_zero_attempts_nothing(monkeypatch, tmp_path, capsys):
+  """Regression: the limit was checked AFTER appending, so --max-books 0 still
+  attempted one real book."""
+  class FakeBookshelf:
+    def __init__(self, *_a):
+      pass
+
+    def missing(self):
+      return [{"id": 7, "authorId": 1, "title": "Choke", "foreignEditionId": "1",
+               "added": "2020-01-01T00:00:00Z"}]
+
+    def queued_book_ids(self):
+      return set()
+
+    def editions(self, _book_id):
+      return []
+
+  monkeypatch.setattr(z, "Bookshelf", FakeBookshelf)
+  monkeypatch.setattr(z, "STATE_PATH", tmp_path / "state.json")
+  monkeypatch.setattr(z, "attempt", lambda *_a, **_k: pytest.fail("attempted a book"))
+  monkeypatch.setenv("API_KEY_BOOKSHELF", "k")
+  monkeypatch.setenv("SHARE_DIRECTORY", str(tmp_path))
+  assert z.main(["--max-books", "0"]) == 0
+  assert "0 to attempt" in capsys.readouterr().out

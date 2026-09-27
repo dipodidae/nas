@@ -549,6 +549,8 @@ def main(argv: list[str] | None = None) -> int:
   state = load_state(STATE_PATH)
   todo: list[Wanted] = []
   for rec in select(records, queued, state, args, now):
+    if len(todo) >= args.max_books:
+      break
     try:
       want = parse_wanted(rec, bs.editions(rec["id"]))
     except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -556,8 +558,6 @@ def main(argv: list[str] | None = None) -> int:
       continue
     if want is not None:
       todo.append(want)
-    if len(todo) >= args.max_books:
-      break
   print(f"{len(records)} missing, {len(queued)} queued in Bookshelf, {len(todo)} to attempt")
 
   out = Outcome()
