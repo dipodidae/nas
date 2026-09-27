@@ -43,7 +43,19 @@ def test_plan_pref_changes_returns_only_differing_keys():
     "temp_path": "/downloads/incomplete/qbittorrent",
     "up_limit": qbt.UPLOAD_LIMIT_BYTES_PER_SEC,
     "max_uploads": qbt.MAX_UPLOAD_SLOTS,
+    "add_trackers_enabled": True,
+    "add_trackers": "\n".join(qbt.DEFAULT_TRACKERS),
   }
+
+
+def test_bare_magnets_get_the_public_trackers_audiobookbay_announces_to():
+  """ABB hands out info-hash-only magnets (ADR-0058); without appended trackers
+  qBittorrent sat in metaDL with zero peers."""
+  desired = qbt.desired_prefs(shaped=True)
+  assert desired["add_trackers_enabled"] is True
+  trackers = desired["add_trackers"].split("\n")
+  assert "udp://tracker.opentrackr.org:1337/announce" in trackers
+  assert all(t.endswith("/announce") for t in trackers)
 
 
 def test_upload_limit_stays_below_the_real_line_rate():

@@ -90,7 +90,29 @@ MAX_UPLOAD_SLOTS = 6
 
 WAN_IF = "enp88s0"
 
+# Appended to every new torrent. AudioBookBay hands out bare info-hash magnets
+# (ADR-0058): with no tracker in the link, qBittorrent sat in metaDL with zero
+# peers, waiting on DHT alone. These are the public trackers ABB's own torrents
+# announce to, read off its detail pages on 2026-09-27; they also rescue every
+# other tracker-less magnet. Adding a tracker to a torrent that already has it
+# is a no-op, so private torrents are untouched in practice -- and there are
+# none here (no private tracker is configured in Prowlarr).
+DEFAULT_TRACKERS = (
+  "udp://tracker.opentrackr.org:1337/announce",
+  "udp://open.stealth.si:80/announce",
+  "udp://exodus.desync.com:6969/announce",
+  "udp://tracker.torrent.eu.org:451/announce",
+  "udp://tracker.dler.org:6969/announce",
+  "udp://tracker.tiny-vps.com:6969/announce",
+  "udp://bt1.archive.org:6969/announce",
+  "http://tracker.files.fm:6969/announce",
+  "http://tracker.bt4g.com:2095/announce",
+  "http://tracker2.dler.org:80/announce",
+)
+
 BASE_PREFS = {
+  "add_trackers_enabled": True,
+  "add_trackers": "\n".join(DEFAULT_TRACKERS),
   "auto_tmm_enabled": True,
   "category_changed_tmm_enabled": True,
   "save_path_changed_tmm_enabled": True,

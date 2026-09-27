@@ -17,6 +17,11 @@ services:
     container_name: prowlarr
     volumes:
       - ${CONFIG_DIRECTORY}/prowlarr:/config
+      # Custom Cardigann definitions, tracked in the repo (AudioBookBay, which
+      # upstream dropped). The DIRECTORY, read-only -- a single-file bind is
+      # held by inode, so a git checkout would silently detach it (ADR-0022's
+      # lesson). ADR-0058.
+      - ../prowlarr/definitions:/config/Definitions/Custom:ro
     ports:
       - '127.0.0.1:9696:9696'
     depends_on:

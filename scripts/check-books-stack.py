@@ -15,6 +15,10 @@ piece fails quietly:
   when metadata is down Bookshelf keeps serving its UI with green health while
   every author search and refresh silently returns nothing. Proven with a real
   author lookup, not a ping.
+* **AudioBookBay answers through Prowlarr, and bookshelf-audio has it**
+  (ADR-0058). ABB is a custom definition this repo owns; a domain move, a
+  User-Agent block or its uppercase-query redirect each turned it into an
+  indexer that returns nothing while testing green. Proven with a real search.
 
 Exit codes
 ----------
@@ -28,12 +32,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 JELLYFIN = "http://localhost:8096"
 BOOKSHELF = "http://localhost:8787/api/v1"
+BOOKSHELF_AUDIO = "http://localhost:8788/api/v1"
+PROWLARR = "http://localhost:9696/api/v1"
 LIBRARIES = {
   "Books": "/data/movies/books/ebooks",
   "Audiobooks": "/data/movies/books/audiobooks",
@@ -72,10 +79,53 @@ def plugin_findings(plugins: list[dict]) -> list[str]:
   return [] if active else ["the Jellyfin Bookshelf plugin is not Active"]
 
 
+ABB_URL = "https://audiobookbay.lu/?s=murakami"
+BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+
+
+def abb_direct_posts() -> int:
+  """English posts on ABB's search page, fetched as the definition fetches it."""
+  req = urllib.request.Request(ABB_URL, headers={"User-Agent": BROWSER_UA})
+  try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+      page = resp.read().decode("utf-8", "replace")
+  except (OSError, urllib.error.URLError):
+    return 0
+  return page.count("Language: English")
+
+
+def audiobookbay_findings(pr_key: str, ba_key: str) -> list[str]:
+  out = []
+  indexers = _get(f"{PROWLARR}/indexer", {"X-Api-Key": pr_key})
+  abb = next((i for i in indexers if i.get("definitionName") == "audiobookbay"), None)
+  if abb is None:
+    return ["Prowlarr has no AudioBookBay indexer (prowlarr/definitions/audiobookbay.yml)"]
+  if not abb.get("enable"):
+    out.append("Prowlarr's AudioBookBay indexer is disabled")
+  hits = _get(f"{PROWLARR}/search?query=murakami&type=search&categories=3030"
+              f"&indexerIds={abb['id']}", {"X-Api-Key": pr_key}, timeout=120) or []
+  if not hits:
+    # Prowlarr silently leaves an indexer out once its hourly query cap (60,
+    # set on purpose) is spent -- which a backlog search does. So ask the site
+    # directly, the way the definition does, before calling it broken.
+    if abb_direct_posts() > 0:
+      print("    note: AudioBookBay answers directly but not through Prowlarr right now "
+            "-- its 60/h query cap is probably spent")
+    else:
+      out.append("AudioBookBay returned nothing for 'murakami', directly or through "
+                 "Prowlarr -- domain, User-Agent or query rules changed (ADR-0058)")
+  names = [i.get("name", "") for i in _get(f"{BOOKSHELF_AUDIO}/indexer", {"X-Api-Key": ba_key})]
+  if not any("AudioBookBay" in n for n in names):
+    out.append("bookshelf-audio does not have AudioBookBay -- Prowlarr app sync broken?")
+  return out
+
+
 def main() -> int:
   jf_key, bs_key = os.environ.get("API_KEY_JELLYFIN"), os.environ.get("API_KEY_BOOKSHELF")
-  if not jf_key or not bs_key:
-    print("FATAL: API_KEY_JELLYFIN and API_KEY_BOOKSHELF must be set", file=sys.stderr)
+  ba_key, pr_key = os.environ.get("API_KEY_BOOKSHELF_AUDIO"), os.environ.get("API_KEY_PROWLARR")
+  if not all((jf_key, bs_key, ba_key, pr_key)):
+    print("FATAL: API_KEY_JELLYFIN, API_KEY_BOOKSHELF, API_KEY_BOOKSHELF_AUDIO and "
+          "API_KEY_PROWLARR must be set", file=sys.stderr)
     return 2
   jf = {"Authorization": f'MediaBrowser Token="{jf_key}"'}
   try:
@@ -85,8 +135,14 @@ def main() -> int:
     print(f"FATAL: Jellyfin unreachable: {exc}", file=sys.stderr)
     return 2
   try:
-    hits = _get(f"{BOOKSHELF}/author/lookup?term={urllib.parse.quote(PROBE_AUTHOR)}",
-                {"X-Api-Key": bs_key}, timeout=90) or []
+    # One retry: the shared server throws the odd 503 under load, and a
+    # single blip is not "metadata is down".
+    url = f"{BOOKSHELF}/author/lookup?term={urllib.parse.quote(PROBE_AUTHOR)}"
+    try:
+      hits = _get(url, {"X-Api-Key": bs_key}, timeout=90) or []
+    except urllib.error.HTTPError:
+      time.sleep(15)
+      hits = _get(url, {"X-Api-Key": bs_key}, timeout=90) or []
     if not any(PROBE_AUTHOR.lower() in (h.get("authorName") or "").lower() for h in hits):
       findings.append(f"Bookshelf's metadata source returned no {PROBE_AUTHOR!r} "
                       f"({len(hits)} hits) -- author search and refresh are dead")
@@ -96,10 +152,16 @@ def main() -> int:
     print(f"FATAL: Bookshelf unreachable: {exc}", file=sys.stderr)
     return 2
 
+  try:
+    findings += audiobookbay_findings(pr_key, ba_key)
+  except (OSError, urllib.error.URLError, ValueError) as exc:
+    print(f"FATAL: Prowlarr or bookshelf-audio unreachable: {exc}", file=sys.stderr)
+    return 2
+
   for f in findings:
     print(f"    !!! {f}")
   if not findings:
-    print("    ok: Books + Audiobooks libraries, Bookshelf plugin, metadata lookup")
+    print("    ok: Books + Audiobooks libraries, Bookshelf plugin, metadata lookup, AudioBookBay")
   return 1 if findings else 0
 
 

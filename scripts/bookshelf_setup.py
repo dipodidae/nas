@@ -21,7 +21,9 @@ Per instance
   here needs (qBittorrent mounts only the downloads dir).
 * Format ranking. Ebooks: EPUB best and the cutoff (Jellyfin's reader and every
   e-reader app take it), then MOBI, AZW3, and PDF as a last resort. Audio: M4B
-  best and the cutoff, then FLAC, MP3. Upgrades on.
+  best and the cutoff, then FLAC, MP3, and Unknown Audio last: most public
+  torrent titles name no format, and rejecting them all left Knaben useless.
+  The cutoff still upgrades them to M4B. Upgrades on.
 * Metadata profile: English and Dutch (``nld``) editions, plus editions with
   no language.
 
@@ -90,7 +92,7 @@ INSTANCES: tuple[Instance, ...] = (
     "bookshelf-audio", "Bookshelf Audio", "Readarr (Bookshelf Audio)",
     "http://localhost:8788/api/v1",
     "API_KEY_BOOKSHELF_AUDIO", "/data/books/audiobooks", "arr-bookshelf-audio",
-    "Spoken", ("MP3", "FLAC", "M4B"), "M4B", (3030,),
+    "Spoken", ("Unknown Audio", "MP3", "FLAC", "M4B"), "M4B", (3030,),
   ),
 )
 
