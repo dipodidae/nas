@@ -87,7 +87,7 @@ PER MOVIE (10 GB):
 2. Check WebUI:
    http://192.168.2.13:8080
    Username: admin
-   Password: sotm19858514
+   Password: <set in .env; never commit it>
 
    Verify in Settings > Connection:
    • Global max connections: 2000
