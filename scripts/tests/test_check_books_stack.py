@@ -45,3 +45,18 @@ def test_a_wrong_path_or_type_fails():
 def test_a_plugin_that_is_not_active_fails():
   assert cbs.plugin_findings([{"Name": "Bookshelf", "Status": "NotSupported"}])
   assert cbs.plugin_findings([])
+
+
+def test_a_loose_book_in_an_author_folder_fails_the_layout_check(tmp_path):
+  (tmp_path / "Chuck Palahniuk" / "Choke").mkdir(parents=True)
+  (tmp_path / "Chuck Palahniuk" / "Choke" / "Chuck Palahniuk - Choke.epub").write_text("x")
+  assert cbs.layout_findings(tmp_path) == []
+  (tmp_path / "Chuck Palahniuk" / "Survivor-Part06.mp3").write_text("x")
+  (found,) = cbs.layout_findings(tmp_path)
+  assert "loose in an author folder" in found and "Survivor-Part06.mp3" in found
+
+
+def test_sidecars_in_an_author_folder_are_not_books(tmp_path):
+  (tmp_path / "Iain Banks").mkdir()
+  (tmp_path / "Iain Banks" / "cover.jpg").write_text("x")
+  assert cbs.layout_findings(tmp_path) == []

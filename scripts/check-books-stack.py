@@ -15,6 +15,10 @@ piece fails quietly:
   when metadata is down Bookshelf keeps serving its UI with green health while
   every author search and refresh silently returns nothing. Proven with a real
   author lookup, not a ping.
+* **Every book file sits in its own book folder** -- `Author/Title/file`, never
+  loose in an author folder (ADR-0059). Loose files are the symptom of
+  `renameBooks` being off, and loose audiobook parts from two books sharing a
+  folder are what made Jellyfin show one "book" per chapter.
 * **AudioBookBay answers through Prowlarr, and bookshelf-audio has it**
   (ADR-0058). ABB is a custom definition this repo owns; a domain move, a
   User-Agent block or its uppercase-query redirect each turned it into an
@@ -36,6 +40,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 JELLYFIN = "http://localhost:8096"
 BOOKSHELF = "http://localhost:8787/api/v1"
@@ -54,6 +59,21 @@ def _get(url: str, headers: dict[str, str], timeout: float = 30):
   req = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
   with urllib.request.urlopen(req, timeout=timeout) as resp:
     return json.loads(resp.read() or b"null")
+
+
+BOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".opus"}
+
+
+def layout_findings(root: Path) -> list[str]:
+  """Pure over a directory: book files loose in an author folder."""
+  if not root.is_dir():
+    return [f"{root} does not exist"]
+  loose = sorted(p.relative_to(root).as_posix() for p in root.glob("*/*")
+                 if p.is_file() and p.suffix.lower() in BOOK_EXT)
+  if not loose:
+    return []
+  return [f"{len(loose)} book file(s) loose in an author folder under {root.name}/ "
+          f"(renameBooks off? ADR-0059), e.g. {loose[0]}"]
 
 
 def library_findings(folders: list[dict]) -> list[str]:
@@ -152,6 +172,10 @@ def main() -> int:
     print(f"FATAL: Bookshelf unreachable: {exc}", file=sys.stderr)
     return 2
 
+  share = os.environ.get("SHARE_DIRECTORY")
+  if share:
+    for sub in ("ebooks", "audiobooks"):
+      findings += layout_findings(Path(share) / "books" / sub)
   try:
     findings += audiobookbay_findings(pr_key, ba_key)
   except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -161,7 +185,8 @@ def main() -> int:
   for f in findings:
     print(f"    !!! {f}")
   if not findings:
-    print("    ok: Books + Audiobooks libraries, Bookshelf plugin, metadata lookup, AudioBookBay")
+    print("    ok: Books + Audiobooks libraries, one folder per book, Bookshelf plugin, "
+          "metadata lookup, AudioBookBay")
   return 1 if findings else 0
 
 

@@ -351,3 +351,9 @@
 # first, the 10/day Z-Library quota only for what LibGen lacks) and import it.
 # Exit 1 = some books deferred or not found, not a fault, hence the default --ok-codes.
 41 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name bookshelf-zlib-bridge --lock /tmp/nas-bookshelf-zlib-bridge.lock --max-age-min 180 -- python scripts/bookshelf_zlib_bridge.py --max-books 20 >> logs/bookshelf_zlib_bridge.log 2>&1"
+# :46 — metadata.opf + cover.jpg beside every book, from Bookshelf's metadata, so
+# Jellyfin shows real titles/years/series; reaps folders left holding only sidecars.
+46 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name books-sidecars --lock /tmp/nas-books-tidy.lock --max-age-min 180 -- python scripts/books_sidecars.py >> logs/books_sidecars.log 2>&1"
+# :51 — merge multi-file audiobooks into one chaptered M4B (Jellyfin shows each part
+# as its own book otherwise). Encodes in a throwaway jellyfin-ffmpeg container, 4 CPUs, niced.
+51 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name audiobook-merge --lock /tmp/nas-books-tidy.lock --lock-wait 600 --max-age-min 180 -- python scripts/audiobook_merge.py --apply >> logs/audiobook_merge.log 2>&1"

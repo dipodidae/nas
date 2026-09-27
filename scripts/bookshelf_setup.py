@@ -26,6 +26,8 @@ Per instance
   The cutoff still upgrades them to M4B. Upgrades on.
 * Metadata profile: English and Dutch (``nld``) editions, plus editions with
   no language.
+* Naming: one folder per book (``Author/Title/Author - Title.ext``),
+  renaming ON, and a 14-day recycle bin so no delete through Bookshelf is final.
 
 Prowlarr
 --------
@@ -65,6 +67,29 @@ REMOTE_PATH = "/downloads/"
 LOCAL_PATH = "/data/downloads/"
 # ISO 639-3 only: "dut" (the 639-2/B code) is rejected as "Unknown languages".
 LANGUAGES = "eng, nld, null"
+
+# One folder per BOOK, not per author: Author/Title/Author - Title.ext,
+# and a multi-file audiobook as "... (01).mp3" inside its own folder. With
+# `renameBooks` off (the image default) Bookshelf ignores the book-folder half of
+# the format and drops every file loose in the author folder under its release
+# name -- so Choke's and Survivor's chapter MP3s shared one directory, and
+# Jellyfin, which treats a folder of audio files as ONE audiobook, could not
+# tell them apart. Zero-padded parts so players sort chapter 10 after 9.
+NAMING = {
+  "renameBooks": True,
+  "replaceIllegalCharacters": True,
+  "colonReplacementFormat": 4,   # smart: "Title: Subtitle" -> "Title - Subtitle"
+  "authorFolderFormat": "{Author Name}",
+  # No {Release Year}: it is whichever edition's date the metadata picked, so
+  # the same book got different folders per instance -- "Survivor (2018)" as
+  # an audiobook, "Survivor (1999)" as an ebook -- and a wrong year is worse
+  # than none.
+  "standardBookFormat": "{Book Title}/{Author Name} - {Book Title}{ (PartNumber:00)}",
+}
+# Upgrades and de-duplication delete through Bookshelf; this makes every such
+# delete a recoverable move for two weeks. Same filesystem, so a rename.
+RECYCLE_BIN = "/data/downloads/.bookshelf-recycle"
+RECYCLE_DAYS = 14
 
 
 @dataclass(frozen=True)
@@ -263,7 +288,19 @@ def converge_instance(inst: Instance, env: dict[str, str], apply: bool, rep: Rep
       step(f"qBittorrent client, category {inst.category}",
            lambda: call("PUT", f"/downloadclient/{qbit['id']}", body))
 
-  # 6. remote path mapping
+  # 6. naming (one folder per book) and the recycle bin
+  naming = call("GET", "/config/naming")
+  if any(naming.get(k) != v for k, v in NAMING.items()):
+    step("naming: one folder per book, renameBooks on",
+         lambda: call("PUT", f"/config/naming/{naming['id']}", {**naming, **NAMING}))
+  mm = call("GET", "/config/mediamanagement")
+  want_mm = {"recycleBin": RECYCLE_BIN, "recycleBinCleanupDays": RECYCLE_DAYS,
+             "deleteEmptyFolders": True}
+  if any(mm.get(k) != v for k, v in want_mm.items()):
+    step(f"media management: recycle bin {RECYCLE_BIN} ({RECYCLE_DAYS} d), delete empty folders",
+         lambda: call("PUT", f"/config/mediamanagement/{mm['id']}", {**mm, **want_mm}))
+
+  # 7. remote path mapping
   maps = call("GET", "/remotepathmapping")
   if not any(m["host"] == QBIT_HOST and m["remotePath"] == REMOTE_PATH
              and m["localPath"] == LOCAL_PATH for m in maps):

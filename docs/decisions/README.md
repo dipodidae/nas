@@ -69,3 +69,4 @@ the ADR here. If you are about to change something and the YAML says
 | [0056](0056-umami-analytics.md)                                  | Umami for ongehoord.nl via nuxt-umami's cloak proxy: no visitor ever talks to this box; GA removed |
 | [0057](0057-books-bookshelf-and-zlibrary.md)                   | Books: Bookshelf (two instances) + a Z-Library/LibGen bridge by md5 + Jellyfin Books/Audiobooks; Librarr and self-hosted metadata tried and removed |
 | [0058](0058-audiobookbay-for-audiobooks.md)                    | AudioBookBay via a repo-owned Prowlarr definition: browser UA, lowercase queries, [FORMAT] titles, EN/NL rows; audiobook-source research |
+| [0059](0059-books-library-layout.md)                            | One folder per book (renameBooks was off), metadata.opf + cover sidecars, multi-file audiobooks merged to one chaptered M4B |
