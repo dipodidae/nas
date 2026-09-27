@@ -345,3 +345,9 @@
 # would exit 2 nightly and ntfy every morning about a backup that was never
 # configured. Verified in a cron-like environment (env -i, CWD=$HOME).
 #0 2 * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name offsite-backup --lock /tmp/nas-offsite-backup.lock --max-age-min 2880 --fail-lane critical -- bash scripts/offsite_backup.sh --apply >> logs/offsite_backup.log 2>&1"
+
+# --- books (ADR-0057) ---
+# :41 — fetch what Bookshelf is missing from Z-Library's catalogue (LibGen by md5
+# first, the 10/day Z-Library quota only for what LibGen lacks) and import it.
+# Exit 1 = some books deferred or not found, not a fault, hence the default --ok-codes.
+41 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name bookshelf-zlib-bridge --lock /tmp/nas-bookshelf-zlib-bridge.lock --max-age-min 180 -- python scripts/bookshelf_zlib_bridge.py --max-books 20 >> logs/bookshelf_zlib_bridge.log 2>&1"

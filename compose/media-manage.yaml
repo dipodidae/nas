@@ -229,6 +229,91 @@ services:
       retries: 3
       start_period: 180s
 
+  # Bookshelf: the maintained Readarr revival (pennydreadful/bookshelf).
+  # Readarr itself was retired by Servarr with its metadata service dead. One
+  # media type per instance upstream, hence two: ebooks here, audiobooks below.
+  #
+  # INVARIANT: `softcover-*` -- Goodreads metadata from the image's default,
+  # the shared rreading-glasses at api.bookinfo.pro. `hardcover-*` was tried
+  # first: its shared server timed out on every endpoint on day one, and
+  # self-hosting it needs a personal Hardcover token that EXPIRES EVERY
+  # 1 JANUARY. A self-hosted Goodreads rreading-glasses was tried second and
+  # removed: cold, it served 4 of Andy Weir's 22 works with zero ratings, which
+  # the metadata profile then filters out -- "every book by this author" cannot
+  # work on it. The two flavours' databases are not interchangeable: switching
+  # means a fresh config dir. ADR-0057.
+  # Prowlarr syncs indexers into both (Readarr app type -- the API is Readarr's
+  # v1). Z-Library/LibGen reach the ebook instance through
+  # scripts/bookshelf_zlib_bridge.py, not through Prowlarr. ADR-0057.
+  #
+  # INVARIANT: the tag is PINNED -- a floating tag is not a rollback. ADR-0057.
+  bookshelf:
+    extends:
+      file: _fragments.yaml
+      service: svc-arr
+    image: ghcr.io/pennydreadful/bookshelf:softcover-v0.4.21.182
+    container_name: bookshelf
+    volumes:
+      - ${CONFIG_DIRECTORY}/bookshelf:/config
+      # INVARIANT: the whole share at /data and NOTHING narrower. Root folder is
+      # /data/books/ebooks, qBittorrent's /downloads/ reaches it through a remote
+      # path mapping to /data/downloads/, and the Z-Library bridge stages into
+      # /data/downloads/zlib-bridge -- one mount, so every import is a rename or
+      # a hardlink, never a copy. ADR-0002, ADR-0057.
+      - ${SHARE_DIRECTORY}:/data
+      # Book imports -> nas-media, same notifier and same read-only nas-arr
+      # token FILE as sonarr/radarr/lidarr. ADR-0011, ADR-0033, ADR-0057.
+      - ../scripts/arr_notify.sh:/custom-scripts/arr_notify.sh:ro
+      - ${CONFIG_DIRECTORY}/ntfy/arr-token:/run/ntfy-arr-token:ro
+    environment:
+      - NTFY_MEDIA_CLICK=${JELLYFIN_PUBLISHED_URL}
+    ports:
+      - '127.0.0.1:8787:8787'
+    depends_on:
+      prowlarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8787/ping']
+
+  # The audiobook half. Same image, same pin, its own config and root folder
+  # (/data/books/audiobooks) -- upstream cannot hold both types in one
+  # instance. ADR-0057.
+  bookshelf-audio:
+    extends:
+      file: _fragments.yaml
+      service: svc-arr
+    image: ghcr.io/pennydreadful/bookshelf:softcover-v0.4.21.182
+    container_name: bookshelf-audio
+    volumes:
+      - ${CONFIG_DIRECTORY}/bookshelf-audio:/config
+      # INVARIANT: /data, for the same reason as bookshelf. ADR-0057.
+      - ${SHARE_DIRECTORY}:/data
+      # Book imports -> nas-media, same notifier and same read-only nas-arr
+      # token FILE as sonarr/radarr/lidarr. ADR-0011, ADR-0033, ADR-0057.
+      - ../scripts/arr_notify.sh:/custom-scripts/arr_notify.sh:ro
+      - ${CONFIG_DIRECTORY}/ntfy/arr-token:/run/ntfy-arr-token:ro
+    environment:
+      - NTFY_MEDIA_CLICK=${JELLYFIN_PUBLISHED_URL}
+    ports:
+      - '127.0.0.1:8788:8787'
+    depends_on:
+      prowlarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
+    networks:
+      - nas-network
+    labels:
+      - swag=enable
+    healthcheck:
+      test: [CMD, curl, -f, 'http://localhost:8787/ping']
+
   lingarr:
     extends:
       file: _fragments.yaml

@@ -20,7 +20,7 @@ PUID  ?= $(or $(call getenv,PUID),1000)
 PGID  ?= $(or $(call getenv,PGID),1000)
 CONFIG_DIRECTORY ?= $(call getenv,CONFIG_DIRECTORY)
 
-.PHONY: help check lint config diun-manifest bootstrap up down logs pull \
+.PHONY: help check lint config diun-manifest bootstrap up down logs pull bookshelf-setup \
         pull-jellyfin update-qbittorrent measure-qbittorrent-stop \
         submodules install-hooks verify-runtime backup-offsite \
         notify-test notify-acl tinyauth-users tinyauth-unlock swag-apply umami-setup
@@ -468,6 +468,12 @@ verify-runtime: ## Assert the RUNNING containers match the invariants (not just 
 	echo "==> jellyseerr + cleanuparr notifiers match the taxonomy (ADR-0033)"; \
 	.venv/bin/python scripts/configure_service_notifications.py --check \
 	  || { rc=1; note "jellyseerr/cleanuparr notifiers have drifted (ADR-0033)"; }; \
+	echo "==> both Bookshelf instances + their Prowlarr apps match ADR-0057"; \
+	.venv/bin/python scripts/bookshelf_setup.py --check \
+	  || { rc=1; note "Bookshelf config drifted -- run make bookshelf-setup (ADR-0057)"; }; \
+	echo "==> Jellyfin book libraries, Bookshelf plugin, and a live metadata lookup (ADR-0057)"; \
+	.venv/bin/python scripts/check-books-stack.py \
+	  || { rc=1; note "books stack drifted, or Bookshelf's metadata source is down (ADR-0057)"; }; \
 	echo "==> dockerproxy's socket mount is live, and its resync unit is installed (ADR-0052)"; \
 	hi=$$(stat -c %i /var/run/docker.sock 2>/dev/null || echo ""); \
 	pi=$$(docker exec dockerproxy stat -c %i /var/run/docker.sock 2>/dev/null || echo ""); \
@@ -509,6 +515,9 @@ navidrome-plugins: ## Install, configure + enable the pinned Navidrome plugins (
 
 audiomuse-setup: ## Push AudioMuse-AI's config + nightly schedule from .env (restarts its workers)
 	@set -a; . ./.env; set +a; .venv/bin/python scripts/audiomuse_setup.py
+
+bookshelf-setup: ## Converge both Bookshelf instances + their Prowlarr apps from scripts/bookshelf_setup.py (ADR-0057)
+	@set -a; . ./.env; set +a; .venv/bin/python scripts/bookshelf_setup.py --apply
 
 umami-setup: ## Converge Umami's goals/funnels/segments for ongehoord.nl from scripts/umami_setup.py (ADR-0056)
 	@set -a; . ./.env; set +a; .venv/bin/python scripts/umami_setup.py

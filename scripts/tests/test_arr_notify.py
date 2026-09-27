@@ -247,6 +247,56 @@ def test_an_album_import_renders_the_music_shape_and_counts_pipe_separated_track
   assert "4 tracks" in received[0]["body"]
 
 
+def test_a_book_import_renders_the_book_shape_with_format_and_client(run_script, tmp_path):
+  """Bookshelf keeps Readarr's names: readarr_eventtype=Download on import. ADR-0057."""
+  book = tmp_path / "books" / "ebooks" / "Andy Weir" / "Project Hail Mary.epub"
+  book.parent.mkdir(parents=True)
+  book.write_bytes(b"x" * 4096)
+  proc, received, _log = run_script({
+    "readarr_eventtype": "Download",
+    "readarr_author_name": "Andy Weir",
+    "readarr_book_title": "Project Hail Mary",
+    "readarr_addedbookpaths": str(book),
+    "readarr_download_client": "qBittorrent",
+  })
+  assert proc.returncode == 0
+  assert received[0]["headers"]["X-Title"] == "📚 Andy Weir — Project Hail Mary"
+  assert received[0]["headers"]["X-Tags"] == "books"
+  assert received[0]["body"].startswith("EPUB · ")
+  assert received[0]["body"].endswith(" · qBittorrent")
+
+
+def test_an_audiobook_import_gets_the_headphones_shape_and_an_upgrade_note(run_script, tmp_path):
+  """Audiobooks are several `|`-joined files under /audiobooks/; an upgrade is
+  signalled only by readarr_deletedpaths, since Readarr has no isupgrade."""
+  folder = tmp_path / "books" / "audiobooks" / "Frank Herbert" / "Dune"
+  folder.mkdir(parents=True)
+  parts = [folder / "01.m4b", folder / "02.m4b"]
+  for part in parts:
+    part.write_bytes(b"x" * 4096)
+  _proc, received, _log = run_script({
+    "readarr_eventtype": "Download",
+    "readarr_author_name": "Frank Herbert",
+    "readarr_book_title": "Dune",
+    "readarr_addedbookpaths": "|".join(str(x) for x in parts),
+    "readarr_deletedpaths": "/old/Dune.mp3",
+  })
+  assert received[0]["headers"]["X-Title"] == "🎧 Frank Herbert — Dune"
+  assert received[0]["headers"]["X-Tags"] == "headphones"
+  assert received[0]["body"].startswith("M4B · ")
+  assert received[0]["body"].endswith(" · upgrade")
+
+
+def test_a_book_import_with_no_paths_degrades_to_imported(run_script):
+  _proc, received, _log = run_script({
+    "readarr_eventtype": "Download",
+    "readarr_author_name": "Ursula K. Le Guin",
+    "readarr_book_title": "The Dispossessed",
+  })
+  assert received[0]["headers"]["X-Title"] == "📚 Ursula K. Le Guin — The Dispossessed"
+  assert received[0]["body"] == "imported"
+
+
 def test_a_missing_field_never_renders_a_dangling_separator(run_script):
   """No release group, no quality, no size: the body must not be ' ·  · '."""
   _proc, received, _log = run_script({

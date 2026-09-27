@@ -268,6 +268,13 @@ Required in `.env`:
 - `API_KEY_CLEANUPARR` - Cleanuparr API key (`X-Api-Key` header on `http://127.0.0.1:11011/api/...`).
   Read from the `admin` user row in `${CONFIG_DIRECTORY}/cleanuparr/users.db`; regenerate in the UI
   under Account, or via `POST /api/account/api-key/regenerate`. See `docs/cleanuparr-configuration.md`.
+- `API_KEY_BOOKSHELF`, `API_KEY_BOOKSHELF_AUDIO` - Bookshelf (Readarr v1 API) keys for the ebook and
+  audiobook instances, from each `${CONFIG_DIRECTORY}/bookshelf*/config.xml`. Used by
+  `bookshelf_setup.py`, `bookshelf_zlib_bridge.py`, `configure_arr_notifications.py`, `check-books-stack.py`.
+- `BOOKSHELF_PASSWORD` - the Bookshelf Forms-login password (user is `TINYAUTH_USER`); written by
+  `make bookshelf-setup`, which cannot read it back.
+- `ZLIBRARY_EMAIL`, `ZLIBRARY_PASSWORD` - the Z-Library account `bookshelf_zlib_bridge.py` spends its
+  10 downloads/day from, only on files LibGen does not have. Optional: without them only LibGen is used. ADR-0057.
 - `PLAYLIST_GENERATOR_DB_PASSWORD` - Postgres/pgvector password for playlist-generator-db
 - `NEXTCLOUD_DB_PASSWORD` - Postgres password for nextcloud-db. Nextcloud's OWN
   engine, not a tenant in playlist-generator-db or streamystats-db. Also stored in

@@ -67,7 +67,7 @@ if "NTFY_TOKEN_ARR" not in os.environ:
     pass
 
 
-# The path the script is mounted at inside every one of the three containers.
+# The path the script is mounted at inside every container that runs it.
 CUSTOM_SCRIPT_PATH = "/custom-scripts/arr_notify.sh"
 ATTENTION_NAME = "ntfy — attention"
 MEDIA_NAME = "ntfy — media (custom script)"
@@ -90,6 +90,9 @@ FORBIDDEN_TRIGGERS = frozenset({
   "onArtistAdd",
   "onSeriesAdd",
   "onMovieAdded",
+  # Bookshelf (Readarr) names for the same two noise events. ADR-0057.
+  "onAuthorAdded",
+  "onBookRetag",
 })
 
 # Connectors that update a media server's library instead of messaging a human.
@@ -140,6 +143,21 @@ APPS: tuple[App, ...] = (
     # connector to carry and the existing zero-trigger one is deleted.
     attention=(),
     media=(),
+  ),
+  # Bookshelf, the Readarr revival -- Readarr's trigger names, not Lidarr's.
+  # Two instances because upstream holds one media type per instance. Its
+  # import event is onReleaseImport. Its native Ntfy connector supports no
+  # failure trigger at all (schema measured 2026-09-27), so there is nothing
+  # for an attention connector to carry. ADR-0057.
+  App(
+    "bookshelf", "http://localhost:8787", "v1", "API_KEY_BOOKSHELF",
+    attention=(),
+    media=("onReleaseImport", "onUpgrade"),
+  ),
+  App(
+    "bookshelf-audio", "http://localhost:8788", "v1", "API_KEY_BOOKSHELF_AUDIO",
+    attention=(),
+    media=("onReleaseImport", "onUpgrade"),
   ),
 )
 

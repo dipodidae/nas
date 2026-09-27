@@ -200,6 +200,10 @@ DOOR = {
     "playlist-generator": "protect",
     "ongehoord":          "protect",
     "jellyseerr":         "protect",
+    # Bookshelf (the Readarr revival), both halves. Same shape as the *arrs:
+    # /api stays on the app's own API key for native clients. ADR-0057.
+    "bookshelf":          "protect",
+    "bookshelf-audio":    "protect",
     # Browser-only admin UI. Its /control/* API is the same surface by another
     # name and nothing off-box consumes it, so there is no path-scope. ADR-0043.
     "adguardhome":        "protect",
@@ -496,6 +500,8 @@ DATA_REQUIRED = {
     "sonarr": "ADR-0002", "radarr": "ADR-0002",
     "lidarr": "ADR-0003",   # root folder IS /data/music since 2026-09-02
     "bazarr": "ADR-0015",   # needed for path resolution, not hardlinks
+    "bookshelf": "ADR-0057",        # root /data/books/ebooks, imports by rename
+    "bookshelf-audio": "ADR-0057",  # root /data/books/audiobooks
 }
 for svc, adr in sorted(DATA_REQUIRED.items()):
     targets = {v.get("target") for v in (services.get(svc, {}).get("volumes") or [])}
@@ -1608,8 +1614,9 @@ elif not _mounted:
 else:
     ok("ntfy-arr-token-is-a-file", f"{sorted(_mounted)}, all :ro, none in env")
 
-# --- 25f. arr_notify.sh is mounted :ro into exactly the three *arr ---------
-_expected = {"sonarr", "radarr", "lidarr"}
+# --- 25f. arr_notify.sh is mounted :ro into exactly the importing *arrs ----
+# bookshelf + bookshelf-audio joined 2026-09-27 (book imports -> nas-media). ADR-0057.
+_expected = {"sonarr", "radarr", "lidarr", "bookshelf", "bookshelf-audio"}
 _have, _rw = set(), []
 for svc, sv in sorted(services.items()):
     for vol in sv.get("volumes") or []:

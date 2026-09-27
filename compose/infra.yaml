@@ -73,6 +73,8 @@ services:
       - ../swag/proxy-confs/audiomuse.subdomain.conf:/config/nginx/proxy-confs/audiomuse.subdomain.conf:ro
       - ../swag/proxy-confs/auth.subdomain.conf:/config/nginx/proxy-confs/auth.subdomain.conf:ro
       - ../swag/proxy-confs/bazarr.subdomain.conf:/config/nginx/proxy-confs/bazarr.subdomain.conf:ro
+      - ../swag/proxy-confs/bookshelf.subdomain.conf:/config/nginx/proxy-confs/bookshelf.subdomain.conf:ro
+      - ../swag/proxy-confs/bookshelf-audio.subdomain.conf:/config/nginx/proxy-confs/bookshelf-audio.subdomain.conf:ro
       - ../swag/proxy-confs/cleanuparr.subdomain.conf:/config/nginx/proxy-confs/cleanuparr.subdomain.conf:ro
       - ../swag/proxy-confs/jellyfin.subdomain.conf:/config/nginx/proxy-confs/jellyfin.subdomain.conf:ro
       - ../swag/proxy-confs/jellyseerr.subdomain.conf:/config/nginx/proxy-confs/jellyseerr.subdomain.conf:ro

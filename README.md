@@ -243,6 +243,8 @@ and `50300` forwarded on the router. → [ADR-0019](docs/decisions/0019-no-vpn-h
 | `lingarr`    | lingarr/lingarr               | `127.0.0.1:9876`  | yes | Subtitle translation. Healthcheck disabled upstream                                 |
 | `cleanuparr` | ghcr.io/cleanuparr/cleanuparr | `127.0.0.1:11011` | yes | **Armed deletion engine** → [ADR-0017](docs/decisions/0017-cleanuparr-armed.md)     |
 | `recyclarr`  | recyclarr/recyclarr:8         | —                 | yes | TRaSH profiles into sonarr/radarr, own cron                                         |
+| `bookshelf`  | pennydreadful/bookshelf       | `127.0.0.1:8787`  | yes | Ebooks (the Readarr revival). Z-Library via a bridge → [ADR-0057](docs/decisions/0057-books-bookshelf-and-zlibrary.md) |
+| `bookshelf-audio` | pennydreadful/bookshelf  | `127.0.0.1:8788`  | yes | Audiobooks: second instance, upstream holds one type each → [ADR-0057](docs/decisions/0057-books-bookshelf-and-zlibrary.md) |
 
 ### Playback and storage
 
@@ -326,6 +328,7 @@ conf's sha256 against what the container holds and escalates a mismatch to
 | `qui.`                                                                   | qBittorrent UI (**qBittorrent's own subdomain is disabled**) | tinyauth                                                           |
 | `slskd.`                                                                 | Soulseek daemon UI                                           | tinyauth                                                           |
 | `cleanuparr.` · `lidarr-bulk.` · `playlist-generator.` · `ongehoord.`    | Rest of the browser-only tier                                | tinyauth                                                           |
+| `bookshelf.` · `bookshelf-audio.`                                        | Ebooks and audiobooks (Bookshelf, ADR-0057)                  | tinyauth on `location /`; `/api` stays on the API key              |
 | `jellyseerr.`                                                            | Requests                                                     | tinyauth on `location /`; `/api` open for native clients           |
 | `jellyfin.`                                                              | Playback                                                     | **never** — TV/phone/DLNA clients, and the LAN ports bypass SWAG   |
 | `nextcloud.`                                                             | Files                                                        | **never** — desktop/mobile WebDAV sync                             |

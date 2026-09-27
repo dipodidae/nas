@@ -140,6 +140,13 @@ POLICIES: dict[str, Policy] = {
         exclude=[r"-distroless$", r"-alpha", r"-beta"],
         note="plain v-semver releases only; no -distroless, no pre-releases",
     ),
+    "ghcr.io/pennydreadful/bookshelf": Policy(
+        # Metadata flavour is part of the tag: softcover-v0.4.21.182. A
+        # hardcover tag is a different, incompatible database, so it must never
+        # be offered as an upgrade. ADR-0057.
+        include=[r"^softcover-v\d+\.\d+\.\d+(\.\d+)?$"],
+        note="softcover-* only -- hardcover is a different metadata DB; both instances move together",
+    ),
 }
 
 

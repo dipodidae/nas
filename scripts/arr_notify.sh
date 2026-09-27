@@ -2,7 +2,8 @@
 #
 # arr_notify.sh -- publish "new media you can actually watch" to nas-media.
 #
-# Runs INSIDE sonarr / radarr / lidarr as their Custom Script connector, bound
+# Runs INSIDE sonarr / radarr / lidarr / bookshelf(-audio) as their Custom
+# Script connector, bound
 # to On Import and On Upgrade only. Not On Grab (a grab is a promise, not a
 # file), not On Rename, not On Retag, not On Application Update, not On Health
 # (the watchdog owns health -- ADR-0032). ADR-0033.
@@ -44,9 +45,12 @@
 #
 # Environment (supplied by the *arr)
 # ----------------------------------
-#   sonarr_eventtype / radarr_eventtype / lidarr_eventtype
+#   sonarr_eventtype / radarr_eventtype / lidarr_eventtype / readarr_eventtype
 #   ..._series_title, ..._episodefile_*, ..._movie_*, ..._moviefile_*,
 #   ..._artist_name, ..._album_title, ..._addedtrackpaths, ..._isupgrade
+#   readarr_author_name, readarr_book_title, readarr_addedbookpaths,
+#   readarr_deletedpaths -- Bookshelf keeps Readarr's names (read from its
+#   CustomScript.cs, 2026-09-27; .NET's StringDictionary lowercases them).
 #
 # Exit codes: 0, always. See above.
 
@@ -244,9 +248,36 @@ notify_lidarr() {
   publish "🎵 $_artist — $_album" "musical_note" "${_body:-imported}"
 }
 
+notify_readarr() {
+  _author=${readarr_author_name:-unknown author}
+  _book=${readarr_book_title:-unknown book}
+  _added=${readarr_addedbookpaths:-}
+  _size=""
+  _format=""
+  _icon="📚"
+  _tag="books"
+  if [ -n "$_added" ]; then
+    _size=$(printf '%s' "$_added" | tr '|' '\n' | tr '\n' '\0' \
+            | xargs -0 du -ch 2>/dev/null | tail -n 1 | cut -f1 || true)
+    # The first file's extension is the format; an audiobook is several files
+    # of one type, so the first is representative.
+    _first=$(printf '%s' "$_added" | cut -d'|' -f1)
+    _format=$(printf '%s' "${_first##*.}" | tr '[:lower:]' '[:upper:]')
+    case "$_first" in
+      */audiobooks/*) _icon="🎧"; _tag="headphones" ;;
+    esac
+  fi
+  # Readarr has no isupgrade variable; an upgrade is an import that replaced
+  # files, which it reports as readarr_deletedpaths.
+  _note=""
+  [ -n "${readarr_deletedpaths:-}" ] && _note="upgrade"
+  _body=$(join_meta "$_format" "$_size" "${readarr_download_client:-}" "$_note")
+  publish "$_icon $_author — $_book" "$_tag" "${_body:-imported}"
+}
+
 # --- dispatch -------------------------------------------------------------
 
-EVENT=${sonarr_eventtype:-${radarr_eventtype:-${lidarr_eventtype:-}}}
+EVENT=${sonarr_eventtype:-${radarr_eventtype:-${lidarr_eventtype:-${readarr_eventtype:-}}}}
 
 case "$EVENT" in
   Test)
@@ -265,6 +296,7 @@ case "$EVENT" in
     dump_env_once "$EVENT"
     if [ -n "${sonarr_eventtype:-}" ]; then notify_sonarr
     elif [ -n "${radarr_eventtype:-}" ]; then notify_radarr
+    elif [ -n "${readarr_eventtype:-}" ]; then notify_readarr
     fi
     ;;
   AlbumDownload|ReleaseImport|TrackFileImport)
