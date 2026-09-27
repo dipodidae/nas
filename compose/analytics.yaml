@@ -74,6 +74,11 @@ services:
       # once the tunnel is live) would describe VERCEL, and every visitor
       # would appear to come from one datacenter.
       - SKIP_LOCATION_HEADERS=1
+      # Our own visits are not readers. A comma-separated list (IPs or CIDRs),
+      # matched against the VISITOR IP the site forwards in the payload, not
+      # against Vercel's. Kept in .env because a home IP rotates. Browsers
+      # elsewhere opt out with ?umami=off on the site. ADR-0056.
+      - IGNORE_IP=${UMAMI_IGNORE_IP:-}
       - DISABLE_TELEMETRY=1
       # diun reports new tags (ADR-0024); the in-app banner would be a second,
       # louder copy of that.
