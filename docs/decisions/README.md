@@ -65,5 +65,5 @@ the ADR here. If you are about to change something and the YAML says
 | [0052](0052-a-bind-mounted-socket-detaches-on-daemon-restart.md) | A bind-mounted Docker socket detaches when the daemon restarts; dockerproxy 503s and autoheal crash-loops                   |
 | [0053](0053-navidrome-plugins-and-audiomuse.md)                  | Navidrome plugins + AudioMuse-AI owns Instant Mix; two workers, not one bigger one (64.6× realtime)                         |
 | [0054](0054-bazarr-accuracy-and-subtitle-audit.md)               | Bazarr for accuracy (OpenSubtitles back, framerate sync, NL + EN) + an hourly audit that checks subtitles against the audio |
-| [0055](0055-cloudflare-tunnel.md)                               | Cloudflare Tunnel in front of SWAG (staged; cutover held until the hijacked account is secured) + zone hardening |
+| [0055](0055-cloudflare-tunnel.md)                               | Cloudflare Tunnel is the only public surface; SWAG on loopback; zone hardening; the account takeover it uncovered |
 | [0056](0056-umami-analytics.md)                                  | Umami for ongehoord.nl via nuxt-umami's cloak proxy: no visitor ever talks to this box; GA removed |

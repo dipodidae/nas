@@ -231,9 +231,11 @@ ROUTE_ALIASES = {
     "tinyauth": "auth",
 }
 
+# 80 and 443 are deliberately NOT here. Since ADR-0055 the web surface is the
+# Cloudflare Tunnel (outbound only), and SWAG publishes on loopback. A public
+# 443 again would reopen the origin to anyone who knows the home IP, around
+# Cloudflare and around every edge rule, so it must fail rather than pass.
 PUBLIC_PORT_ALLOWLIST = {
-    443:  "SWAG HTTPS",
-    80:   "SWAG HTTP (ACME + redirect)",
     8096: "Jellyfin HTTP (LAN clients)",
     8920: "Jellyfin HTTPS (LAN clients)",
     7359: "Jellyfin auto-discovery (UDP)",
@@ -430,7 +432,7 @@ for svc, sv in sorted(services.items()):
             fail("port-exposure", "ADR-0001",
                  f"{svc} publishes :{pubn} on all interfaces "
                  f"(host_ip={host_ip or 'unset'}). Internal WebUIs must bind "
-                 "127.0.0.1 -- the public surface is SWAG. Add it to "
+                 "127.0.0.1 -- the public surface is the Cloudflare Tunnel into SWAG. Add it to "
                  "PUBLIC_PORT_ALLOWLIST only if it is meant to be reachable "
                  "from the LAN or the internet.")
 

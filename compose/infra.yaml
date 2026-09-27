@@ -91,9 +91,14 @@ services:
       - ../swag/proxy-confs/sonarr.subdomain.conf:/config/nginx/proxy-confs/sonarr.subdomain.conf:ro
       - ../swag/proxy-confs/umami.subdomain.conf:/config/nginx/proxy-confs/umami.subdomain.conf:ro
       - ../nginx-cache:/var/cache/nginx:rw
+    # INVARIANT: loopback only. The public surface is the Cloudflare Tunnel
+    # (cloudflared -> swag:443 over nas-network); nothing on the home IP answers
+    # 80/443 any more, so a router port-forward left open leads nowhere and the
+    # origin cannot be reached around Cloudflare. 127.0.0.1:443 stays for
+    # post_update_verifier.py. HTTP->HTTPS is Cloudflare's Always Use HTTPS.
+    # ADR-0055.
     ports:
-      - '443:443'
-      - '80:80'
+      - '127.0.0.1:443:443'
     networks:
       - nas-network
     labels:
