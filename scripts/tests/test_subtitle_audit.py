@@ -432,3 +432,26 @@ def test_backup_does_not_duplicate_identical_content(tmp_path, monkeypatch):
   first = sa.backup(sub, tmp_path / "bak")
   assert sa.backup(sub, tmp_path / "bak") == first
   assert len(list((tmp_path / "bak" / "movies").iterdir())) == 1
+
+
+def test_adopt_from_backups_finds_the_one_that_belongs_and_remembers_the_rest(
+  tmp_path, monkeypatch
+):
+  share, bak = tmp_path / "share", tmp_path / "bak"
+  season = share / "series" / "P" / "Season 3"
+  season.mkdir(parents=True)
+  (bak / "series" / "P" / "Season 3").mkdir(parents=True)
+  monkeypatch.setattr(sa, "SHARE", share)
+  monkeypatch.setattr(sa, "BACKUP_DIR", bak)
+  video = season / "P - S03E09 - x.mkv"
+  video.write_text("")
+  good = SRT.replace("Hastings", "Royal Ruby")
+  (bak / "series" / "P" / "Season 3" / "P - S03E08 - y.en.srt").write_text(good)
+  (bak / "series" / "P" / "Season 3" / "P - S03E03 - z.en.srt").write_text(SRT)
+  (bak / "series" / "P" / "Season 3" / "P - S03E03 - z.nl.srt").write_text(good)  # other language
+  monkeypatch.setattr(sa, "belongs_to", lambda v, cues: any("royal ruby" in c.text for c in cues))
+  rep = {"tried": []}
+  sub = season / "P - S03E09 - x.en.srt"
+  assert "adopted P - S03E08 - y.en.srt" in sa.adopt_from_backups(sub, video, rep)
+  assert sub.read_text() == good
+  assert sa.adopt_from_backups(sub, video, rep) == ""  # each backup tried once

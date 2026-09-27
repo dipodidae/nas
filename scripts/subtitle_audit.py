@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -104,7 +105,7 @@ FIT_MAX_RESIDUAL_S = 0.5  # two windows must agree this closely to call it a con
 # -13.9 / -13.7 / -15.8 s: the video, not the subtitles, differs) was refused at 0.62 s.
 FIT_WORST_WINDOW_S = 1.0
 WRONG_MIN_LINES = 12
-WRONG_MAX_MATCH = 0.12
+WRONG_MAX_MATCH = 0.2  # right subtitles match 50-95%; Marsdon Manor sat at 4/33 = 12.1%, just over 0.12
 MIN_PAIRS_PER_WINDOW = 3
 RECHECK_UNSURE_DAYS = 30
 MIN_LANG_VOTES = 2  # windows that must hear the subtitle's language before text-matching
@@ -722,6 +723,48 @@ def next_step(rep: dict, sub_exists: bool, now: float) -> str:
   return "request"
 
 
+MAX_BACKUPS_PER_TRY = 12  # one whisper window each
+
+
+def season_backups(sub: Path, root: Path | None = None) -> list[Path]:
+  """Distinct subtitle files already downloaded for this folder, newest first."""
+  folder = (root or BACKUP_DIR) / sub.parent.relative_to(SHARE)
+  lang = sub_language(sub)
+  seen, out = set(), []
+  if not folder.is_dir():
+    return out
+  for f in sorted(folder.iterdir(), key=lambda p: -p.stat().st_mtime):
+    if f.is_file() and sub_language(Path(f.name.split(".srt")[0] + ".srt")) == lang:
+      digest = hashlib.sha256(f.read_bytes()).hexdigest()
+      if digest not in seen:
+        seen.add(digest)
+        out.append(f)
+  return out
+
+
+def adopt_from_backups(sub: Path, video: Path, rep: dict) -> str:
+  """Before downloading anything new, look in what was already downloaded.
+
+  Every removed subtitle is kept, and in a mis-numbered season most of them are right
+  for SOME episode. Bazarr's upgrade task overwrote Poirot S03E09's verified subtitle
+  with a bad-pack sibling (2026-09-26 03:20); the good one was sitting in the backup
+  dir the whole time. Each backup is tried once per subtitle (`tried`), then Bazarr.
+  """
+  cues_cache: dict[Path, list[Cue]] = {}
+  tries = 0
+  for bak in season_backups(sub):
+    key = "backup|" + hashlib.sha256(bak.read_bytes()).hexdigest()
+    if key in rep["tried"] or tries >= MAX_BACKUPS_PER_TRY:
+      continue
+    tries += 1
+    rep["tried"].append(key)
+    cues = cues_cache.setdefault(bak, parse_srt(bak.read_text(encoding="utf-8", errors="replace")))
+    if belongs_to(video, cues):
+      shutil.copy2(bak, sub)
+      return f"adopted {bak.name} from the backups (its lines are this episode's)"
+  return ""
+
+
 def drive_replacements(bazarr: Bazarr, state: dict, now: float) -> list[str]:
   """Request the next candidate for every removed subtitle nothing has replaced yet."""
   out = []
@@ -735,6 +778,15 @@ def drive_replacements(bazarr: Bazarr, state: dict, now: float) -> list[str]:
     if rep["attempts"] >= MAX_ATTEMPTS:  # a day has passed: one more round
       rep["attempts"], rep["tried"] = MAX_ATTEMPTS - 1, rep["tried"][-20:]
       rep.pop("exhausted_at", None)
+    try:
+      adopted = adopt_from_backups(sub, video, rep)
+    except (subprocess.SubprocessError, urllib.error.URLError, OSError, ValueError) as exc:
+      adopted = ""
+      out.append(f"  REPLACE {sub.relative_to(SHARE)}: backup check failed: {exc}")
+    if adopted:
+      rep["last"] = now
+      out.append(f"  REPLACE {sub.relative_to(SHARE)}: {adopted}")
+      continue
     try:
       pick = choose_candidate(bazarr.candidates(video, rep["lang"]), rep["tried"], rep["bad_packs"])
     except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:

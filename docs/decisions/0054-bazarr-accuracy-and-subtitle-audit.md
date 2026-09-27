@@ -147,6 +147,24 @@ skips identical copies (it had made 245). This is the _retry with no memory_ sha
 from the `hunting-silent-failure` skill, and the wrapper meant to catch silent
 failure was the cause.
 
+## Upgrades off (2026-09-27)
+
+Bazarr's "Upgrade Previously Downloaded Subtitles" replaces a subtitle whenever a
+higher-_scoring_ one appears, and score is the metric that cannot see a wrong
+episode. At 03:20 on 2026-09-26 it replaced six Poirot S03 subtitles, including E09's
+audio-verified one (41/43 lines), with 337/360 siblings from the mis-numbered pack.
+Widening its window from 7 to 30 days had made that more likely. `upgrade_subs` is now
+**false**, pinned by `check-bazarr-config.py`. Missing subtitles are still searched by
+Bazarr; bad ones are replaced by the audit.
+
+The cost is real: the same task gave S03E11 an OpenSubtitles **hash match**
+(359/360), a subtitle made for exactly this file. Hash-only upgrading is a gap to
+build into the audit, not a reason to re-enable score upgrades.
+
+The audit's replacement loop also looks in `backups/subtitle-audit/` for the same
+season folder **before** downloading anything, and adopts a backup whose lines are
+this episode's. E09's good subtitle was sitting there the whole time.
+
 ## Rollback
 
 Bazarr config and DB from before this change:

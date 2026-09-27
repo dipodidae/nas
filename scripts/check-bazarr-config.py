@@ -19,6 +19,10 @@ Agatha Christie's Poirot before it was changed:
   never stretch it. A 25-vs-24 fps subtitle needs a 0.960 / 1.036 stretch, which is
   exactly what it measured and was not allowed to apply;
 * **minimum scores** follow TRaSH (90 series / 80 movies), sync thresholds 96 / 86;
+* **upgrades OFF** -- Bazarr's upgrade task replaces a subtitle whenever a higher
+  *score* appears, and score is what cannot see a wrong episode: on 2026-09-26 03:20
+  it overwrote Poirot S03E09's audio-verified subtitle, and five others, with 337/360
+  siblings from the mis-numbered pack. Replacement is the audit's job now;
 * **profile** -- every series and movie is on "NL + EN", which is also the default
   for new ones. The retired 9-language profile had produced one Dutch subtitle.
 
@@ -72,6 +76,10 @@ def problems(
     )
   if missing := WANT_MODS - set(g.get("subzero_mods") or []):
     out.append(f"subtitle mods off: {sorted(missing)}")
+  if g.get("upgrade_subs") is not False:
+    out.append(
+      "score-based upgrades are on: they overwrite subtitles the audit verified (Poirot S03E09, 2026-09-26)"
+    )
   if not g.get("parse_embedded_audio_track"):
     out.append("deep audio-track analysis is off")
   if (settings.get("opensubtitlescom") or {}).get("use_hash") is not True:

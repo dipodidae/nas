@@ -30,6 +30,7 @@ GOOD = {
     "minimum_score_movie": 80,
     "subzero_mods": ["common", "OCR_fixes", "remove_HI", "fix_uppercase"],
     "parse_embedded_audio_track": True,
+    "upgrade_subs": False,
     "serie_default_profile": 3,
     "movie_default_profile": 3,
   },
@@ -73,6 +74,7 @@ def test_each_measured_regression_is_caught():
     (("general", "parse_embedded_audio_track"), False),
     (("general", "serie_default_profile"), 2),
     (("opensubtitlescom", "use_hash"), False),
+    (("general", "upgrade_subs"), True),
   ]
   for path, value in cases:
     assert cb.problems(_with(path, value), PROFILES, SERIES, MOVIES), path
