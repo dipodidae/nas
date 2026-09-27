@@ -655,14 +655,14 @@ Checks every external subtitle against what is actually spoken (ADR-0054). Bazar
 
 **A wrong subtitle is often a neighbour's.** Before discarding one, the audit tries it against episodes ±1/±2 in the same season, and moves it there if the spoken lines match, unless that episode already has an unflagged subtitle. Poirot S03 is numbered one off between TVDB and every subtitle site. **Removed is not the end.** Blacklisting one file doesn't stop Bazarr picking its sibling from the same mis-numbered season pack; Poirot S03's replacements were the same pack re-uploaded. So each removed subtitle is tracked with its pack id, and the audit queues Bazarr's next-best candidate from outside the bad packs, below the minimum score if need be. The next run measures what lands. At most 5 attempts per subtitle, then one more round a day.
 
-Originals of everything touched are kept at `${SHARE_DIRECTORY}/backups/subtitle-audit/<same relative path>`. Verdicts are remembered per file size + mtime in `logs/cron-state/subtitle-audit.json`, so an unchanged file is measured once; a replacement or retime gets measured again.
+Originals of everything touched are kept at `${SHARE_DIRECTORY}/backups/subtitle-audit/<same relative path>`. Verdicts are remembered per file size + mtime in `logs/subtitle-audit/state.json` (deliberately **not** under `logs/cron-state/`: `cron_job.py` owns `cron-state/subtitle-audit.json` and writes its start-of-run snapshot back at exit, which erased every verdict for two days), so an unchanged file is measured once; a replacement or retime gets measured again.
 
 ```bash
 python scripts/subtitle_audit.py --path "/mnt/drive/series/Agatha Christie's Poirot/Season 3"   # report only
 python scripts/subtitle_audit.py --apply --limit 5
 ```
 
-Cron: hourly at `:33`, `--apply --budget-min 25`. About 20 s per subtitle on the CPU `small` model. Exit codes: `0` ok, `1` some items errored (for example a clip timing out while Bazarr syncs; retried next run), `2` whisper or Bazarr unreachable. Environment: `WHISPER_URL`, `BAZARR_URL`, `SHARE_DIRECTORY`, `SUBTITLE_AUDIT_FFMPEG_CONTAINER` (default `bazarr`: the host has no ffmpeg).
+Cron: hourly at `:33`, `--apply --budget-min 50`, English subtitles first. About 1–2 min per subtitle while the disk is busy, on the CPU `small` model. Exit codes: `0` ok, `1` some items errored (for example a clip timing out while Bazarr syncs; retried next run), `2` whisper or Bazarr unreachable. Environment: `WHISPER_URL`, `BAZARR_URL`, `SHARE_DIRECTORY`, `SUBTITLE_AUDIT_FFMPEG_CONTAINER` (default `bazarr`: the host has no ffmpeg).
 
 ### `check-bazarr-config.py`
 

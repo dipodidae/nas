@@ -409,3 +409,26 @@ def test_minutes_off_everywhere_is_badsync_not_unsure():
     for at, off in ((600, 1.0), (1500, -1.5), (2400, 1.2))
   ]
   assert sa.classify_text(mild).kind == "UNSURE"
+
+
+def test_state_file_is_not_cron_jobs_own_file():
+  # cron_job.py --name subtitle-audit owns logs/cron-state/subtitle-audit.json and
+  # writes its start-of-run snapshot back at exit, erasing every verdict.
+  assert "cron-state" not in sa.STATE_FILE.parts
+
+
+def test_load_state_ignores_foreign_keys(tmp_path):
+  p = tmp_path / "s.json"
+  p.write_text('{"last_run": 5, "/a.en.srt": {"verdict": "GOOD"}}')
+  assert sa.load_state(p) == {"/a.en.srt": {"verdict": "GOOD"}}
+
+
+def test_backup_does_not_duplicate_identical_content(tmp_path, monkeypatch):
+  share = tmp_path / "share"
+  sub = share / "movies" / "12 Angry Men [1957].eng.0.srt"
+  sub.parent.mkdir(parents=True)
+  monkeypatch.setattr(sa, "SHARE", share)
+  sub.write_text("same")
+  first = sa.backup(sub, tmp_path / "bak")
+  assert sa.backup(sub, tmp_path / "bak") == first
+  assert len(list((tmp_path / "bak" / "movies").iterdir())) == 1

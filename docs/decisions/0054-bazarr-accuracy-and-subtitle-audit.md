@@ -130,7 +130,22 @@ need be. Bazarr cannot do this: it only ever searches by the episode's own numbe
 - OpenSubtitles' free tier has a daily download quota. Bazarr throttles the provider
   when it is hit and resumes the next day; the NL backfill is quota-bound, not broken.
 - Whisper is CPU-only (`small`). About 20 s per subtitle; ~815 subtitles is ~5 h,
-  spread over the hourly 25-minute budget.
+  spread over the hourly 50-minute budget, English first.
+
+## Incident: two days of no progress (2026-09-25 → 27)
+
+The first version kept its verdicts in `logs/cron-state/subtitle-audit.json`, which is
+`cron_job.py`'s own state file for a job named `subtitle-audit`. The wrapper reads it at
+start and writes its snapshot back at exit, so every verdict a run saved was erased
+when the run ended. 52 hourly runs each re-measured the alphabetically first files
+(_12 Angry Men_, six subtitles), used their whole budget, and forgot. The rest of the
+library was never measured, and the 5 pending Poirot replacements survived only
+because they were written by hand-run passes outside the wrapper. Every run still
+exited 0. Fixed: the state now lives at `logs/subtitle-audit/state.json`, a test
+pins it outside `cron-state/`, `load_state` ignores non-verdict keys, and `backup()`
+skips identical copies (it had made 245). This is the _retry with no memory_ shape
+from the `hunting-silent-failure` skill, and the wrapper meant to catch silent
+failure was the cause.
 
 ## Rollback
 

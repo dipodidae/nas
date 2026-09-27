@@ -308,7 +308,7 @@
 # kept in backups/subtitle-audit/), and blacklists wrong-content ones in Bazarr so it
 # re-searches. A verdict is remembered per file size+mtime. --ok-codes 0,1: a clip
 # timing out while Bazarr syncs is retried next hour; only whisper/bazarr down alerts.
-33 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name subtitle-audit --lock /tmp/nas-subtitle-audit.lock --max-age-min 180 --ok-codes 0,1 -- python -u scripts/subtitle_audit.py --apply --budget-min 25 >> logs/subtitle_audit.log 2>&1"
+33 * * * * /usr/bin/env bash -c "cd /home/tom/nas && . .venv/bin/activate && python scripts/cron_job.py --name subtitle-audit --lock /tmp/nas-subtitle-audit.lock --max-age-min 180 --ok-codes 0,1 -- python -u scripts/subtitle_audit.py --apply --budget-min 50 >> logs/subtitle_audit.log 2>&1"
 # --- Jellyfin music jobs: RETIRED 2026-09-16 (ADR-0051) ---
 # jellyfin-scan-music, jellyfin-image-backfill, music-library-sweep and
 # lidarr-jellyfin-bridge all lived here. Jellyfin no longer has a music library:

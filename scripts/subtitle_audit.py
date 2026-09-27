@@ -80,7 +80,11 @@ SHARE = Path(os.environ.get("SHARE_DIRECTORY", "/mnt/drive"))
 FFMPEG_CONTAINER = os.environ.get("SUBTITLE_AUDIT_FFMPEG_CONTAINER", "bazarr")
 CONTAINER_SHARE = "/data"
 BACKUP_DIR = SHARE / "backups" / "subtitle-audit"
-STATE_FILE = Path("logs/cron-state/subtitle-audit.json")
+# NOT logs/cron-state/subtitle-audit.json: that is cron_job.py's own file for a job of
+# that name. It reads it at start and writes its snapshot back at exit, which erased
+# every verdict each hourly run saved -- 52 runs re-measured 12 Angry Men and nothing
+# else (2026-09-25..27). A test pins the two apart.
+STATE_FILE = Path("logs/subtitle-audit/state.json")
 
 VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".m4v")
 WINDOWS = (0.2, 0.5, 0.8)
@@ -94,7 +98,11 @@ MIN_WORDS = 3  # a spoken line shorter than this matches too easily to count
 TEXT_MATCH_RATIO = 0.6
 SEARCH_RADIUS_S = 400  # widest misplacement we try to recognise
 GOOD_TOLERANCE_S = 0.75  # whisper's segment starts carry ~0.3 s of jitter
-FIT_MAX_RESIDUAL_S = 0.5  # per WINDOW: the fit must explain every window, not the average
+FIT_MAX_RESIDUAL_S = 0.5  # two windows must agree this closely to call it a constant shift
+# How far any one window may sit from the fitted line. Loose on purpose: the held-out
+# verification after a retime is what decides, and 12 Angry Men (every subtitle
+# -13.9 / -13.7 / -15.8 s: the video, not the subtitles, differs) was refused at 0.62 s.
+FIT_WORST_WINDOW_S = 1.0
 WRONG_MIN_LINES = 12
 WRONG_MAX_MATCH = 0.12
 MIN_PAIRS_PER_WINDOW = 3
@@ -330,7 +338,7 @@ def classify_text(windows: list[Window]) -> Verdict:
   # the others. A straight line through that would move the good parts too, so the fit
   # has to explain every window on its own.
   worst = max(abs(statistics.median(y - (a * x + b) for x, y in inliers(w))) for w in usable)
-  if worst > FIT_MAX_RESIDUAL_S or not 0.9 <= a <= 1.1:
+  if worst > FIT_WORST_WINDOW_S or not 0.9 <= a <= 1.1:
     return Verdict(
       "BADSYNC" if hopeless else "UNSURE",
       f"off in places, not a drift or shift (a={a:.4f}, worst window {worst:.2f}s; {offsets})",
@@ -750,24 +758,35 @@ def drive_replacements(bazarr: Bazarr, state: dict, now: float) -> list[str]:
 
 
 def backup(sub: Path, root: Path = BACKUP_DIR) -> Path:
-  """Copy `sub` into the backup tree, never over an earlier backup of the same path.
+  """Keep every distinct version of `sub` in the backup tree, and only distinct ones.
 
-  The same path gets replaced several times (Poirot S03E07: subf2m, then subdl, then
-  whatever comes next), and each version is its own evidence.
+  The same path is replaced several times (Poirot S03E07: subf2m, then subdl, then
+  whatever comes next), and each version is its own evidence. An identical copy is
+  not: 12 Angry Men collected 245 of them while the audit re-measured it hourly.
   """
   dest = root / sub.relative_to(SHARE)
+  data = sub.read_bytes()
+  for old in dest.parent.glob(f"{glob_escape(dest.name)}*") if dest.parent.is_dir() else ():
+    if old.read_bytes() == data:
+      return old
   if dest.exists():
-    dest = dest.with_name(f"{dest.name}.{int(time.time())}")
+    dest = dest.with_name(f"{dest.name}.{time.time_ns()}")
   dest.parent.mkdir(parents=True, exist_ok=True)
   shutil.copy2(sub, dest)
   return dest
 
 
+def glob_escape(name: str) -> str:
+  return re.sub(r"([*?\[])", r"[\1]", name)
+
+
 def load_state(path: Path = STATE_FILE) -> dict[str, dict]:
   try:
-    return json.loads(path.read_text())
+    raw = json.loads(path.read_text())
   except (OSError, ValueError):
     return {}
+  # Only verdict entries (dicts). Anything else is somebody else's bookkeeping.
+  return {k: v for k, v in raw.items() if isinstance(v, dict)}
 
 
 def save_state(state: dict, path: Path = STATE_FILE) -> None:
@@ -810,6 +829,10 @@ def main() -> int:
   state = load_state()
   now = time.time()
   todo = [s for s in subs if needs_check(state.get(str(s)), fingerprint(s), now)]
+  # English first: it is what matters most here, and a subtitle in the audio's own
+  # language is the only kind this can fix. A Dutch one on English audio only ever
+  # gets the report-only onset check, and they are a quarter of the library.
+  todo.sort(key=lambda s: sub_language(s) != "en")
   print(f"{len(subs)} subtitles, {len(todo)} to measure")
 
   try:
