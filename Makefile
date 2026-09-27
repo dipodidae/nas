@@ -35,6 +35,7 @@ help: ## Show this help
 
 check: ## Assert every invariant the incidents taught us (scripts/check-invariants.sh)
 	@scripts/check-invariants.sh
+	@scripts/check-no-committed-secrets.sh
 
 lint: ## Validate the compose model renders (matches CI)
 	@docker compose config -q && echo "compose model OK"

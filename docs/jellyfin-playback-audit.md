@@ -105,7 +105,7 @@ by construction.
 playback never crosses the saturated uplink — and "remote" was not recorded in
 the early passes. Checking the access log settles it: the 2026-08-31 session
 that started this whole investigation came from `24.132.218.103`, **not** the
-home IP `86.81.35.107`, and carried `TranscodeReasons=AudioCodecNotSupported`
+home IP, and carried `TranscodeReasons=AudioCodecNotSupported`
 only — meaning video was being _direct-streamed_ at the file's full
 **10.6 Mbps** across a link that was dropping 5% of packets. That would stutter
 regardless of anything the server did.
