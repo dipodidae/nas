@@ -14,7 +14,7 @@ import requests
 # Configuration
 QB_HOST = "http://localhost:8080"
 QB_USER = "admin"
-QB_PASS = "sotm19858514"
+QB_PASS = "<set in .env; never commit it>"
 
 # Speed limits (KB/s, 0 = unlimited)
 DOWNLOAD_WINDOW_START = 1  # 01:00
