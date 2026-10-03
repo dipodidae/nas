@@ -15,6 +15,12 @@
     service: adguardhome
   watch_repo: false
 
+# audiobookshelf
+- name: ghcr.io/advplyr/audiobookshelf:latest
+  metadata:
+    service: audiobookshelf
+  watch_repo: false
+
 # audiomuse
 - name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
   metadata:

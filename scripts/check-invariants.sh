@@ -186,6 +186,8 @@ DOOR = {
     "nextcloud":          "never",   # desktop + mobile sync over WebDAV
     "ntfy":               "never",   # token auth; a door here makes a broken door SILENT
     "auth":               "never",   # it is the thing that hands out the session
+    "audiobookshelf":     "never",   # own root-user login + native Android/iOS apps
+
     # protect -- browser-only UIs
     "sonarr":             "protect",
     "radarr":             "protect",

@@ -52,7 +52,7 @@ LOGIN_HOST="auth.${DOMAIN}"
 PROTECT="sonarr radarr lidarr bazarr prowlarr lingarr qui slskd cleanuparr
          lidarr-bulk playlist-generator ongehoord jellyseerr adguardhome
          navidrome audiomuse umami bookshelf bookshelf-audio"
-NEVER="jellyfin nextcloud ntfy auth"
+NEVER="jellyfin nextcloud ntfy auth audiobookshelf"
 
 probe() { curl -s -o /dev/null -m 10 -w '%{http_code} %{redirect_url}' "$1" 2>/dev/null; }
 
