@@ -357,7 +357,7 @@ services:
     # INVARIANT: pinned. The omnibus image bundles InfluxDB, and an unattended
     # engine bump under a live TSDB is the failure playlist-generator-db is
     # opted out of for the same reason. ADR-0023.
-    image: ghcr.io/analogj/scrutiny:v0.9.4-omnibus
+    image: ghcr.io/analogj/scrutiny:v0.9.5-omnibus
     container_name: scrutiny
     cap_add:
       # INVARIANT: SYS_ADMIN and nothing else. Measured 2026-09-02, not copied
@@ -601,7 +601,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: henrygd/beszel:0.20.0
+    image: henrygd/beszel:0.21.0
     container_name: beszel
     # INVARIANT: no LSIO root init; ${CONFIG_DIRECTORY}/beszel must already be
     # ${PUID}:${PGID}. `make bootstrap`. ADR-0014.
@@ -644,7 +644,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: henrygd/beszel-agent:0.20.0
+    image: henrygd/beszel-agent:0.21.0
     container_name: beszel-agent
     user: '${PUID:-1000}:${PGID:-1000}'
     environment:

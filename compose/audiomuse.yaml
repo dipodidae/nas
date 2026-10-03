@@ -25,7 +25,7 @@ services:
       service: svc-hardened-tz
     # INVARIANT: pinned, and updated only by hand -- a database engine with
     # live data under it. 15 because upstream ships and tests 15.
-    image: postgres:15.19-alpine3.24
+    image: postgres:18.6-alpine3.24
     container_name: audiomuse-db
     cap_add:
       # The postgres entrypoint runs as root to initdb and chown PGDATA, then
@@ -43,7 +43,7 @@ services:
     volumes:
       # Pre-18 layout: the cluster IS /var/lib/postgresql/data. (18+ moved it
       # and refuses this path -- see streamystats-db before bumping a major.)
-      - ${CONFIG_DIRECTORY}/audiomuse-db:/var/lib/postgresql/data
+      - ${CONFIG_DIRECTORY}/audiomuse-db:/var/lib/postgresql
     networks:
       - nas-network
     healthcheck:
@@ -61,7 +61,7 @@ services:
     # (audiomuseai in navidrome/plugins/plugins.lock). Upstream is explicit
     # that core, plugin and Navidrome versions drift into errors when they are
     # not updated together. Bump all three in one commit.
-    image: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+    image: ghcr.io/neptunehub/audiomuse-ai:3.6.3
     container_name: audiomuse
     # Runs as root inside, with EVERY capability dropped. The image writes
     # model caches into root-owned /app/model and has no USER; root without
@@ -103,7 +103,7 @@ services:
       service: svc-hardened-tz
     # INVARIANT: same tag as `audiomuse`. Flask and worker share one schema
     # and one Postgres-backed task queue.
-    image: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+    image: ghcr.io/neptunehub/audiomuse-ai:3.6.3
     container_name: audiomuse-worker
     environment:
       - SERVICE_TYPE=worker

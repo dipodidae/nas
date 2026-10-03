@@ -19,7 +19,7 @@ services:
     # deliberately with `make pull-jellyfin`, which waits for healthy.
     # Consequence, accepted: pinned + unlabelled means Watchtower will never
     # report a Jellyfin update. ADR-0006, ADR-0020.
-    image: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls50
+    image: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls51
     container_name: jellyfin
     environment:
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_PUBLISHED_URL}
@@ -269,7 +269,7 @@ services:
     # every start and ships no down-migration, so an older binary will not open
     # a database a newer one has touched. The tag is not a rollback; back up
     # ${CONFIG_DIRECTORY}/navidrome before bumping it. ADR-0044.
-    image: deluan/navidrome:0.64.1
+    image: deluan/navidrome:0.64.2
     container_name: navidrome
     # INVARIANT: `user:`, not PUID/PGID. Same trap as qui (ADR-0014) -- if
     # Docker auto-creates ${CONFIG_DIRECTORY}/navidrome as root on first `up`,

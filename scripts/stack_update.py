@@ -416,8 +416,11 @@ def bump_image_line(text: str, old_image: str, new_image: str) -> tuple[str, int
   Anchored on the `image:` key rather than a bare substring: the same image
   string appears in comments and in the diun manifest, and a loose replace
   would rewrite prose. Returns the count so the caller can refuse on 0 (the
-  tag is not where we thought) or on >1 (two services share an image and this
-  would move both).
+  tag is not where we thought). A count >1 is not ambiguous here -- every hit
+  is the exact same `old_image` string mapped to the exact same `new_image`,
+  so multiple services pinned to the same image (e.g. audiomuse's api and
+  worker containers) are bumped together, which is the paired-services
+  requirement, not a guess.
   """
   # `[ \t]*$`, never `\s*$`: \s crosses newlines, so a match on the file's
   # last line swallows its terminator and welds it to the next line.
@@ -1017,15 +1020,21 @@ def bump_tag(old_image: str, new_image: str) -> tuple[bool, str]:
   asserts it matches the compose model (ADR-0024).
   """
   hits: list[Path] = []
+  already: list[Path] = []
   for f in compose_files():
     text = f.read_text()
     new, n = bump_image_line(text, old_image, new_image)
     if n:
       hits.append(f)
-      if n > 1:
-        return False, f"{old_image} appears {n} times in {f.name}; refusing to guess"
       f.write_text(new)
+    elif new_image and f"image: {new_image}" in text:
+      already.append(f)
   if not hits:
+    if already:
+      # Idempotent: a sibling service sharing this exact old->new image was
+      # already bumped (bump_image_line rewrites every occurrence in one
+      # pass), so there is nothing left for this service's own call to do.
+      return True, f"{already[0].name} (already bumped by a sibling service)"
     return False, f"no compose file declares `image: {old_image}`"
   if len(hits) > 1:
     return False, f"{old_image} declared in {len(hits)} files: {[h.name for h in hits]}"

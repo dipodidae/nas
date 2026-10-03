@@ -16,25 +16,25 @@
   watch_repo: false
 
 # audiomuse
-- name: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
   metadata:
     service: audiomuse
   watch_repo: false
 
 # audiomuse-db
-- name: postgres:15.19-alpine3.24
+- name: postgres:18.6-alpine3.24
   metadata:
     service: audiomuse-db
   watch_repo: false
 
 # audiomuse-worker
-- name: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
   metadata:
     service: audiomuse-worker
   watch_repo: false
 
 # audiomuse-worker-2
-- name: ghcr.io/neptunehub/audiomuse-ai:3.6.2
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
   metadata:
     service: audiomuse-worker-2
   watch_repo: false
@@ -53,7 +53,7 @@
 
 # beszel
 #   plain semver tags
-- name: henrygd/beszel:0.20.0
+- name: henrygd/beszel:0.21.0
   metadata:
     service: beszel
   watch_repo: true
@@ -77,7 +77,7 @@
 
 # beszel-agent
 #   plain semver tags; keep in lockstep with the hub
-- name: henrygd/beszel-agent:0.20.0
+- name: henrygd/beszel-agent:0.21.0
   metadata:
     service: beszel-agent
   watch_repo: true
@@ -197,7 +197,7 @@
 
 # jellyfin
 #   release tags only; a 12.0 major, a 12.0.z point release and a legacy 10.11.z all surface
-- name: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls50
+- name: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls51
   metadata:
     service: jellyfin
   watch_repo: true
@@ -238,7 +238,7 @@
   watch_repo: false
 
 # navidrome
-- name: deluan/navidrome:0.64.1
+- name: deluan/navidrome:0.64.2
   metadata:
     service: navidrome
   watch_repo: false
@@ -275,7 +275,7 @@
 
 # qbittorrent
 #   floor >= 5.2.2 per ADR-0005; LSIO release tags only
-- name: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls477
+- name: lscr.io/linuxserver/qbittorrent:5.2.4_v2.0.15-ls479
   metadata:
     service: qbittorrent
   watch_repo: true
@@ -320,7 +320,7 @@
 
 # scrutiny
 #   omnibus variant only -- the split images are a different topology
-- name: ghcr.io/analogj/scrutiny:v0.9.4-omnibus
+- name: ghcr.io/analogj/scrutiny:v0.9.5-omnibus
   metadata:
     service: scrutiny
   watch_repo: true
