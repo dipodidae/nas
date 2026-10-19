@@ -200,7 +200,6 @@ DOOR = {
     "cleanuparr":         "protect",
     "lidarr-bulk":        "protect",
     "playlist-generator": "protect",
-    "ongehoord":          "protect",
     "jellyseerr":         "protect",
     # Bookshelf (the Readarr revival), both halves. Same shape as the *arrs:
     # /api stays on the app's own API key for native clients. ADR-0057.
@@ -257,7 +256,7 @@ PUBLIC_PORT_ALLOWLIST = {
 
 # Services whose role legitimately involves holding a credential.
 SECRET_OK = {
-    "swag", "slskd", "qui", "ntfy", "lidarr-bulk", "ongehoord",
+    "swag", "slskd", "qui", "ntfy", "lidarr-bulk",
     "playlist-generator", "playlist-generator-db", "watchtower",
     # diun: DIUN_NOTIF_NTFY_TOKEN. Its native ntfy notifier takes a token only,
     # not basic auth, so it cannot use the ?auth= or userinfo tricks the other

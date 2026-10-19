@@ -26,11 +26,6 @@ jobs:
           echo 'QBITTORRENT_USER=dummy' >> .env
           echo 'QBITTORRENT_PASS=dummy_pass' >> .env
           echo 'WATCHTOWER_SCHEDULE=0 0 4 * * *' >> .env
-          # webapps/ongehoord/compose.yaml declares env_file: ../../.env.ongehoord.
-          # It holds the app's NUXT_* runtime secrets, is gitignored, and compose
-          # refuses to render a model whose env_file is absent -- so CI needs an
-          # empty stand-in or `docker compose config` cannot run at all.
-          : > .env.ongehoord
       - name: Validate the compose model
         run: docker compose config > /dev/null
 
@@ -44,7 +39,6 @@ jobs:
         run: |
           awk 'NF && $0 !~ /CLOUDFLARE_API_TOKEN/ {print}' .env.example > .env
           echo 'CLOUDFLARE_API_TOKEN=dummy_token' >> .env
-          : > .env.ongehoord
       # Asserts the incident-derived rules in docs/decisions/. Each failure
       # names the ADR that explains why the rule exists. Checks that need the
       # live host (qBittorrent's API, container state) degrade to warnings

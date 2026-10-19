@@ -62,5 +62,7 @@ include:
   # resolves locally; each is Watchtower-opt-out by construction (ADR-0006).
   - webapps/4eva-rootpage/compose.yaml
   - webapps/lidarr-bulk/compose.yaml
-  - webapps/ongehoord/compose.yaml
+  # ongehoord is NOT included: removed from the stack 2026-10-19. Its files stay in
+  # webapps/ongehoord/ (incl. compose.yaml, redeploy.sh and ongehoord.subdomain.conf)
+  # so re-adding is: include it here, restore the SWAG mount, `make swag-apply`.
   - webapps/playlist-generator/compose.yaml

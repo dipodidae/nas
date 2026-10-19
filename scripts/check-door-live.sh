@@ -50,7 +50,7 @@ fi
 LOGIN_HOST="auth.${DOMAIN}"
 
 PROTECT="sonarr radarr lidarr bazarr prowlarr lingarr qui slskd cleanuparr
-         lidarr-bulk playlist-generator ongehoord jellyseerr adguardhome
+         lidarr-bulk playlist-generator jellyseerr adguardhome
          navidrome audiomuse umami bookshelf bookshelf-audio"
 NEVER="jellyfin nextcloud ntfy auth audiobookshelf"
 

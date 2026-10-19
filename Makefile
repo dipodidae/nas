@@ -170,7 +170,7 @@ tinyauth-unlock: ## Clear a tinyauth lockout (restart drops the in-memory retry 
 	@echo "Lockout cleared. Do NOT test with a deliberate wrong password --"
 	@echo "that is what causes this; three of them lock the account again."
 
-up: ## Start the whole stack (see the ongehoord caveat in its compose file)
+up: ## Start the whole stack
 	@docker compose up -d
 
 down: ## Stop and remove the whole stack
@@ -268,9 +268,9 @@ submodules: ## Update the ongehoord + playlist-generator submodules to their tra
 	@git submodule update --remote --merge webapps/ongehoord/src webapps/jellyfin-playlist-generator
 	@git submodule status webapps/ongehoord/src webapps/jellyfin-playlist-generator
 	@echo
-	@echo "Both are locally-built images, so a pull does nothing -- rebuild:"
+	@echo "playlist-generator is a locally-built image, so a pull does nothing -- rebuild:"
 	@echo "  docker compose up -d --build playlist-generator"
-	@echo "  webapps/ongehoord/redeploy.sh   # ongehoord needs buildx --network=host"
+	@echo "(ongehoord is out of the stack; its submodule is only kept in sync.)"
 
 install-hooks: ## Install the pre-commit hook that runs `make check`
 	@hook="$$(git rev-parse --git-path hooks)/pre-commit"; \

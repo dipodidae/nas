@@ -52,7 +52,7 @@ services:
       # INVARIANT: every enabled proxy-conf is TRACKED HERE and mounted read-only,
       # not left to live in gitignored ${CONFIG_DIRECTORY}/swag where the nightly
       # backup is the only thing keeping it. Six of these have no upstream sample
-      # at all (cleanuparr, lidarr-bulk, lingarr, ongehoord, playlist-generator,
+      # at all (cleanuparr, lidarr-bulk, lingarr, playlist-generator,
       # slskd) and three carry heavy local edits (ntfy 56 lines, jellyfin 22,
       # jellyseerr 2) -- losing the config dir would mean reconstructing them from
       # memory. `make check` asserts the set. ADR-0022.
@@ -85,7 +85,6 @@ services:
       - ../swag/proxy-confs/navidrome.subdomain.conf:/config/nginx/proxy-confs/navidrome.subdomain.conf:ro
       - ../swag/proxy-confs/nextcloud.subdomain.conf:/config/nginx/proxy-confs/nextcloud.subdomain.conf:ro
       - ../swag/proxy-confs/ntfy.subdomain.conf:/config/nginx/proxy-confs/ntfy.subdomain.conf:ro
-      - ../swag/proxy-confs/ongehoord.subdomain.conf:/config/nginx/proxy-confs/ongehoord.subdomain.conf:ro
       - ../swag/proxy-confs/playlist-generator.subdomain.conf:/config/nginx/proxy-confs/playlist-generator.subdomain.conf:ro
       - ../swag/proxy-confs/prowlarr.subdomain.conf:/config/nginx/proxy-confs/prowlarr.subdomain.conf:ro
       - ../swag/proxy-confs/qui.subdomain.conf:/config/nginx/proxy-confs/qui.subdomain.conf:ro
