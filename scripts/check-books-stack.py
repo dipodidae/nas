@@ -122,8 +122,16 @@ def audiobookbay_findings(pr_key: str, ba_key: str) -> list[str]:
     return ["Prowlarr has no AudioBookBay indexer (prowlarr/definitions/audiobookbay.yml)"]
   if not abb.get("enable"):
     out.append("Prowlarr's AudioBookBay indexer is disabled")
-  hits = _get(f"{PROWLARR}/search?query=murakami&type=search&categories=3030"
-              f"&indexerIds={abb['id']}", {"X-Api-Key": pr_key}, timeout=120) or []
+  try:
+    hits = _get(f"{PROWLARR}/search?query=murakami&type=search&categories=3030"
+                f"&indexerIds={abb['id']}", {"X-Api-Key": pr_key}, timeout=120) or []
+  except urllib.error.HTTPError as exc:
+    # Prowlarr answers 400 when the only requested indexer is auto-disabled after
+    # repeated failures. That is a dead indexer (a finding), not an unreachable
+    # Prowlarr -- which is what the caller would otherwise claim.
+    if exc.code != 400:
+      raise
+    hits = []
   if not hits:
     # Prowlarr silently leaves an indexer out once its hourly query cap (60,
     # set on purpose) is spent -- which a backlog search does. So ask the site
