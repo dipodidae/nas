@@ -22,7 +22,7 @@
   watch_repo: false
 
 # audiomuse
-- name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.4
   metadata:
     service: audiomuse
   watch_repo: false
@@ -34,13 +34,13 @@
   watch_repo: false
 
 # audiomuse-worker
-- name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.4
   metadata:
     service: audiomuse-worker
   watch_repo: false
 
 # audiomuse-worker-2
-- name: ghcr.io/neptunehub/audiomuse-ai:3.6.3
+- name: ghcr.io/neptunehub/audiomuse-ai:3.6.4
   metadata:
     service: audiomuse-worker-2
   watch_repo: false
@@ -166,7 +166,7 @@
   watch_repo: false
 
 # cloudflared
-- name: cloudflare/cloudflared:2026.9.3
+- name: cloudflare/cloudflared:2026.10.1
   metadata:
     service: cloudflared
   watch_repo: false
@@ -203,7 +203,7 @@
 
 # jellyfin
 #   release tags only; a 12.0 major, a 12.0.z point release and a legacy 10.11.z all surface
-- name: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls51
+- name: lscr.io/linuxserver/jellyfin:12.2ubu2604-ls55
   metadata:
     service: jellyfin
   watch_repo: true
@@ -281,7 +281,7 @@
 
 # qbittorrent
 #   floor >= 5.2.2 per ADR-0005; LSIO release tags only
-- name: lscr.io/linuxserver/qbittorrent:5.2.4_v2.0.15-ls479
+- name: lscr.io/linuxserver/qbittorrent:5.2.4_v2.0.15-ls481
   metadata:
     service: qbittorrent
   watch_repo: true

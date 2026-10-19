@@ -270,7 +270,7 @@ services:
     extends:
       file: _fragments.yaml
       service: svc-hardened-tz
-    image: cloudflare/cloudflared:2026.9.3
+    image: cloudflare/cloudflared:2026.10.1
     container_name: cloudflared
     # Distroless image, no init, needs no capabilities. Run as the owner of the
     # 0600 token file rather than the image's own uid 65532, which could not
