@@ -374,7 +374,9 @@ services:
     labels:
       - swag=enable
     healthcheck:
-      test: [CMD, curl, -f, 'http://localhost:11011/api/v1/health']
+      # /health, not /api/v1/health: cleanuparr 2.10.12 dropped the v1 route (404
+      # -> permanently unhealthy after the update). /health is unauthenticated.
+      test: [CMD, curl, -f, 'http://localhost:11011/health']
       interval: 60s
       timeout: 10s
       retries: 3
